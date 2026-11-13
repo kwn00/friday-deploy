@@ -38,8 +38,8 @@ const MIME: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-function json(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+function json(res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
+  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra });
   res.end(JSON.stringify(body));
 }
 
@@ -72,9 +72,11 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/session') {
     if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
     if (!originAllowed(req)) return json(res, 403, { error: 'forbidden_origin' });
-    if (!sessionLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' });
+    // 허용된 Origin 에만 CORS 응답 (클라이언트가 Vercel 등 다른 도메인에 있을 때). 쿠키는 쓰지 않으므로 credentials 불필요.
+    const cors: Record<string, string> = req.headers.origin ? { 'Access-Control-Allow-Origin': req.headers.origin, Vary: 'Origin' } : {};
+    if (!sessionLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, cors);
     req.resume(); // 본문은 읽지 않는다
-    return json(res, 200, { token: issueSession().token, v: PROTOCOL_VERSION });
+    return json(res, 200, { token: issueSession().token, v: PROTOCOL_VERSION }, cors);
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
   serveStatic(req, res, url.pathname);

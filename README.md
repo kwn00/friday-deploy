@@ -58,6 +58,21 @@ SESSION_SECRET="$(openssl rand -base64 48)" npm start
 
 환경 변수는 `.env.example` 참고. 프로덕션에서 `SESSION_SECRET` 이 없으면 서버가 기동을 거부합니다.
 
+## 배포
+
+클라이언트와 게임 서버를 나눠서 배포합니다. 게임 서버는 20Hz 루프와 방 상태를 메모리에 들고 있어서,
+서버리스(Vercel Functions)가 아니라 프로세스가 계속 살아 있는 곳(Fly.io, Railway, Render 등)이 맞습니다.
+
+**클라이언트 → Vercel**
+1. Vercel 에서 이 저장소를 Import (설정은 `vercel.json` 에 있으므로 Root Directory 등은 기본값 그대로)
+2. Environment Variables 에 `VITE_GAME_SERVER_URL=https://<게임 서버 주소>` 추가 후 재배포
+
+**게임 서버 → 상시 실행 호스트**
+- 시작 명령: `npm start` (Node 20+)
+- 환경 변수: `SESSION_SECRET` (32자 이상 랜덤), `ALLOWED_ORIGINS=https://<vercel 도메인>`, 프록시 뒤라면 `TRUST_PROXY=1`
+
+서버 하나로 클라이언트까지 서빙하고 싶다면 `npm run build && npm start` 만 하면 됩니다 (이 경우 `VITE_GAME_SERVER_URL` 불필요).
+
 ## 반응형 / 적응형
 
 - **모바일 퍼스트 CSS**: 기본 = 세로 폰, 이후 `480 / 768 / 1024 / 1440px` 브레이크포인트로 확장 (`apps/client/src/style.css`)

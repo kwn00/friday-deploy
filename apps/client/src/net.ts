@@ -5,6 +5,16 @@ import { PROTOCOL_VERSION, type ClientMsg, type GameMode, type ServerMsg } from 
  * 여기서 무엇을 조작해도 서버의 검증(스키마/범위/레이트리밋/시퀀스)을 통과해야 하며,
  * 통과하더라도 할 수 있는 일은 '정상 속도로 이동'과 '제시된 선택지 고르기'뿐이다.
  */
+/**
+ * 게임 서버 주소. 비워두면 같은 출처(same-origin)를 사용한다.
+ * 클라이언트를 Vercel 등 정적 호스팅에, 서버를 별도 호스트에 둘 때 빌드 시 VITE_GAME_SERVER_URL 로 지정.
+ */
+const SERVER = (import.meta.env.VITE_GAME_SERVER_URL ?? '').trim().replace(/\/+$/, '');
+const HTTP_BASE = SERVER;
+const WS_URL = SERVER
+  ? `${SERVER.replace(/^http/, 'ws')}/ws`
+  : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
+
 export class Net {
   private ws: WebSocket | null = null;
   private seq = 0;
@@ -16,12 +26,11 @@ export class Net {
 
   async connect(name: string, mode: GameMode): Promise<void> {
     this.close();
-    const res = await fetch('/api/session', { method: 'POST' });
+    const res = await fetch(`${HTTP_BASE}/api/session`, { method: 'POST' });
     if (!res.ok) throw new Error(res.status === 429 ? '요청이 너무 많아요. 잠시 후 다시 시도해주세요.' : '세션 발급 실패');
     const { token } = (await res.json()) as { token: string };
 
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const ws = new WebSocket(WS_URL);
     this.ws = ws;
     this.seq = 0;
     await new Promise<void>((resolve, reject) => {
