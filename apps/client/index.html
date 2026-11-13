@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#1e1e2e" />
+    <meta name="description" content="개발자 컨셉 픽셀아트 서바이버 웹 게임" />
+    <title>FRIDAY DEPLOY</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="game" aria-label="게임 화면"></canvas>
+
+    <div id="hud" class="hud hidden" aria-live="off">
+      <div class="hud__bars">
+        <div class="bar bar--hp"><i id="hp-fill"></i><span id="hp-text">HP</span></div>
+        <div class="bar bar--xp"><i id="xp-fill"></i><span id="lv-text">Lv.1</span></div>
+      </div>
+      <div class="hud__stats">
+        <span id="time-text">00:00</span>
+        <span id="kill-text">🐛 0</span>
+      </div>
+      <div id="loadout" class="hud__loadout"></div>
+    </div>
+
+    <section id="screen-title" class="screen">
+      <div class="panel panel--title">
+        <p class="prompt">~/prod <span class="branch">(main)</span> $</p>
+        <h1 id="title-text" class="logo">FRIDAY DEPLOY</h1>
+        <p id="tagline-text" class="tagline"></p>
+        <label class="field">
+          <span>git config user.name</span>
+          <input id="name-input" type="text" maxlength="12" autocomplete="off" spellcheck="false" placeholder="닉네임" />
+        </label>
+        <div class="buttons">
+          <button id="btn-solo" class="btn btn--primary" type="button">▶ npm run solo</button>
+          <button id="btn-coop" class="btn" type="button">👥 pair programming <small>co-op β</small></button>
+        </div>
+        <p class="hint hint--touch">화면을 드래그해서 이동 · 공격은 자동</p>
+        <p class="hint hint--keys">WASD / 방향키로 이동 · 공격은 자동</p>
+        <p id="status-text" class="status" role="status"></p>
+      </div>
+    </section>
+
+    <section id="screen-levelup" class="screen hidden">
+      <div class="panel">
+        <h2 class="panel__title">🎉 PR Merged!</h2>
+        <p class="panel__sub">리뷰어가 보상을 하나 승인해줬다 <span id="offer-timer"></span></p>
+        <div id="offers" class="offers"></div>
+      </div>
+    </section>
+
+    <section id="screen-over" class="screen hidden">
+      <div class="panel">
+        <h2 class="panel__title panel__title--danger">Segmentation fault</h2>
+        <p class="panel__sub">(core dumped) — 장애 회고는 월요일에</p>
+        <dl id="result" class="result"></dl>
+        <div class="buttons">
+          <button id="btn-retry" class="btn btn--primary" type="button">↻ git revert &amp;&amp; retry</button>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

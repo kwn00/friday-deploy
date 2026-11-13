@@ -1,0 +1,20 @@
+{
+  "name": "friday-deploy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "concurrently -n server,client -c magenta,cyan \"npm run dev -w @friday-deploy/server\" \"npm run dev -w @friday-deploy/client\"",
+    "build": "npm run build -w @friday-deploy/client",
+    "start": "npm run start -w @friday-deploy/server",
+    "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/client",
+    "test": "tsx --test packages/shared/src/*.test.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
