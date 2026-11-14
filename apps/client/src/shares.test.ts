@@ -19,4 +19,5 @@ test('기여도: 보여줄 것이 없으면 null (혼자 한 판, 예전 기록,
   assert.equal(sharesOf(undefined, 2), null);
   assert.equal(sharesOf([5, 5, 5], 2), null);
   assert.equal(sharesOf([0, 0], 2), null);
+  assert.equal(sharesOf([1e308, 1e308], 2), null, '합이 무한대가 되는 값은 계산하지 않는다');
 });

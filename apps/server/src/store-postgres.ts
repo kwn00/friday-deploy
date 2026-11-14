@@ -39,8 +39,7 @@ const IDLE_TIMEOUT_MS = 10_000;
 /** 순위 정렬은 compareRuns 와 같다. id 는 로케일에 따라 순서가 달라지지 않게 "C" 정렬로 비교한다 */
 const ORDER = 'time DESC, kills DESC, level DESC, ended_at ASC, id COLLATE "C" ASC';
 
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS leaderboard_runs (
+const CREATE_TABLE = `CREATE TABLE IF NOT EXISTS leaderboard_runs (
     id             text    PRIMARY KEY,
     board          text    NOT NULL,
     season         integer NOT NULL,
@@ -50,14 +49,17 @@ const SCHEMA = [
     level          integer NOT NULL,
     paused_seconds integer NOT NULL,
     ended_at       bigint  NOT NULL
-  )`,
-  // 개인별 처치 수(기여도). names 와 같은 순서. 나중에 추가한 열이라 예전 기록에는 NULL 이다.
-  // 이미 있는 테이블에도 한 번만 더해지고(IF NOT EXISTS), 기존 행은 건드리지 않는다.
-  `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_kills integer[]`,
-  // 상위 N 조회와 정리 쿼리가 그대로 이 인덱스를 따라 읽는다
-  `CREATE INDEX IF NOT EXISTS leaderboard_runs_top
-    ON leaderboard_runs (board, season, time DESC, kills DESC, level DESC, ended_at ASC, (id COLLATE "C") ASC)`,
-];
+  )`;
+/** 개인별 처치 수(기여도). names 와 같은 순서. 나중에 추가한 열이라 예전 기록에는 NULL 이다 (기존 행은 건드리지 않는다) */
+const HAS_MEMBER_KILLS = `SELECT 1 FROM pg_attribute
+   WHERE attrelid = 'leaderboard_runs'::regclass AND attname = 'member_kills' AND NOT attisdropped`;
+const ADD_MEMBER_KILLS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_kills integer[]`;
+/** 상위 N 조회와 정리 쿼리가 그대로 이 인덱스를 따라 읽는다 */
+const HAS_INDEX = `SELECT to_regclass('leaderboard_runs_top') IS NOT NULL AS present`;
+const CREATE_INDEX = `CREATE INDEX IF NOT EXISTS leaderboard_runs_top
+    ON leaderboard_runs (board, season, time DESC, kills DESC, level DESC, ended_at ASC, (id COLLATE "C") ASC)`;
+/** 열을 더할 때 테이블 잠금을 기다리는 최대 시간. 못 잡으면 물러났다가 다음 기회에 다시 한다 (그동안 다른 쿼리를 줄 세우지 않게) */
+const MIGRATE_LOCK_TIMEOUT_MS = 3_000;
 
 interface Row {
   id: string;
@@ -202,7 +204,17 @@ class PostgresStore implements LeaderboardStore {
       // 서버 두 개가 동시에 처음 뜰 때 CREATE ... IF NOT EXISTS 끼리 부딪히지 않게 잠시 줄을 세운다.
       // 트랜잭션이 끝나면 풀리는 잠금이라 연결 풀러 뒤에서도 안전하다 (세션 잠금은 풀러에서 쓸 수 없다).
       await client.query('SELECT pg_advisory_xact_lock(7419003)');
-      for (const sql of SCHEMA) await client.query(sql);
+      await client.query(CREATE_TABLE);
+      // 나중에 더한 열과 인덱스는 "없을 때만" 만든다. ALTER TABLE 은 IF NOT EXISTS 가 붙어 있어도 테이블 전체를 막는
+      // 잠금부터 잡고, CREATE INDEX 도 쓰기를 막는 잠금을 잡는다. 서버가 뜰 때마다 그러면, 마침 다른 연결이 테이블을
+      // 쓰고 있을 때 서로를 기다리게 만든다. 평소(이미 다 있는 경우)에는 읽기 두 번으로 끝난다.
+      const column = await client.query(HAS_MEMBER_KILLS);
+      if (column.rowCount === 0) {
+        await client.query(`SET LOCAL lock_timeout = ${MIGRATE_LOCK_TIMEOUT_MS}`);
+        await client.query(ADD_MEMBER_KILLS);
+      }
+      const index = await client.query<{ present: boolean }>(HAS_INDEX);
+      if (!index.rows[0]?.present) await client.query(CREATE_INDEX);
     });
   }
 

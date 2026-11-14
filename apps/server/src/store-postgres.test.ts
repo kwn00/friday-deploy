@@ -313,6 +313,65 @@ describe('PostgreSQL 저장소: 개인별 기여도', { skip: skipAll }, () => {
   });
 });
 
+describe('PostgreSQL 저장소: 서버가 뜰 때 테이블을 막지 않는다', { skip: skipAll }, () => {
+  it('열과 인덱스가 이미 있으면, 다른 연결이 테이블을 읽거나 쓰는 중이어도 기다리지 않고 바로 준비된다', async () => {
+    // 테이블·열·인덱스를 먼저 만들어 둔다
+    const first = await createPostgresStore(URL!);
+    const season = newSeason();
+    await first.save(run(season, { time: 50 }));
+    await first.close();
+    // 다른 연결이 트랜잭션을 연 채로 읽고(ACCESS SHARE) 쓴(ROW EXCLUSIVE) 뒤 끝내지 않는다:
+    // 뜰 때마다 ALTER TABLE(테이블 전체 잠금)이나 CREATE INDEX(쓰기 잠금)를 실행했다면 여기서 줄을 서게 된다
+    const busy = new pg.Client({ connectionString: URL! });
+    await busy.connect();
+    try {
+      await busy.query('BEGIN');
+      await busy.query('SELECT count(*) FROM leaderboard_runs');
+      await busy.query("INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at) VALUES ($1, 'solo', $2, '{x}', 40, 1, 1, 0, 1)", [`busy-${season}`, season]);
+      const store = await createPostgresStore(URL!, { statementTimeoutMs: 1500 });
+      try {
+        const t0 = Date.now();
+        await store.save(run(season, { time: 60, killsBy: [5] }));
+        const rows = await store.load('solo', season, 5);
+        assert.ok(Date.now() - t0 < 1000, `${Date.now() - t0}ms`);
+        assert.deepEqual(rows.map((r) => r.time), [60, 50], '아직 끝나지 않은 다른 연결의 기록은 보이지 않는다');
+      } finally {
+        await store.close();
+      }
+      await busy.query('ROLLBACK');
+    } finally {
+      await busy.end().catch(() => {});
+    }
+  });
+
+  it('열을 더해야 하는데 테이블이 잠겨 있으면 오래 버티지 않고 물러나고, 풀린 뒤에 다시 하면 된다', async () => {
+    const season = newSeason();
+    const admin = new pg.Client({ connectionString: URL! });
+    const busy = new pg.Client({ connectionString: URL! });
+    await admin.connect();
+    await busy.connect();
+    try {
+      await admin.query('ALTER TABLE leaderboard_runs DROP COLUMN IF EXISTS member_kills');
+      await busy.query('BEGIN');
+      await busy.query('SELECT count(*) FROM leaderboard_runs');
+      const store = await createPostgresStore(URL!);
+      try {
+        const t0 = Date.now();
+        await assert.rejects(store.save(run(season, { time: 70, killsBy: [1] })), (err: Error & { code?: string }) => err.code === '55P03');
+        assert.ok(Date.now() - t0 < 6000, `잠금을 ${Date.now() - t0}ms 기다렸다`);
+        await busy.query('ROLLBACK');
+        await store.save(run(season, { time: 70, killsBy: [1] }));
+        assert.deepEqual((await store.load('solo', season, 5)).map((r) => [r.time, r.killsBy]), [[70, [1]]]);
+      } finally {
+        await store.close();
+      }
+    } finally {
+      await busy.end().catch(() => {});
+      await admin.end().catch(() => {});
+    }
+  });
+});
+
 describe('PostgreSQL 저장소: 연결 풀러와 시간 제한', { skip: skipAll }, () => {
   it('가짜 풀러는 statement_timeout 을 접속 매개변수로 보내는 연결을 거부한다 (아래 테스트가 헛돌지 않는다는 확인)', async () => {
     const pooler = await startPooler(targetOf());

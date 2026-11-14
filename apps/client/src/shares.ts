@@ -5,7 +5,7 @@
 export function sharesOf(killsBy: number[] | undefined, members: number): number[] | null {
   if (!killsBy || members < 2 || killsBy.length !== members) return null;
   const total = killsBy.reduce((sum, k) => sum + k, 0);
-  if (!(total > 0)) return null;
+  if (!(total > 0) || !Number.isFinite(total)) return null;
   const exact = killsBy.map((k) => (k / total) * 100);
   const shares = exact.map(Math.floor);
   let left = 100 - shares.reduce((sum, v) => sum + v, 0);

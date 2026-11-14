@@ -1,20 +1,14 @@
 import { LEADERBOARD_SIZE, type BoardId, type LeaderboardResponse } from '@friday-deploy/shared';
 import { LeaderboardError, fetchLeaderboard } from './net';
+import { findMine, type MyPlace } from './mine';
 import { sharesOf } from './shares';
+
+export type { MyPlace };
 
 /**
  * 순위표 오버레이. 게임 상태와는 무관한 읽기 전용 화면이라 연결(WebSocket)이나 단계(phase)를 건드리지 않는다.
  * 주의: 서버에서 온 문자열(닉네임 등)은 전부 textContent 로만 넣는다 (innerHTML 금지 → XSS 차단).
  */
-
-/** 이번 브라우저 세션에서 방금 순위표에 오른 기록 (그 줄을 강조하는 데 쓴다) */
-export interface MyPlace {
-  board: BoardId;
-  rank: number;
-  time: number;
-  kills: number;
-  level: number;
-}
 
 const BOARD_LABEL: Record<BoardId, string> = { solo: '혼자', coop: '함께' };
 /** 같은 순위표를 짧은 시간에 반복해서 받지 않게 하는 보관 시간 (탭을 오가는 것만으로 서버 한도에 걸리지 않도록) */
@@ -181,13 +175,7 @@ export class Leaderboard {
     const m = this.mine;
     const list = node('ol', 'rows');
     list.setAttribute('aria-label', `${BOARD_LABEL[data.board]} 순위표`);
-    // 내 기록 찾기: 그 사이 다른 사람이 앞 순위에 들어와 순위가 밀렸을 수 있으니 순위 대신 기록 값으로 찾고, 같은 값이 여럿이면 순위가 가까운 것을 고른다
-    let mineRank = -1;
-    if (m && m.board === data.board) {
-      const same = data.entries.filter((e) => e.time === m.time && e.kills === m.kills && e.level === m.level);
-      same.sort((a, b) => Math.abs(a.rank - m.rank) - Math.abs(b.rank - m.rank));
-      if (same[0]) mineRank = same[0].rank;
-    }
+    const mineRank = m && m.board === data.board ? findMine(data.entries, m) : -1;
     let mineRow: HTMLElement | null = null;
     let hasShares = false;
     for (const e of data.entries.slice(0, LEADERBOARD_SIZE)) {

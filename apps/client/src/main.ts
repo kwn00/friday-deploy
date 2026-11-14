@@ -326,7 +326,7 @@ function showPlace(r: RunResult, place?: { board: BoardId; rank: number }, unran
   el.resultHint.textContent = hint;
   if (ok) {
     el.place.textContent = `🏆 ${place.board === 'solo' ? '솔로' : '함께'} 순위표 ${place.rank}위`;
-    board.setMine({ board: place.board, rank: place.rank, time: r.time, kills: r.kills, level: r.level });
+    board.setMine({ board: place.board, rank: place.rank, name: r.name, time: r.time, kills: r.kills, level: r.level });
   } else {
     board.setMine(null);
   }
