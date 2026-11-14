@@ -10,7 +10,7 @@
 export interface ReleaseNote {
   /** x.y.z */
   version: string;
-  /** 배포한 날짜 (YYYY-MM-DD) */
+  /** 릴리즈를 준비한 날짜 (YYYY-MM-DD). PR 을 올린 날을 적는다. 승인·머지가 며칠 늦어져도 고치지 않는다 */
   date: string;
   /** 한 줄 제목 */
   title: string;

@@ -79,6 +79,8 @@ export class ReleaseNotes {
     for (const b of this.behind) b.inert = false;
     const back = this.opener;
     this.opener = null;
+    // 닫히면서 숨겨진 버튼에 포커스가 남지 않게 한다 (자동으로 떴을 때는 돌아갈 곳이 없다)
+    if (document.activeElement instanceof HTMLElement && this.root.contains(document.activeElement)) document.activeElement.blur();
     // 뒤 화면이 그 사이에 사라졌다면 포커스는 건드리지 않는다.
     // (보이는지는 getClientRects 로 판단한다: 버전 표기처럼 position: fixed 인 요소는 offsetParent 가 항상 null 이다)
     if (back && back.isConnected && back.getClientRects().length > 0) back.focus({ preventScroll: true });

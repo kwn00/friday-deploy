@@ -25,6 +25,9 @@ test('릴리즈 목록: 최신순이고 버전이 겹치지 않으며, 버전마
     const file = `docs/releases/${r.version}.md`;
     assert.ok(existsSync(new URL(file, ROOT)), `${file} 이 있어야 한다 (GitHub 릴리즈의 본문)`);
     assert.ok(read(file).trim().length > 0, `${file} 이 비어 있다`);
+    // 첫 줄이 GitHub 릴리즈의 제목이 된다. 다른 버전의 파일을 복사하고 제목을 고치지 않은 경우를 잡는다.
+    const first = read(file).split('\n')[0]!;
+    assert.ok(first === `# v${r.version}` || first.startsWith(`# v${r.version} `), `${file} 의 첫 줄은 "# v${r.version} — 한 줄 요약" 이어야 한다 (지금: "${first}")`);
   }
 });
 

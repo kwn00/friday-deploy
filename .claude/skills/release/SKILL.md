@@ -61,10 +61,12 @@ npm version x.y.z --workspaces --include-workspace-root --no-git-tag-version
 ```
 
 **(나) 게임 안 새 소식** — `packages/shared/src/releases.ts` 의 `RELEASES` **맨 위**에 항목을 추가한다.
+`date` 는 릴리즈를 준비한 날(PR 을 올리는 날)이다. 승인이 며칠 늦어져도 고치지 않는다.
 화면 구석의 버전 표기도 이 값에서 나온다. 쓰는 법은 아래 "게임 안 새 소식 쓰는 법" 참고.
 `.md` 파일만 바꾼 커밋은 배포를 일으키지 않게 설정되어 있으므로(`render.yaml` 의 `buildFilter`), 플레이어에게 보일 문구는 반드시 이 파일에 있어야 한다.
 
 **(다) GitHub 릴리즈 본문** — `docs/releases/x.y.z.md` 를 새로 만든다. 첫 줄(`# vX.Y.Z — 한 줄 요약`)이 릴리즈 제목이 되고 나머지가 본문이 된다.
+이전 버전의 파일을 복사해서 시작했다면 첫 줄의 버전부터 고친다 (테스트가 확인한다).
 
 ```markdown
 # vX.Y.Z — 한 줄 요약
