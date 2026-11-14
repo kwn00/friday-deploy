@@ -1,5 +1,7 @@
 import {
   APP_VERSION,
+  FIELD_ITEMS,
+  FIELD_ITEM_KINDS,
   GAME_TAGLINE,
   GAME_TITLE,
   LEADERBOARD_MIN_SECONDS,
@@ -12,6 +14,7 @@ import {
   sanitizeName,
   unseenReleases,
   type BoardId,
+  type FieldItemKind,
   type GameMode,
   type Offer,
   type RunResult,
@@ -60,6 +63,7 @@ const el = {
   quit: $<HTMLButtonElement>('btn-quit'),
   minimap: $<HTMLCanvasElement>('minimap'),
   spectate: $('spectate-text'),
+  toast: $('toast-text'),
   version: $('btn-version'),
   offers: $('offers'),
   offerTimer: $('offer-timer'),
@@ -161,6 +165,9 @@ function setPhase(next: Phase): void {
   el.over.classList.toggle('hidden', next !== 'over');
   el.hud.classList.toggle('hidden', next !== 'playing' && next !== 'over');
   if (next !== 'playing') {
+    // 판이 끝나거나 나가면 떠 있던 아이템 알림도 치운다
+    window.clearTimeout(toastTimer);
+    el.toast.classList.add('hidden');
     el.levelup.classList.add('hidden');
     hideMenu();
     // 일시정지한 채로 판을 떠나면 "재개" 알림이 오지 않는다. 남겨 두면 다음 판의 선택 시간 표시가 틀어진다.
@@ -181,19 +188,75 @@ function updateHud(s: Snapshot): void {
   el.kills.textContent = `🐛 ${me.kills}`;
   // 페어에서 쓰러졌거나(또는 누군가 쓰러진 뒤에 들어와서) 이번 판을 관전 중일 때
   el.spectate.classList.toggle('hidden', me.alive || mode !== 'coop' || phase !== 'playing');
-  const key = JSON.stringify(me.up);
+  // 관전 안내와 아이템 알림은 같은 자리에 뜬다. 관전 중에는 알림을 치운다 (쓰러진 사람은 아이템을 주울 수도 없다)
+  if (!me.alive) el.toast.classList.add('hidden');
+  const key = `${JSON.stringify(me.up)}|${me.revives}`;
   if (key !== loadoutKey) {
     loadoutKey = key;
-    el.loadout.replaceChildren(
-      ...(Object.entries(me.up) as [UpgradeId, number][]).map(([id, lv]) => {
-        const chip = node('span', 'chip', `${UPGRADES[id].icon} `);
-        chip.append(node('b', '', String(lv)));
-        chip.title = UPGRADES[id].name;
-        return chip;
-      }),
-    );
+    const chips = (Object.entries(me.up) as [UpgradeId, number][]).map(([id, lv]) => {
+      const chip = node('span', 'chip', `${UPGRADES[id].icon} `);
+      chip.append(node('b', '', String(lv)));
+      chip.title = UPGRADES[id].name;
+      return chip;
+    });
+    // 가지고 있는 백업(부활): 강화들 뒤에 눈에 띄게
+    if (me.revives > 0) {
+      const chip = node('span', 'chip chip--revive', `${FIELD_ITEMS.revive.icon} `);
+      chip.append(node('b', '', String(me.revives)));
+      chip.title = `${FIELD_ITEMS.revive.name}: ${FIELD_ITEMS.revive.desc}`;
+      chips.push(chip);
+    }
+    el.loadout.replaceChildren(...chips);
   }
+  noticeItems(s);
 }
+
+/* ───────────── 아이템 알림 ───────────── */
+
+let toastTimer = 0;
+function toast(text: string): void {
+  el.toast.textContent = text;
+  el.toast.classList.remove('hidden');
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => el.toast.classList.add('hidden'), 3200);
+}
+
+/** 이번 판에서 이미 알린 필드 아이템들, 그리고 직전의 내 백업 수 (새 판이 시작되면 비운다) */
+const knownItems = new Set<number>();
+let lastRevives = 0;
+function resetItemNotices(): void {
+  knownItems.clear();
+  lastRevives = 0;
+  window.clearTimeout(toastTimer);
+  el.toast.classList.add('hidden');
+}
+
+/** 새로 놓인 필드 아이템, 백업을 주웠을 때와 썼을 때를 짧게 알려준다 (어디 있는지는 미니맵이 보여준다) */
+function noticeItems(s: Snapshot): void {
+  const me = s.me;
+  if (me.revives > lastRevives) toast(`${FIELD_ITEMS.revive.icon} 백업 확보! 쓰러져도 한 번 되살아나요`);
+  else if (me.revives < lastRevives && me.alive) toast(`${FIELD_ITEMS.revive.icon} 백업으로 되살아났어요!`);
+  lastRevives = me.revives;
+
+  let fresh: FieldItemKind | null = null;
+  for (const it of s.i) {
+    if (knownItems.has(it[0])) continue;
+    knownItems.add(it[0]);
+    const kind = FIELD_ITEM_KINDS[it[1]];
+    // 한꺼번에 여럿이면 가장 드문 것을 알린다
+    if (kind && (fresh === null || FIELD_ITEMS[kind].weight < FIELD_ITEMS[fresh].weight)) fresh = kind;
+  }
+  if (knownItems.size > 64) for (const id of knownItems) if (!s.i.some((it) => it[0] === id)) knownItems.delete(id);
+  // 미니맵을 꺼 둔 사람에게 "미니맵을 보세요"라고 하면 헷갈린다: 켜면 보인다고 알려준다
+  if (fresh && me.alive && phase === 'playing') toast(`${FIELD_ITEMS[fresh].icon} ${ITEM_DROPPED[fresh]} · ${minimapOn ? '미니맵을 보세요' : '미니맵을 켜면 위치가 보여요'}`);
+}
+
+/** 아이템이 놓였을 때의 문구 (이름마다 조사가 달라서 통째로 적는다) */
+const ITEM_DROPPED: Record<FieldItemKind, string> = {
+  heal: '야근 피자가 떨어졌어요',
+  levelup: 'LGTM 이 떨어졌어요',
+  revive: '백업이 떨어졌어요!',
+};
 
 let minimapOn = store.get('minimap') !== '0';
 function applyMinimap(): void {
@@ -360,6 +423,7 @@ function onMessage(msg: ServerMsg): void {
       mode = msg.mode;
       roomCode = msg.code;
       loadoutKey = '';
+      resetItemNotices();
       break;
     case 'roster':
       roster = msg.players;

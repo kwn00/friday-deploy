@@ -3,6 +3,20 @@ import { test } from 'node:test';
 import {
   DT,
   DUCK_ORBIT_RADIUS,
+  FIELD_ITEM_FADE,
+  FIELD_ITEM_INTERVAL,
+  FIELD_ITEM_KINDS,
+  FIELD_ITEM_MAX_DIST,
+  FIELD_ITEM_MIN_DIST,
+  FIELD_ITEM_TTL,
+  FIELD_ITEMS,
+  MAX_FIELD_ITEMS,
+  RANGE_PER_LEVEL,
+  REVIVE_BLAST_RADIUS,
+  REVIVE_SHIELD_SECONDS,
+  UPGRADES,
+  UPGRADE_IDS,
+  rangeMult,
   GEM_PULL_MAX,
   PLAYER_BASE_PICKUP,
   SPECTATOR_LEASH,
@@ -24,6 +38,7 @@ import {
   pickOffer,
   sanitizeName,
   setInput,
+  sfc32,
   step,
   type Gem,
 } from './index';
@@ -594,4 +609,330 @@ test('관전으로 합류한 사람은 몸이 없다: 화면에 그려지지 않
   fell(a);
   step(w, DT);
   assert.equal(w.over, true);
+});
+
+/* ───────────── 필드 아이템과 부활 ───────────── */
+
+test('필드 아이템: 아주 가끔, 화면 밖 적당한 거리에 놓이고, 동시에 몇 개를 넘지 않으며, 줍지 않으면 사라진다', () => {
+  const w = createWorld(41);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  const born = new Map<number, number>();
+  const gone = new Map<number, number>();
+  const kinds: string[] = [];
+  for (let i = 0; i < 20 * 60 * 60; i++) {
+    p.hp = 1e9;
+    quietStep(w);
+    assert.ok(w.items.length <= MAX_FIELD_ITEMS);
+    for (const it of w.items) {
+      if (born.has(it.id)) continue;
+      born.set(it.id, w.time);
+      kinds.push(it.kind);
+      const d = Math.hypot(it.x - p.x, it.y - p.y);
+      assert.ok(d >= FIELD_ITEM_MIN_DIST - 0.001 && d <= FIELD_ITEM_MAX_DIST + 0.001, `놓인 거리 ${d}`);
+    }
+    for (const id of born.keys()) if (!gone.has(id) && !w.items.some((it) => it.id === id)) gone.set(id, w.time);
+  }
+  const times = [...born.values()];
+  const expected = 3600 / FIELD_ITEM_INTERVAL;
+  assert.ok(times.length >= expected * 0.65 && times.length <= expected * 1.35, `한 시간에 ${times.length}개 (평균 ${FIELD_ITEM_INTERVAL}초에 하나면 약 ${Math.round(expected)}개)`);
+  assert.ok(times[0]! >= FIELD_ITEM_INTERVAL * 0.6 - 0.1, `첫 아이템은 ${times[0]}초에: 시작하자마자 나오지 않는다`);
+  for (let i = 1; i < times.length; i++) assert.ok(times[i]! - times[i - 1]! >= FIELD_ITEM_INTERVAL * 0.6 - 0.1, `간격 ${times[i]! - times[i - 1]!}`);
+  // 아무도 줍지 않았으므로 전부 수명(90초)을 채우고 사라졌다
+  for (const [id, at] of gone) assert.ok(Math.abs(at - born.get(id)! - FIELD_ITEM_TTL) < 0.11, `수명 ${at - born.get(id)!}`);
+  assert.ok(kinds.every((k) => (FIELD_ITEM_KINDS as readonly string[]).includes(k)));
+  assert.ok(kinds.filter((k) => k === 'heal').length > kinds.filter((k) => k === 'levelup').length, '피자가 가장 흔하다');
+});
+
+test('필드 아이템: 무엇이 언제 어디에 놓일지는 비밀 난수만으로 정해진다 (보이는 난수를 쓰지 않는다)', () => {
+  // 비밀 난수가 항상 같은 값을 내면: 간격, 방향, 거리, 종류가 그 값으로 정해진다
+  const run = (value: number): { kind: string; at: number; visibleDraws: number } => {
+    let visible = 0;
+    const base = sfc32(7);
+    const w = createWorld({ rng: () => (visible++, base()), secret: () => value });
+    const p = addPlayer(w, 'a');
+    p.xpNext = 1e9;
+    const before = visible;
+    while (w.items.length === 0 && w.time < 200) {
+      p.hp = 1e9;
+      quietStep(w);
+    }
+    // quietStep 은 적을 지우지만 스폰 자체(보이는 난수)는 매 틱 돌아간다. 아이템이 놓이는 틱에도 그 횟수는 달라지지 않아야 한다.
+    return { kind: w.items[0]!.kind, at: w.time, visibleDraws: visible - before };
+  };
+  const heal = run(0.5);
+  const levelup = run(0.7);
+  const revive = run(0.995);
+  assert.deepEqual([heal.kind, levelup.kind, revive.kind], ['heal', 'levelup', 'revive'], '비중 65 / 34 / 1');
+  assert.ok(Math.abs(heal.at - FIELD_ITEM_INTERVAL) < 0.11 && levelup.at > heal.at && revive.at > levelup.at, `${heal.at} ${levelup.at} ${revive.at}`);
+  // 같은 시각까지의 보이는 난수 소비량은 아이템과 무관하다: 0.5 로 75초까지 돌린 것과, 아이템이 아직 없는 0.7 의 75초 시점이 같아야 한다
+  let visible = 0;
+  const base = sfc32(7);
+  const w = createWorld({ rng: () => (visible++, base()), secret: () => 0.7 });
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  const before = visible;
+  while (w.time < heal.at - 0.001) {
+    p.hp = 1e9;
+    quietStep(w);
+  }
+  assert.equal(w.items.length, 0);
+  assert.equal(visible - before, heal.visibleDraws, '아이템이 놓였든 아니든 보이는 난수는 똑같이 쓰였다');
+  assert.equal(FIELD_ITEMS.revive.weight, 1);
+});
+
+test('필드 아이템: 피자는 체력이 닳았을 때만, LGTM 은 정확히 한 레벨, 백업은 하나만 가질 수 있다', () => {
+  const w = createWorld(42);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  w.itemCd = 1e9; // 저절로 놓이는 것은 끄고 직접 놓는다
+  const put = (kind: 'heal' | 'levelup' | 'revive', dx = 5): number => {
+    const id = w.nextId++;
+    w.items.push({ id, kind, x: p.x + dx, y: p.y, ttl: FIELD_ITEM_TTL });
+    return id;
+  };
+  const has = (id: number): boolean => w.items.some((it) => it.id === id);
+
+  // 피자: 체력이 가득이면 남겨 두고, 닳았으면 20% 회복
+  const pizza = put('heal');
+  quietStep(w);
+  assert.ok(has(pizza), '체력이 가득이면 줍지 않는다');
+  p.hp = 50;
+  quietStep(w);
+  assert.ok(!has(pizza));
+  assert.equal(p.hp, 70);
+  // 범위 밖의 것은 줍지 않는다
+  const far = put('heal', PLAYER_BASE_PICKUP + 10);
+  quietStep(w);
+  assert.ok(has(far));
+  w.items.length = 0;
+
+  // 백업: 하나만
+  const first = put('revive');
+  quietStep(w);
+  assert.ok(!has(first));
+  assert.equal(p.revives, 1);
+  const second = put('revive');
+  quietStep(w);
+  assert.ok(has(second), '이미 가지고 있으면 줍지 않고 남는다');
+  assert.equal(p.revives, 1);
+  w.items.length = 0;
+
+  // LGTM: 모으던 경험치는 그대로 두고 정확히 한 레벨, 바로 강화 선택지가 뜬다
+  p.xpNext = 20;
+  p.xp = 7;
+  const level = p.level;
+  const lgtm = put('levelup');
+  quietStep(w);
+  assert.ok(!has(lgtm));
+  assert.equal(p.level, level + 1);
+  assert.equal(p.xp, 7, '모으던 경험치는 남는다');
+  assert.ok(p.offers && p.offers.length > 0, '강화 선택지가 뜬다');
+  assert.ok(w.events.some((e) => e.type === 'offers' && e.pid === p.id));
+  // 선택 중에는 다른 아이템을 줍지 못한다 (혼자면 월드가 멈춘다)
+  const waiting = put('revive');
+  quietStep(w);
+  assert.ok(has(waiting));
+});
+
+test('필드 아이템: 함께 할 때는 가장 가까운 사람이 갖고, 쓰러진 사람과 관전자는 줍지 못한다', () => {
+  const w = createWorld(43);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  const watcher = addPlayer(w, 'w', true);
+  a.xpNext = b.xpNext = 1e9;
+  w.itemCd = 1e9;
+  a.x = a.y = b.y = 0;
+  b.x = 40;
+  w.items.push({ id: 9101, kind: 'revive', x: 25, y: 0, ttl: 90 });
+  quietStep(w);
+  assert.deepEqual([a.revives, b.revives], [0, 1], 'a 에게서 25, b 에게서 15: 더 가까운 b');
+  // b 는 이미 하나 가졌으므로 다음 것은 조금 더 먼 a 가 갖는다
+  w.items.push({ id: 9102, kind: 'revive', x: 25, y: 0, ttl: 90 });
+  quietStep(w);
+  assert.deepEqual([a.revives, b.revives, w.items.length], [1, 1, 0]);
+  // 쓰러진 사람의 묘비나 관전 시점이 아이템 위에 있어도 줍지 못한다
+  fell(a);
+  a.revives = 0;
+  watcher.camX = 0;
+  watcher.camY = 0;
+  w.items.push({ id: 9103, kind: 'revive', x: 2, y: 0, ttl: 90 });
+  for (let i = 0; i < 5; i++) quietStep(w);
+  assert.deepEqual([a.revives, watcher.revives, w.items.length], [0, 0, 1]);
+});
+
+test('부활: 백업이 있으면 쓰러질 순간에 그 자리에서 되살아나고, 잠깐 무적이며, 두 번째에는 쓰러진다', () => {
+  const w = createWorld(44);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  w.itemCd = 1e9;
+  p.revives = 1;
+  p.hp = 0.5;
+  const swarm = (): void => {
+    w.enemies.length = 0;
+    for (let i = 0; i < 12; i++) w.enemies.push({ id: 9200 + i, type: 'bug', x: p.x + Math.cos(i) * 3, y: p.y + Math.sin(i) * 3, hp: 1e9, duckCd: 0, hit: false });
+    w.enemies.push({ id: 9290, type: 'bug', x: p.x, y: p.y, hp: 1e9, duckCd: 0, hit: false }); // 정확히 겹친 적
+  };
+  swarm();
+  w.shots.length = 0;
+  step(w, DT);
+  assert.equal(p.alive, true, '쓰러지지 않고 되살아났다');
+  assert.equal(w.over, false);
+  assert.equal(p.revives, 0);
+  assert.equal(p.hp, 50, '최대 체력의 절반');
+  assert.ok(p.shield > REVIVE_SHIELD_SECONDS - 0.11);
+  for (const e of w.enemies) {
+    const d = Math.hypot(e.x - p.x, e.y - p.y);
+    assert.ok(Number.isFinite(d) && d >= REVIVE_BLAST_RADIUS - 6, `주변의 적은 밀려난다 (${d})`);
+  }
+  // 무적인 동안에는 적이 붙어 있어도 체력이 줄지 않는다
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  assert.equal(snap.me.revives, 0);
+  assert.equal(snap.p[0]![7], 1, '무적 중이라는 표시가 실린다');
+  for (let i = 0; i < REVIVE_SHIELD_SECONDS * 20 - 2; i++) {
+    swarm();
+    w.shots.length = 0;
+    step(w, DT);
+    assert.equal(p.hp, 50, `무적 중 (${i}틱)`);
+  }
+  // 무적이 끝나면 다시 피해를 받고, 백업이 없으므로 이번에는 쓰러진다
+  for (let i = 0; i < 20 * 30 && p.alive; i++) {
+    swarm();
+    w.shots.length = 0;
+    step(w, DT);
+  }
+  assert.equal(p.alive, false);
+  assert.equal(buildSnapshot(w, p.id)!.p[0]![7], 0);
+  step(w, DT);
+  assert.equal(w.over, true, '혼자 하는 판은 여기서 끝난다');
+});
+
+test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 곧 사라질 때는 표시가 붙고, 이진 변환을 거쳐도 그대로다', () => {
+  const w = createWorld(45);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  a.xpNext = b.xpNext = 1e9;
+  w.itemCd = 1e9;
+  a.x = a.y = 0;
+  b.x = 9000;
+  b.y = -4000;
+  w.items.push({ id: 9301, kind: 'levelup', x: 5000.3, y: -1234.5, ttl: FIELD_ITEM_TTL });
+  w.items.push({ id: 9302, kind: 'revive', x: -700, y: 650, ttl: FIELD_ITEM_FADE + 0.2 });
+  w.enemies.push({ id: 9303, type: 'bug', x: 5000, y: -1234, hp: 1e9, duckCd: 0, hit: false });
+  for (const viewer of [a, b]) {
+    const raw = buildSnapshot(w, viewer.id)!;
+    const snap = decodeSnapshot(encodeSnapshot(raw));
+    assert.deepEqual(snap.i.map((row) => [row[0], FIELD_ITEM_KINDS[row[1]], row[4]]), [[9301, 'levelup', 0], [9302, 'revive', 0]], '누구에게나, 거리와 상관없이');
+    assert.ok(Math.abs(snap.i[0]![2] - 5000.3) < 0.01 && Math.abs(snap.i[0]![3] + 1234.5) < 0.01, `${snap.i[0]}`);
+    assert.ok(!snap.e.some((e) => e[0] === 9303), '멀리 있는 적은 여전히 보내지 않는다');
+  }
+  // 수명이 10초 아래로 내려가면 "곧 사라짐" 표시
+  w.enemies.length = 0;
+  for (let i = 0; i < 10; i++) {
+    a.hp = b.hp = 1e9;
+    quietStep(w);
+  }
+  const later = decodeSnapshot(encodeSnapshot(buildSnapshot(w, a.id)!));
+  assert.deepEqual(later.i.map((row) => [row[0], row[4]]), [[9301, 0], [9302, 1]]);
+  // 가지고 있는 백업 수도 실린다
+  a.revives = 1;
+  assert.equal(decodeSnapshot(encodeSnapshot(buildSnapshot(w, a.id)!)).me.revives, 1);
+  assert.equal(decodeSnapshot(encodeSnapshot(buildSnapshot(w, b.id)!)).me.revives, 0, '남의 것은 보내지 않는다');
+  // 알 수 없는 종류 번호가 들어 있으면 그 스냅샷은 버린다
+  const bytes = encodeSnapshot(buildSnapshot(w, a.id)!);
+  const broken = Uint8Array.from(bytes);
+  broken[broken.length - 9] = 0x7f; // 마지막 아이템의 종류 바이트
+  assert.throws(() => decodeSnapshot(broken), RangeError);
+});
+
+/* ───────────── 공격 범위 강화 (듀얼 모니터) ───────────── */
+
+test('듀얼 모니터: 강화 목록의 맨 뒤에 추가됐고(통신 순서 유지), 한 단계에 12% 씩 넓어진다', () => {
+  assert.equal(UPGRADE_IDS[UPGRADE_IDS.length - 1], 'dual_monitor');
+  assert.equal(UPGRADES.dual_monitor.kind, 'passive');
+  assert.equal(rangeMult(0), 1);
+  assert.ok(Math.abs(rangeMult(1) - (1 + RANGE_PER_LEVEL)) < 1e-9);
+  assert.ok(Math.abs(rangeMult(5) - 1.6) < 1e-9);
+  // 이상한 값이 와도 범위를 벗어나지 않는다 (화면에서 러버덕 반경을 계산할 때 쓴다)
+  for (const bad of [-3, 99, Number.NaN, 2.7]) assert.ok(rangeMult(bad) >= 1 && rangeMult(bad) <= 1.6001, String(bad));
+});
+
+test('듀얼 모니터: 더 멀리 있는 적을 겨누고, 탄이 더 멀리 날아간다', () => {
+  // 가만히 서서 console.log 만으로, 정해진 거리에 놓은 적을 맞히는지 본다
+  const hits = (level: number, dist: number): boolean => {
+    const w = createWorld(51);
+    const p = addPlayer(w, 'a');
+    p.xpNext = 1e9;
+    w.itemCd = 1e9;
+    if (level > 0) p.up.dual_monitor = level;
+    const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, duckCd: 0, hit: false };
+    for (let i = 0; i < 20 * 4; i++) {
+      p.hp = 1e9;
+      // 스폰된 다른 적은 치우고 표적만 제자리에 둔다
+      target.x = p.x + dist;
+      target.y = p.y;
+      w.enemies.length = 0;
+      w.enemies.push(target);
+      step(w, DT);
+      if (target.hit) return true;
+    }
+    return false;
+  };
+  assert.equal(hits(0, 190), true, '기본 조준 거리(200) 안');
+  assert.equal(hits(0, 215), false, '기본 조준 거리 밖은 겨누지 않는다');
+  assert.equal(hits(1, 215), true, '한 단계면 224 까지');
+  assert.equal(hits(5, 310), true, '다섯 단계면 320 까지 겨누고, 탄도 거기까지 닿는다');
+  assert.equal(hits(5, 330), false);
+
+  // 정규표현식(바라보는 방향으로 관통)도 더 멀리 간다: 기본은 210, 다섯 단계면 336
+  const regexReach = (level: number): number => {
+    const w = createWorld(52);
+    const p = addPlayer(w, 'a');
+    p.xpNext = 1e9;
+    w.itemCd = 1e9;
+    p.up = { regex: 1, ...(level > 0 ? { dual_monitor: level } : {}) };
+    let far = 0;
+    for (let i = 0; i < 20 * 5; i++) {
+      p.hp = 1e9;
+      w.enemies.length = 0;
+      step(w, DT);
+      for (const sh of w.shots) far = Math.max(far, Math.hypot(sh.x - p.x, sh.y - p.y));
+    }
+    return far;
+  };
+  const base = regexReach(0);
+  const wide = regexReach(5);
+  assert.ok(base > 190 && base <= 211, `기본 ${base}`);
+  assert.ok(wide > base * 1.5 && wide <= 337, `다섯 단계 ${wide}`);
+});
+
+test('듀얼 모니터: 러버덕이 도는 반경이 넓어지고, 서버 판정 위치와 화면에 그릴 위치가 같다', () => {
+  const w = createWorld(53);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  w.itemCd = 1e9;
+  p.up.rubber_duck = 3;
+  p.up.dual_monitor = 4;
+  for (let i = 0; i < 37; i++) quietStep(w);
+  const radius = DUCK_ORBIT_RADIUS * rangeMult(4);
+  const server = duckPositions(w, p);
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  const row = snap.p.find((r) => r[0] === p.id)!;
+  assert.deepEqual([row[6], row[8]], [3, 4], '스냅샷에 러버덕 수와 범위 단계가 실린다');
+  for (let i = 0; i < 3; i++) {
+    const [ox, oy] = duckOffset(snap.tick * DT, i, row[6], DUCK_ORBIT_RADIUS * rangeMult(row[8]));
+    assert.ok(Math.abs(row[1] + ox - server[i]![0]) < 0.11 && Math.abs(row[2] + oy - server[i]![1]) < 0.11);
+    assert.ok(Math.abs(Math.hypot(ox, oy) - radius) < 1e-6, `반경 ${Math.hypot(ox, oy)}`);
+  }
+  // 넓어진 반경에 있는 적이 맞는다 (기본 반경 36 에서는 닿지 않던 거리)
+  const [dx, dy] = duckOffset(w.time + DT, 0, 3, radius);
+  const e = { id: 9600, type: 'bug' as const, x: p.x + dx, y: p.y + dy, hp: 1e9, duckCd: 0, hit: false };
+  w.enemies.push(e);
+  p.up.console_log = 0;
+  w.shots.length = 0;
+  step(w, DT);
+  assert.equal(e.hit, true);
+  // 쓰러진 사람의 줄에는 0 으로 실린다 (그릴 러버덕이 없다)
+  fell(p);
+  assert.deepEqual([buildSnapshot(w, p.id)!.p[0]![6], buildSnapshot(w, p.id)!.p[0]![8]], [0, 0]);
 });

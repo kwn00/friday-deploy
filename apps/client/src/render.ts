@@ -1,4 +1,4 @@
-import { DT, ENEMY_IDS, duckOffset, type Snapshot } from '@friday-deploy/shared';
+import { DT, DUCK_ORBIT_RADIUS, ENEMY_IDS, FIELD_ITEM_KINDS, duckOffset, rangeMult, type FieldItemKind, type Snapshot } from '@friday-deploy/shared';
 import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
@@ -21,6 +21,13 @@ const HIT_FLASH_MS = 70;
 /** 밀려나는 거리 (논리 픽셀). 화면 표현일 뿐이고 서버의 적 위치는 바뀌지 않는다 */
 const HIT_RECOIL = 4;
 const MAX_PARTICLES = 500;
+
+/** 필드 아이템의 색: [받침 빛 rgb, 주웠을 때의 반짝임 두 색] */
+const ITEM_FX: Record<FieldItemKind, { glow: string; spark: [string, string] }> = {
+  heal: { glow: '166,227,161', spark: ['#a6e3a1', '#eff1f5'] },
+  levelup: { glow: '249,226,175', spark: ['#f9e2af', '#a6e3a1'] },
+  revive: { glow: '137,220,235', spark: ['#89dceb', '#eff1f5'] },
+};
 
 /** 머리 위 닉네임 색: 나 / 동료 / 쓰러진 사람 */
 const NAME_COLOR = { me: '#a6e3a1', mate: '#cdd6f4', down: '#7f849c' } as const;
@@ -195,6 +202,18 @@ export class Renderer {
         if (next.p.some((p) => p[4] && Math.hypot(g[1] - p[1], g[2] - p[2]) < 40)) this.burst(g[1], g[2], 2, 30, ['#a6e3a1', '#eff1f5'], 1, 0.12);
       }
     }
+    // 필드 아이템: 누군가 주워서 사라진 자리에 반짝임 (수명이 다해 사라진 것은 조용히 없어진다)
+    const items = new Set(next.i.map((it) => it[0]));
+    for (const it of prev.i) {
+      const kind = FIELD_ITEM_KINDS[it[1]];
+      if (!kind || items.has(it[0]) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
+      this.burst(it[2], it[3], kind === 'heal' ? 14 : 24, kind === 'heal' ? 40 : 70, ITEM_FX[kind].spark, kind === 'heal' ? 2 : 3);
+    }
+    // 방금 되살아난 사람: 주변으로 퍼지는 반짝임 (무적 표시가 켜지는 순간)
+    const before = this.indexOf(prev).p;
+    for (const p of next.p) {
+      if (p[7] && !before.get(p[0])?.[7]) this.burst(p[1], p[2], this.calm ? 10 : 36, 130, ITEM_FX.revive.spark, 3, 0.3);
+    }
     const heals = new Set(next.h.map((h) => h[0]));
     for (const h of prev.h) {
       // 시야 밖으로 나간 것이 아니라 누군가 먹어서 사라진 경우만
@@ -236,6 +255,21 @@ export class Renderer {
     for (const g of curr.g) {
       const q = was.g.get(g[0]);
       blit(this.spr.commit, mix(q?.[1], g[1]), mix(q?.[2], g[2]) + Math.sin(now / 200 + g[0]) * 1.5);
+    }
+
+    // 필드 아이템 (화면 안에 들어온 것만 보인다. 멀리 있는 것은 미니맵이 알려준다)
+    for (const it of curr.i) {
+      const kind = FIELD_ITEM_KINDS[it[1]];
+      if (!kind) continue;
+      // 곧 사라질 것은 깜빡인다 (동작 줄이기 설정에서는 흐리게만)
+      if (it[4] && !this.calm && Math.floor(now / 160) % 2 === 0) continue;
+      const bob = this.calm ? 0 : Math.sin(now / 260 + it[0]) * 2;
+      const pulse = this.calm ? 0.35 : 0.3 + 0.2 * Math.sin(now / 180 + it[0]);
+      ctx.fillStyle = `rgba(${ITEM_FX[kind].glow},${pulse})`;
+      ctx.fillRect(sx(it[2]) - 8 * S, sy(it[3]) + 6 * S, 16 * S, 2 * S);
+      if (it[4] && this.calm) ctx.globalAlpha = 0.5;
+      blit(this.spr.items[kind], it[2], it[3] + bob);
+      ctx.globalAlpha = 1;
     }
 
     for (const h of curr.h) {
@@ -305,7 +339,10 @@ export class Renderer {
       const frame = moving && Math.floor(now / 140) % 2 ? 1 : 0;
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.fillRect(px - 5 * S, py + 6 * S, 10 * S, 2 * S);
+      // 방금 되살아나 피해를 받지 않는 동안에는 깜빡인다 (동작 줄이기 설정에서는 반투명으로만)
+      if (p[7]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 90) % 2 ? 0.35 : 0.9;
       blit(this.spr.dev[p[3] < 0 ? 'l' : 'r'][frame], x, y);
+      ctx.globalAlpha = 1;
       // 머리 위 체력바 / 이름
       const bx = px - 7 * S;
       const by = py - 11 * S;
@@ -315,7 +352,8 @@ export class Renderer {
       ctx.fillRect(bx, by, Math.round((14 * S * p[5]) / 100), 2 * S);
       labels.push({ id: p[0], color: p[0] === curr.me.id ? NAME_COLOR.me : NAME_COLOR.mate, px, bottom: by });
       for (let i = 0; i < p[6]; i++) {
-        const [ox, oy] = duckOffset(duckTime, i, p[6]);
+        // 반경은 주인의 공격 범위 강화에 따라 넓어진다 (서버 판정과 같은 식)
+        const [ox, oy] = duckOffset(duckTime, i, p[6], DUCK_ORBIT_RADIUS * rangeMult(p[8]));
         blit(this.spr.duck, x + ox, y + oy);
       }
     }

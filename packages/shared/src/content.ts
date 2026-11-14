@@ -33,7 +33,8 @@ export type ShotKind = (typeof SHOT_KINDS)[number];
 export const WEAPON_IDS = ['console_log', 'rubber_duck', 'regex', 'ai_agent'] as const;
 export type WeaponId = (typeof WEAPON_IDS)[number];
 
-export const PASSIVE_IDS = ['coffee', 'mech_keyboard', 'stack_overflow', 'npm_install', 'dark_mode'] as const;
+// 순서가 곧 통신에서 쓰는 순서다 (스냅샷에 강화 단계를 이 순서로 싣는다). 새 것은 맨 뒤에 추가할 것
+export const PASSIVE_IDS = ['coffee', 'mech_keyboard', 'stack_overflow', 'npm_install', 'dark_mode', 'dual_monitor'] as const;
 export type PassiveId = (typeof PASSIVE_IDS)[number];
 
 export const UPGRADE_IDS = [...WEAPON_IDS, ...PASSIVE_IDS] as const;
@@ -56,6 +57,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   stack_overflow: { kind: 'passive', name: 'Stack Overflow', icon: '📋', desc: '복붙의 힘. 피해량 +15%' },
   npm_install: { kind: 'passive', name: 'npm install', icon: '📦', desc: '일단 다 끌어온다. 경험치를 끌어당기는 범위 +30%' },
   dark_mode: { kind: 'passive', name: '다크 모드', icon: '🌙', desc: '눈이 편안. 최대 체력 +20, 체력 20 회복' },
+  dual_monitor: { kind: 'passive', name: '듀얼 모니터', icon: '🖥️', desc: '화면이 넓어지니 더 멀리 닿는다. 공격 범위 +12%' },
 };
 
 export function isWeapon(id: UpgradeId): id is WeaponId {
@@ -65,3 +67,23 @@ export function isWeapon(id: UpgradeId): id is WeaponId {
 export function isUpgradeId(v: unknown): v is UpgradeId {
   return typeof v === 'string' && (UPGRADE_IDS as readonly string[]).includes(v);
 }
+
+/* ───────────── 필드 아이템 ───────────── */
+
+/** 순서가 곧 통신에서 쓰는 번호다. 중간에 끼워 넣지 말고 뒤에 추가할 것 */
+export const FIELD_ITEM_KINDS = ['heal', 'levelup', 'revive'] as const;
+export type FieldItemKind = (typeof FIELD_ITEM_KINDS)[number];
+
+export interface FieldItemDef {
+  name: string;
+  icon: string;
+  desc: string;
+  /** 놓일 때 이 종류가 뽑힐 비중 */
+  weight: number;
+}
+
+export const FIELD_ITEMS: Record<FieldItemKind, FieldItemDef> = {
+  heal: { name: '야근 피자', icon: '🍕', desc: '체력 20% 회복', weight: 65 },
+  levelup: { name: 'LGTM', icon: '✅', desc: '즉시 1레벨 업', weight: 34 },
+  revive: { name: '백업', icon: '💾', desc: '쓰러져도 한 번 되살아난다', weight: 1 },
+};

@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -18,7 +18,7 @@ export const ROOM_CODE_LEN = 6;
  * 리더보드 시즌. 난이도가 달라지는 변경(무기·적·아이템 수치 등)을 하면 올린다.
  * 서로 다른 규칙에서 나온 기록이 한 순위표에 섞이지 않게 하기 위한 것이다.
  */
-export const LEADERBOARD_SEASON = 1;
+export const LEADERBOARD_SEASON = 2;
 /** 순위표에 보여주는 기록 수 */
 export const LEADERBOARD_SIZE = 50;
 /** 이보다 짧게 끝난 판은 기록하지 않는다 (시작하자마자 끝난 판으로 순위표가 채워지지 않게) */
@@ -57,6 +57,8 @@ export const GEM_PULL_MAX = 360;
 export const GEM_CONTACT = 6;
 
 export const MAX_UPGRADE_LEVEL = 5;
+/** 듀얼 모니터(공격 범위 강화) 한 단계마다 넓어지는 비율. 조준 거리, 탄이 날아가는 거리, 러버덕이 도는 반경에 적용된다 */
+export const RANGE_PER_LEVEL = 0.12;
 export const OFFER_COUNT = 3;
 /** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. */
 export const OFFER_TIMEOUT = 20;
@@ -80,3 +82,31 @@ export const HEAL_DROP_COOLDOWN = 25;
 /** 최대 체력 대비 회복량 */
 export const HEAL_FRACTION = 0.2;
 export const MAX_HEALS = 4;
+
+/**
+ * 필드 아이템: 적을 잡지 않아도 시간에 따라 맵에 저절로 놓이는 아이템 (종류와 비중은 content.ts 의 FIELD_ITEMS).
+ * 아주 조금만 나온다: 평균 FIELD_ITEM_INTERVAL 초에 하나.
+ * 처음에는 75초로 잡았는데, 봇으로 재 보니 아이템을 찾아다니는 플레이의 생존 시간이 중앙값 +27%(상위 25% 는 +47%)
+ * 늘어서 110초로 늦췄다 (같은 측정에서 약 +8%). 간격을 줄이려면 다시 재 볼 것.
+ */
+export const FIELD_ITEM_INTERVAL = 110;
+/** 실제 간격은 평균의 (1 - 이 값) ~ (1 + 이 값) 배 사이에서 무작위 (언제 나올지 맞힐 수 없게) */
+export const FIELD_ITEM_JITTER = 0.4;
+/** 맵에 동시에 있을 수 있는 개수. 가득 차 있으면 그 차례는 건너뛴다 */
+export const MAX_FIELD_ITEMS = 3;
+/** 줍지 않으면 사라지기까지의 시간(초) */
+export const FIELD_ITEM_TTL = 90;
+/** 사라지기 전 이 시간(초) 동안은 곧 사라진다는 표시가 붙는다 (화면에서 깜빡인다) */
+export const FIELD_ITEM_FADE = 10;
+/** 살아 있는 플레이어 한 명에게서 이 거리 범위에 놓인다 (화면 밖. 기본 속도로 걸어서 7~11초) */
+export const FIELD_ITEM_MIN_DIST = 500;
+export const FIELD_ITEM_MAX_DIST = 800;
+
+/** 부활(백업): 한 번에 가질 수 있는 개수 */
+export const MAX_REVIVES = 1;
+/** 되살아날 때의 체력 (최대 체력 대비) */
+export const REVIVE_HP_FRACTION = 0.5;
+/** 되살아난 직후 피해를 받지 않는 시간(초) */
+export const REVIVE_SHIELD_SECONDS = 2;
+/** 되살아나는 순간 이 반경 안의 적을 반경 밖으로 밀어낸다 (둘러싸인 채 바로 다시 쓰러지지 않게) */
+export const REVIVE_BLAST_RADIUS = 90;

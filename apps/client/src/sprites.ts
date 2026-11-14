@@ -1,5 +1,5 @@
 /** 픽셀아트 스프라이트: 외부 이미지 없이 문자 그리드 → 오프스크린 캔버스로 구워서 사용 */
-import type { EnemyId } from '@friday-deploy/shared';
+import type { EnemyId, FieldItemKind } from '@friday-deploy/shared';
 
 const PAL: Record<string, string> = {
   k: '#11111b', // 외곽선
@@ -166,6 +166,34 @@ const SPR = {
     '....kyk....',
     '.....k.....',
   ],
+  /** 필드 아이템: LGTM (승인 도장. 주우면 즉시 1레벨 업) */
+  lgtm: [
+    '..kkkkkkk..',
+    '.kgggggggk.',
+    'kgggggggwgk',
+    'kggggggwwgk',
+    'kgwggggwggk',
+    'kgwwggwwggk',
+    'kggwwwwgggk',
+    'kgggwwggggk',
+    'kGgggggggGk',
+    '.kGGGGGGGk.',
+    '..kkkkkkk..',
+  ],
+  /** 필드 아이템: 백업 (디스켓. 가지고 있으면 쓰러져도 한 번 되살아난다) */
+  backup: [
+    'kkkkkkkkkk.',
+    'kbbwwwwBbbk',
+    'kbbwwwwBbbk',
+    'kbbwwwwBbbk',
+    'kbbbbbbbbbk',
+    'kbbbbbbbbbk',
+    'kbwwwwwwwbk',
+    'kbwkkkkkwbk',
+    'kbwwwwwwwbk',
+    'kbwkkkkkwbk',
+    'kkkkkkkkkkk',
+  ],
 } satisfies Record<string, string[]>;
 
 /** 같은 모양을 흰색 한 가지로 칠한 복사본 (피격 순간에 번쩍이는 용도) */
@@ -191,6 +219,8 @@ export interface SpriteSet {
   shots: [Sprite, Sprite, Sprite];
   grave: Sprite;
   heal: Sprite;
+  /** 필드 아이템 (피자는 적이 떨어뜨리는 회복 아이템과 같은 그림) */
+  items: Record<FieldItemKind, Sprite>;
 }
 
 export function loadSprites(): SpriteSet {
@@ -218,6 +248,7 @@ export function loadSprites(): SpriteSet {
     shots: [bake(SPR.log), bake(SPR.regex), bake(SPR.ai)],
     grave: bake(SPR.grave),
     heal: bake(SPR.pizza),
+    items: { heal: bake(SPR.pizza), levelup: bake(SPR.lgtm), revive: bake(SPR.backup) },
   };
 }
 
@@ -251,6 +282,7 @@ export function scaleSprites(set: SpriteSet, k: number): SpriteSet {
     shots: [up(set.shots[0]), up(set.shots[1]), up(set.shots[2])],
     grave: up(set.grave),
     heal: up(set.heal),
+    items: { heal: up(set.items.heal), levelup: up(set.items.levelup), revive: up(set.items.revive) },
   };
 }
 

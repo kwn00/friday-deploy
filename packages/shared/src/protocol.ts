@@ -93,13 +93,17 @@ export interface Snapshot {
     level: number;
     kills: number;
     alive: boolean;
+    /** 가지고 있는 부활(백업) 수 */
+    revives: number;
     up: Partial<Record<UpgradeId, number>>;
   };
   /**
    * [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다).
    * alive 가 0 이면 그 자리에 묘비가 있다. 관전으로 합류해 몸이 없는 사람은 들어 있지 않다 (나 자신이라도).
+   * 여덟째 값은 방금 되살아나 피해를 받지 않는 중인지 (0|1). 화면에서 깜빡인다.
+   * 아홉째 값은 공격 범위 강화(듀얼 모니터) 단계. 러버덕이 도는 반경을 화면에서 서버와 똑같이 그리는 데 쓴다.
    */
-  p: [number, number, number, number, number, number, number][];
+  p: [number, number, number, number, number, number, number, number, number][];
   /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1)] */
   e: [number, number, number, number, number][];
   /** [id, shotKindIndex, x, y] */
@@ -108,6 +112,11 @@ export interface Snapshot {
   g: [number, number, number][];
   /** 회복 아이템 [id, x, y] */
   h: [number, number, number][];
+  /**
+   * 필드 아이템 [id, 종류 번호(FIELD_ITEM_KINDS 의 순서), x, y, 곧 사라지는지(0|1)].
+   * 다른 것들과 달리 거리와 상관없이 전부 들어 있다 (미니맵에서 찾아가라고 알려주는 정보다).
+   */
+  i: [number, number, number, number, number][];
 }
 
 export type ServerMsg =
