@@ -68,7 +68,9 @@ export class Leaderboard {
   private views: Partial<Record<BoardId, LeaderboardEntry[]>> = {};
   private seen = new Set<string>();
   private pending: { record: RunRecord; attempt: number }[] = [];
-  private flushing = false;
+  /** 지금 돌고 있는 저장 작업. 동시에 둘이 돌지 않게 하고, 종료할 때 이것을 기다린다 */
+  private flushing: Promise<void> | null = null;
+  private closed = false;
   private loaded = false;
 
   constructor(
@@ -136,8 +138,17 @@ export class Leaderboard {
     return this.pending.length;
   }
 
-  async close(): Promise<void> {
-    await this.flush();
+  /**
+   * 아직 저장하지 못한 기록을 마저 쓰고 저장소를 닫는다 (배포·재시작 때).
+   * 이미 돌고 있는 저장 작업이 있으면 그것이 끝나기를 기다린다. timeoutMs 안에 못 쓴 기록은 포기한다.
+   */
+  async close(timeoutMs = 2500): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pending.length > 0 && Date.now() < deadline) {
+      await Promise.race([this.flush(), new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())))]);
+      if (this.pending.length > 0) await new Promise((r) => setTimeout(r, 100));
+    }
+    this.closed = true;
     await this.store.close();
   }
 
@@ -166,30 +177,35 @@ export class Leaderboard {
     void this.flush();
   }
 
-  /** 밀린 기록을 순서대로 저장한다. 실패하면 간격을 늘려 가며 다시 시도하고, 끝내 안 되면 그 기록의 저장만 포기한다 */
-  private async flush(): Promise<void> {
-    if (this.flushing) return;
-    this.flushing = true;
-    try {
-      while (this.pending.length > 0) {
-        const job = this.pending[0]!;
-        try {
-          await this.store.save(job.record);
+  /** 밀린 기록을 저장한다. 이미 돌고 있으면 그 작업을 돌려준다 (호출한 쪽이 끝을 기다릴 수 있게) */
+  private flush(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (!this.flushing) {
+      this.flushing = this.drain().finally(() => {
+        this.flushing = null;
+      });
+    }
+    return this.flushing;
+  }
+
+  /** 순서대로 저장한다. 실패하면 간격을 늘려 가며 다시 시도하고, 끝내 안 되면 그 기록의 저장만 포기한다 */
+  private async drain(): Promise<void> {
+    while (this.pending.length > 0) {
+      const job = this.pending[0]!;
+      try {
+        await this.store.save(job.record);
+        this.pending.shift();
+      } catch (err) {
+        const wait = RETRY_MS[job.attempt++];
+        if (wait === undefined) {
+          console.error('[leaderboard] 기록 저장을 포기합니다 (순위표에는 서버가 다시 시작될 때까지 남습니다).', job.record.id, err);
           this.pending.shift();
-        } catch (err) {
-          const wait = RETRY_MS[job.attempt++];
-          if (wait === undefined) {
-            console.error('[leaderboard] 기록 저장을 포기합니다 (순위표에는 서버가 다시 시작될 때까지 남습니다).', job.record.id, err);
-            this.pending.shift();
-            continue;
-          }
-          console.error(`[leaderboard] 기록 저장 실패, ${wait / 1000}초 뒤 재시도`, job.record.id, err);
-          setTimeout(() => void this.flush(), wait).unref();
-          return;
+          continue;
         }
+        console.error(`[leaderboard] 기록 저장 실패, ${wait / 1000}초 뒤 재시도`, job.record.id, err);
+        setTimeout(() => void this.flush(), wait).unref();
+        return;
       }
-    } finally {
-      this.flushing = false;
     }
   }
 

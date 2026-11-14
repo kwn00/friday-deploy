@@ -110,3 +110,38 @@ test('compareRuns 는 완전한 순서를 준다 (정렬이 흔들리지 않는�
   assert.ok(compareRuns({ ...base, id: 'b' }, base) > 0);
   assert.ok(compareRuns({ ...base, time: 101 }, base) < 0);
 });
+
+test('close: 저장이 진행 중이어도 밀린 기록을 전부 쓴 뒤에 저장소를 닫는다', async () => {
+  const saved: string[] = [];
+  let closedAt = -1;
+  const slow: LeaderboardStore = {
+    persistent: true,
+    load: async () => [],
+    save: async (r) => {
+      await new Promise((res) => setTimeout(res, 5));
+      if (closedAt >= 0) throw new Error('store closed');
+      saved.push(r.id);
+    },
+    close: async () => {
+      closedAt = saved.length;
+    },
+  };
+  const lb = new Leaderboard(slow);
+  for (let i = 0; i < 25; i++) lb.record(run({ time: 100 + i }));
+  assert.ok(lb.unsaved > 0, '아직 저장 중');
+  await lb.close();
+  assert.equal(saved.length, 25, '전부 저장됨');
+  assert.equal(closedAt, 25, '저장이 끝난 뒤에 닫았다');
+  assert.equal(lb.unsaved, 0);
+});
+
+test('close: DB 가 죽어 있으면 정해진 시간 안에 포기하고 끝난다 (종료가 매달리지 않는다)', async (t) => {
+  const errors = t.mock.method(console, 'error', () => {});
+  const dead: LeaderboardStore = { persistent: true, load: async () => [], save: async () => { throw new Error('db down'); }, close: async () => {} };
+  const lb = new Leaderboard(dead);
+  lb.record(run({ time: 100 }));
+  const t0 = Date.now();
+  await lb.close(400);
+  assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0}ms`);
+  assert.ok(errors.mock.callCount() >= 1);
+});
