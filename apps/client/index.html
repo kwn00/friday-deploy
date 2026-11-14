@@ -41,6 +41,7 @@
         <div class="buttons">
           <button id="btn-solo" class="btn btn--primary" type="button">▶ npm run solo</button>
           <button id="btn-create" class="btn" type="button">👥 pair programming <small>방 만들기</small></button>
+          <button id="btn-board" class="btn btn--sm" type="button">🏆 git log --top <small>리더보드</small></button>
         </div>
         <div class="join">
           <input id="code-input" type="text" maxlength="200" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="방 코드" aria-label="참가할 방 코드" />
@@ -97,10 +98,29 @@
         <h2 class="panel__title panel__title--danger">Segmentation fault</h2>
         <p class="panel__sub">(core dumped) — 장애 회고는 월요일에</p>
         <dl id="result" class="result"></dl>
+        <p id="result-place" class="place hidden"></p>
+        <p id="result-hint" class="hint hint--result hidden"></p>
         <div class="buttons">
           <button id="btn-retry" class="btn btn--primary" type="button">↻ git revert &amp;&amp; retry</button>
+          <button id="btn-result-board" class="btn hidden" type="button">🏆 순위표 보기 <small>리더보드</small></button>
           <button id="btn-home" class="btn" type="button">✕ 처음으로</button>
         </div>
+      </div>
+    </section>
+
+    <!-- 순위표: 타이틀/결과 화면 위에 겹쳐 뜨는 읽기 전용 오버레이 (플레이 중에는 열 수 없다) -->
+    <section id="screen-board" class="screen screen--board hidden" role="dialog" aria-modal="true" aria-labelledby="board-title">
+      <div class="panel panel--board">
+        <div class="board__head">
+          <h2 id="board-title" class="panel__title board__title">🏆 git log --top <small>리더보드</small></h2>
+          <button id="btn-board-close" class="board__close" type="button" aria-label="순위표 닫기">✕</button>
+          <div class="board__tabs" role="tablist" aria-label="순위표 종류">
+            <button id="tab-board-solo" class="tab" type="button" role="tab" aria-selected="true">혼자</button>
+            <button id="tab-board-coop" class="tab" type="button" role="tab" aria-selected="false" tabindex="-1">함께</button>
+          </div>
+        </div>
+        <p id="board-note" class="board__note hidden"></p>
+        <div id="board-body" class="board__body" role="tabpanel" aria-live="polite"></div>
       </div>
     </section>
 

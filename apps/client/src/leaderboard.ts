@@ -1,0 +1,199 @@
+import { LEADERBOARD_SIZE, type BoardId, type LeaderboardResponse } from '@friday-deploy/shared';
+import { LeaderboardError, fetchLeaderboard } from './net';
+
+/**
+ * 순위표 오버레이. 게임 상태와는 무관한 읽기 전용 화면이라 연결(WebSocket)이나 단계(phase)를 건드리지 않는다.
+ * 주의: 서버에서 온 문자열(닉네임 등)은 전부 textContent 로만 넣는다 (innerHTML 금지 → XSS 차단).
+ */
+
+/** 이번 브라우저 세션에서 방금 순위표에 오른 기록 (그 줄을 강조하는 데 쓴다) */
+export interface MyPlace {
+  board: BoardId;
+  rank: number;
+  time: number;
+  kills: number;
+  level: number;
+}
+
+const BOARD_LABEL: Record<BoardId, string> = { solo: '혼자', coop: '함께' };
+/** 같은 순위표를 짧은 시간에 반복해서 받지 않게 하는 보관 시간 (탭을 오가는 것만으로 서버 한도에 걸리지 않도록) */
+const CACHE_MS = 15_000;
+
+const mmss = (sec: number): string => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+function shortDate(at: number): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function node<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+export class Leaderboard {
+  private readonly root = document.getElementById('screen-board') as HTMLElement;
+  private readonly body = document.getElementById('board-body') as HTMLElement;
+  private readonly note = document.getElementById('board-note') as HTMLElement;
+  private readonly closeBtn = document.getElementById('btn-board-close') as HTMLButtonElement;
+  private readonly tabs: Record<BoardId, HTMLButtonElement> = {
+    solo: document.getElementById('tab-board-solo') as HTMLButtonElement,
+    coop: document.getElementById('tab-board-coop') as HTMLButtonElement,
+  };
+
+  private board: BoardId = 'solo';
+  private mine: MyPlace | null = null;
+  private seq = 0;
+  private abort: AbortController | null = null;
+  private cache: Partial<Record<BoardId, { at: number; data: LeaderboardResponse }>> = {};
+  private opener: HTMLElement | null = null;
+  /** 열려 있는 동안 뒤 화면을 포커스/읽기에서 빼 둔다 (Tab 으로 뒤의 버튼에 닿지 않게) */
+  private readonly behind: HTMLElement[];
+
+  constructor(behind: HTMLElement[]) {
+    this.behind = behind;
+    this.closeBtn.addEventListener('click', () => this.close());
+    // 배경(패널 바깥)을 눌러도 닫는다
+    this.root.addEventListener('click', (e) => {
+      if (e.target === this.root) this.close();
+    });
+    for (const id of ['solo', 'coop'] as const) {
+      this.tabs[id].addEventListener('click', () => this.select(id, false));
+      this.tabs[id].addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        const next: BoardId = id === 'solo' ? 'coop' : 'solo';
+        this.select(next, false);
+        this.tabs[next].focus();
+      });
+    }
+    this.root.addEventListener('keydown', (e) => {
+      // 오버레이 안에서만 Tab 을 돌린다 (뒤 화면은 inert 이지만 브라우저 주소창으로 빠지는 것도 막는다)
+      if (e.key !== 'Tab') return;
+      const items = [this.closeBtn, this.tabs.solo, this.tabs.coop, ...this.body.querySelectorAll<HTMLElement>('button')];
+      const first = items[0]!;
+      const lastItem = items[items.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        lastItem.focus();
+      } else if (!e.shiftKey && document.activeElement === lastItem) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
+  get isOpen(): boolean {
+    return !this.root.classList.contains('hidden');
+  }
+
+  /** 방금 끝난 판의 순위를 알려 둔다. 열 때 그 줄을 강조한다. */
+  setMine(place: MyPlace | null): void {
+    this.mine = place;
+    if (place) delete this.cache[place.board]; // 새 기록이 올라갔으니 보관해 둔 목록은 낡았다
+  }
+
+  open(board: BoardId, fresh = false): void {
+    if (!this.isOpen) {
+      this.opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      this.root.classList.remove('hidden');
+      for (const b of this.behind) b.inert = true;
+    }
+    this.select(board, fresh);
+    this.closeBtn.focus({ preventScroll: true });
+  }
+
+  close(): void {
+    if (!this.isOpen) return;
+    this.abort?.abort();
+    this.seq++;
+    this.root.classList.add('hidden');
+    for (const b of this.behind) b.inert = false;
+    const back = this.opener;
+    this.opener = null;
+    // 뒤 화면이 그 사이에 사라졌다면(다른 단계로 넘어감) 포커스는 건드리지 않는다
+    if (back && back.isConnected && back.offsetParent !== null) back.focus({ preventScroll: true });
+  }
+
+  private select(board: BoardId, fresh: boolean): void {
+    this.board = board;
+    for (const id of ['solo', 'coop'] as const) {
+      const on = id === board;
+      this.tabs[id].setAttribute('aria-selected', String(on));
+      this.tabs[id].tabIndex = on ? 0 : -1;
+      this.tabs[id].classList.toggle('tab--on', on);
+    }
+    void this.load(fresh);
+  }
+
+  private async load(force: boolean): Promise<void> {
+    const board = this.board;
+    this.abort?.abort();
+    const seq = ++this.seq;
+    const hit = this.cache[board];
+    if (!force && hit && Date.now() - hit.at < CACHE_MS) {
+      this.render(hit.data);
+      return;
+    }
+    this.abort = new AbortController();
+    this.note.classList.add('hidden');
+    this.body.setAttribute('aria-busy', 'true');
+    this.body.replaceChildren(node('p', 'board__msg', '불러오는 중… 서버가 잠들어 있었다면 1분쯤 걸릴 수 있어요.'));
+    try {
+      const data = await fetchLeaderboard(board, this.abort.signal);
+      if (seq !== this.seq) return; // 그 사이 다른 탭을 눌렀거나 닫았다
+      this.cache[board] = { at: Date.now(), data };
+      this.render(data);
+    } catch (err) {
+      if (seq !== this.seq) return;
+      const msg = err instanceof LeaderboardError ? err.message : '순위표를 불러오지 못했어요.';
+      const retry = node('button', 'btn board__retry', '↻ 다시 시도');
+      retry.type = 'button';
+      retry.addEventListener('click', () => void this.load(true));
+      this.body.replaceChildren(node('p', 'board__msg board__msg--error', msg), retry);
+      this.body.removeAttribute('aria-busy');
+    }
+  }
+
+  private render(data: LeaderboardResponse): void {
+    this.body.removeAttribute('aria-busy');
+    this.note.classList.toggle('hidden', data.persistent);
+    this.note.textContent = data.persistent ? '' : '기록은 서버 메모리에 있어서 서버가 다시 시작되면 사라져요.';
+    if (data.entries.length === 0) {
+      this.body.replaceChildren(node('p', 'board__msg', '아직 기록이 없어요. 첫 번째 배포의 주인공이 되어보세요!'));
+      return;
+    }
+    const m = this.mine;
+    const list = node('ol', 'rows');
+    list.setAttribute('aria-label', `${BOARD_LABEL[data.board]} 순위표`);
+    // 내 기록 찾기: 그 사이 다른 사람이 앞 순위에 들어와 순위가 밀렸을 수 있으니 순위 대신 기록 값으로 찾고, 같은 값이 여럿이면 순위가 가까운 것을 고른다
+    let mineRank = -1;
+    if (m && m.board === data.board) {
+      const same = data.entries.filter((e) => e.time === m.time && e.kills === m.kills && e.level === m.level);
+      same.sort((a, b) => Math.abs(a.rank - m.rank) - Math.abs(b.rank - m.rank));
+      if (same[0]) mineRank = same[0].rank;
+    }
+    let mineRow: HTMLElement | null = null;
+    for (const e of data.entries.slice(0, LEADERBOARD_SIZE)) {
+      const li = node('li', 'row');
+      const rank = node('span', `row__rank${e.rank <= 3 ? ` row__rank--${e.rank}` : ''}`, String(e.rank));
+      const names = node('span', 'row__names', e.names.join(', '));
+      const meta = node('span', 'row__meta');
+      for (const t of [`⏱ ${mmss(e.time)}`, `🐛 ${e.kills}`, `Lv.${e.level}`, shortDate(e.at)]) if (t) meta.append(node('span', '', t));
+      li.append(rank, names, meta);
+      if (e.rank === mineRank) {
+        li.classList.add('row--mine');
+        names.append(node('em', '', '내 기록'));
+        mineRow = li;
+      }
+      list.append(li);
+    }
+    this.body.replaceChildren(list);
+    this.body.scrollTop = 0;
+    // 내 기록이 아래쪽 순위라면 보이는 곳으로 가져온다 (스크롤은 목록 안에서만)
+    mineRow?.scrollIntoView({ block: 'nearest' });
+  }
+}
