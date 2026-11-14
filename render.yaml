@@ -31,3 +31,5 @@ services:
       # Render 앞단(Cloudflare)이 덮어쓰는 단일 값 헤더로 클라이언트 IP 를 읽는다.
       - key: CLIENT_IP_HEADER
         value: cf-connecting-ip
+      # 리더보드 기록을 유지하려면 Render 대시보드의 Environment 에서 DATABASE_URL (PostgreSQL 주소)을 직접 추가한다.
+      # 비밀번호가 들어 있으므로 이 파일에는 적지 않는다. 없으면 기록은 서버 메모리에만 있다 (README 참고).
