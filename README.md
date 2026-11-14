@@ -46,7 +46,7 @@ npm run dev        # 서버(8787) + 클라이언트(5173) 동시 실행
 
 ```bash
 npm run typecheck  # 타입 검사
-npm test           # 프로토콜 검증 / 시뮬레이션 테스트
+npm test           # 프로토콜 검증 / 시뮬레이션 / 서버 보안 유틸 테스트
 ```
 
 프로덕션 (서버 한 프로세스가 API · WebSocket · 정적 파일을 모두 서빙):
@@ -60,18 +60,41 @@ SESSION_SECRET="$(openssl rand -base64 48)" npm start
 
 ## 배포
 
-클라이언트와 게임 서버를 나눠서 배포합니다. 게임 서버는 20Hz 루프와 방 상태를 메모리에 들고 있어서,
-서버리스(Vercel Functions)가 아니라 프로세스가 계속 살아 있는 곳(Fly.io, Railway, Render 등)이 맞습니다.
+게임 서버는 20Hz 루프와 방 상태를 메모리에 들고 있어서, 서버리스(Vercel Functions)가 아니라
+프로세스가 계속 살아 있는 곳이 맞습니다. 서버 한 프로세스가 화면 · API · WebSocket 을 모두 서빙하므로
+**한 곳에 하나만 올리면 됩니다.**
 
-**클라이언트 → Vercel**
-1. Vercel 에서 이 저장소를 Import (설정은 `vercel.json` 에 있으므로 Root Directory 등은 기본값 그대로)
-2. Environment Variables 에 `VITE_GAME_SERVER_URL=https://<게임 서버 주소>` 추가 후 재배포
+### Render (기본, 무료)
 
-**게임 서버 → 상시 실행 호스트**
-- 시작 명령: `npm start` (Node 20+)
-- 환경 변수: `SESSION_SECRET` (32자 이상 랜덤), `ALLOWED_ORIGINS=https://<vercel 도메인>`, 프록시 뒤라면 `TRUST_PROXY=1`
+설정은 [`render.yaml`](render.yaml) 에 있습니다.
 
-서버 하나로 클라이언트까지 서빙하고 싶다면 `npm run build && npm start` 만 하면 됩니다 (이 경우 `VITE_GAME_SERVER_URL` 불필요).
+1. [Render](https://render.com) 에 GitHub 계정으로 가입
+2. **New → Blueprint** → 이 저장소 선택 → **Apply**
+3. 빌드가 끝나면 `https://friday-deploy.onrender.com` (이름이 이미 쓰였다면 뒤에 접미사가 붙음) 으로 접속
+
+`SESSION_SECRET` 은 Render 가 자동으로 만들고, 리전은 싱가포르로 고정됩니다. 이후 `main` 에 푸시하면 자동 배포됩니다.
+
+무료 플랜에서 알아둘 것:
+- 15분 동안 접속이 없으면 잠들고, 다음 접속 때 깨는 데 약 1분 걸립니다 (그동안 페이지도 뜨지 않음)
+- 월 전송량 5GB (워크스페이스 전체). WebSocket 압축을 켜 둬서 15분 한 판이 약 18MB, 월 약 270판입니다.
+  카드 없이 넘으면 그 달 남은 기간 동안 서비스가 멈춥니다. 대시보드 **Billing** 에서 사용량을 확인하세요.
+- Render 가 무료 인스턴스를 임의로 재시작할 수 있어, 진행 중인 판이 가끔 끊길 수 있습니다
+- 배포할 때마다 진행 중인 판은 끊깁니다
+- 무료 플랜에는 계속 유지되는 저장소가 없습니다 (무료 Postgres 는 약 44일 뒤 삭제). 리더보드를 넣을 때
+  `plan: starter` + 디스크로 올리거나 다른 호스트로 옮기세요.
+
+### 다른 상시 실행 호스트 (Fly.io, Railway, VPS 등)
+
+- 빌드: `npm ci --include=dev && npm run build` / 시작: `npm start` (Node 22 권장, 20+)
+- 환경 변수: `SESSION_SECRET` (32자 이상 랜덤)
+- 프록시 뒤라면 클라이언트 IP 출처를 지정: 엣지가 덮어쓰는 헤더가 있으면 `CLIENT_IP_HEADER`
+  (예: Cloudflare 계열 `cf-connecting-ip`), 아니면 `TRUST_PROXY=<신뢰 프록시 홉 수>`. 자세한 내용은 `.env.example`
+- 인스턴스는 반드시 1개로 둘 것 (방과 세션 기록이 프로세스 메모리에 있음)
+
+### 화면만 따로 배포하고 싶을 때 (선택)
+
+클라이언트만 Vercel 등에 올릴 수도 있습니다 (`vercel.json`). 이때는 클라이언트 빌드 환경 변수에
+`VITE_GAME_SERVER_URL=https://<게임 서버 주소>`, 서버 쪽에 `ALLOWED_ORIGINS=https://<클라이언트 도메인>` 을 넣습니다.
 
 ## 반응형 / 적응형
 

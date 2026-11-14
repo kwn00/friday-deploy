@@ -87,7 +87,23 @@ server.requestTimeout = 15_000;
 /* ───────────── WebSocket ───────────── */
 
 // maxPayload: 정상 클라이언트 메시지는 100바이트 미만. 큰 프레임은 프로토콜 레벨에서 끊는다.
-const wss = new WebSocketServer({ noServer: true, maxPayload: 512, perMessageDeflate: false });
+// ws 는 압축된 프레임도 "압축을 푼 크기"로 maxPayload 를 검사하므로 압축 폭탄은 1009 로 끊긴다.
+//
+// permessage-deflate: 스냅샷 스트림을 약 30% 크기로 줄인다(10분 솔로 41.4MB → 12.5MB, 실측).
+// 호스팅 전송량 한도가 비용을 결정하므로 켠다. 연결당 압축 메모리는 기본값(약 256KB) 대신
+// 창 13비트로 약 160KB 에 묶는다 (압축률 차이는 1.5%p). 서버→클라이언트 방향에는 비밀값과 공격자가
+// 반복해서 넣을 수 있는 값이 같은 컨텍스트에서 섞이지 않아 CRIME 류 압축 오라클은 성립하지 않는다.
+// clientMaxWindowBits 는 숫자로 지정하지 않는다: ws 는 그 파라미터를 제안하지 않는 브라우저(Firefox 등)의
+// 핸드셰이크를 400 으로 거부한다.
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 512,
+  perMessageDeflate: {
+    serverMaxWindowBits: 13,
+    zlibDeflateOptions: { level: 1, memLevel: 8 },
+    threshold: 256,
+  },
+});
 
 function reject(socket: import('node:stream').Duplex, status: string): void {
   socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);

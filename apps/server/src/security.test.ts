@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import type { IncomingMessage } from 'node:http';
+import { test } from 'node:test';
+import { parseClientIpOptions, resolveClientIp } from './security';
+
+function req(headers: Record<string, string | string[]>, remoteAddress = '10.0.0.9'): IncomingMessage {
+  return { headers, socket: { remoteAddress } } as unknown as IncomingMessage;
+}
+
+test('엣지가 넣는 단일 값 헤더를 쓰고, 클라이언트가 넣은 X-Forwarded-For 는 무시한다', () => {
+  const opts = parseClientIpOptions({ CLIENT_IP_HEADER: 'cf-connecting-ip' });
+  const r = resolveClientIp(req({ 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '1.1.1.1, 203.0.113.7, 172.16.0.1' }), opts);
+  assert.deepEqual(r, { ip: '203.0.113.7', source: 'header' });
+});
+
+test('헤더 값이 IP 가 아니거나 여러 개면 위조 가능한 값 대신 소켓 주소로 떨어진다', () => {
+  const opts = parseClientIpOptions({ CLIENT_IP_HEADER: 'cf-connecting-ip' });
+  for (const bad of ['not-an-ip', '1.2.3.4, 5.6.7.8', '', '999.1.1.1']) {
+    assert.deepEqual(resolveClientIp(req({ 'cf-connecting-ip': bad }), opts), { ip: '10.0.0.9', source: 'socket' });
+  }
+  assert.equal(resolveClientIp(req({}), opts).source, 'socket');
+});
+
+test('헤더를 여러 개 지정하면 앞에서부터 처음 유효한 값을 쓴다', () => {
+  const opts = parseClientIpOptions({ CLIENT_IP_HEADER: 'cf-connecting-ip, true-client-ip' });
+  assert.equal(resolveClientIp(req({ 'true-client-ip': '198.51.100.2' }), opts).ip, '198.51.100.2');
+  assert.equal(resolveClientIp(req({ 'cf-connecting-ip': '198.51.100.1', 'true-client-ip': '198.51.100.2' }), opts).ip, '198.51.100.1');
+});
+
+test('TRUST_PROXY=n 은 X-Forwarded-For 를 오른쪽에서 n 번째 값으로 읽는다 (맨 앞 위조값 무시)', () => {
+  const xff = { 'x-forwarded-for': '6.6.6.6, 203.0.113.7, 172.16.0.1' };
+  assert.equal(resolveClientIp(req(xff), parseClientIpOptions({ TRUST_PROXY: '1' })).ip, '172.16.0.1');
+  assert.equal(resolveClientIp(req(xff), parseClientIpOptions({ TRUST_PROXY: '2' })).ip, '203.0.113.7');
+  // 체인이 홉 수보다 짧으면 위조됐을 수 있는 값 대신 소켓 주소
+  assert.deepEqual(resolveClientIp(req({ 'x-forwarded-for': '6.6.6.6' }), parseClientIpOptions({ TRUST_PROXY: '2' })), {
+    ip: '10.0.0.9',
+    source: 'socket',
+  });
+});
+
+test('설정이 없으면 헤더를 전혀 믿지 않는다', () => {
+  const opts = parseClientIpOptions({});
+  const r = resolveClientIp(req({ 'cf-connecting-ip': '1.2.3.4', 'x-forwarded-for': '1.2.3.4' }), opts);
+  assert.deepEqual(r, { ip: '10.0.0.9', source: 'socket' });
+});
+
+test('잘못된 설정값은 무시하고, IPv4-mapped IPv6 는 IPv4 로 합친다', () => {
+  const opts = parseClientIpOptions({ CLIENT_IP_HEADER: 'bad header!, ,x_y', TRUST_PROXY: 'yes' });
+  assert.deepEqual(opts, { headers: [], trustedHops: 0 });
+  assert.equal(resolveClientIp(req({}, '::ffff:203.0.113.7'), opts).ip, '203.0.113.7');
+  assert.equal(resolveClientIp(req({}, '::FFFF:203.0.113.7'), opts).ip, '203.0.113.7');
+  assert.equal(resolveClientIp(req({}, '2001:DB8::1'), opts).ip, '2001:db8::1');
+});

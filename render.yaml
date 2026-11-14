@@ -1,0 +1,33 @@
+# Render Blueprint: 게임 화면 + API + 실시간 서버를 웹 서비스 하나로 배포한다.
+# 사용법: Render 대시보드 → New → Blueprint → 이 저장소 선택 → Apply.
+# 이후 main 브랜치에 푸시할 때마다 자동으로 다시 배포된다 (배포 순간 진행 중인 판은 끊긴다).
+services:
+  - type: web
+    name: friday-deploy
+    runtime: node
+    # 무료: 15분 동안 접속이 없으면 잠들고, 다음 접속 때 깨는 데 약 1분. 월 전송량 5GB (워크스페이스 전체).
+    # 상시 실행이 필요해지면 plan 만 starter 로 바꾸면 된다.
+    plan: free
+    # 한국에서 가장 가까운 Render 리전. 서비스를 만든 뒤에는 바꿀 수 없다.
+    region: singapore
+    branch: main
+    # 클라이언트 빌드에 Vite(개발 의존성)가 필요하므로 NODE_ENV 와 상관없이 dev 의존성까지 설치한다.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    buildFilter:
+      ignoredPaths:
+        - "**/*.md"
+        - "docs/**"
+        - "**/*.test.ts"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # 세션 토큰과 결과 서명용 HMAC 시크릿. Render 가 처음 한 번 무작위로 만들고 이후 유지한다.
+      - key: SESSION_SECRET
+        generateValue: true
+      # Render 는 들어온 X-Forwarded-For 뒤에 덧붙이기만 해서 맨 앞 값을 위조할 수 있다.
+      # Render 앞단(Cloudflare)이 덮어쓰는 단일 값 헤더로 클라이언트 IP 를 읽는다.
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip

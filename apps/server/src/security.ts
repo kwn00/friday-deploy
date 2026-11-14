@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { isIP } from 'node:net';
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -86,13 +87,74 @@ export class IpLimiter {
   }
 }
 
-export function clientIp(req: IncomingMessage): string {
-  if (process.env.TRUST_PROXY === '1') {
-    const xff = req.headers['x-forwarded-for'];
-    const first = (Array.isArray(xff) ? xff[0] : xff)?.split(',')[0]?.trim();
-    if (first) return first;
+export interface ClientIpOptions {
+  /** 엣지(CDN)가 클라이언트 IP 하나만 넣어주는 헤더들. 앞에서부터 처음으로 유효한 IP 를 쓴다. 예: cf-connecting-ip */
+  headers: string[];
+  /** X-Forwarded-For 를 붙이는 신뢰 프록시 홉 수. 0 이면 X-Forwarded-For 를 무시한다. */
+  trustedHops: number;
+}
+
+export function parseClientIpOptions(env: NodeJS.ProcessEnv): ClientIpOptions {
+  const headers = (env.CLIENT_IP_HEADER ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => /^[a-z0-9-]+$/.test(h));
+  const hops = Number.parseInt(env.TRUST_PROXY ?? '0', 10);
+  return { headers, trustedHops: Number.isInteger(hops) && hops > 0 ? Math.min(hops, 10) : 0 };
+}
+
+function firstHeader(req: IncomingMessage, name: string): string | undefined {
+  const v = req.headers[name];
+  return Array.isArray(v) ? v[0] : v;
+}
+
+/** IPv4-mapped IPv6(::ffff:1.2.3.4)를 IPv4 로 정규화해 같은 클라이언트가 두 버킷으로 나뉘지 않게 한다. */
+function normalizeIp(raw: string | undefined): string | null {
+  const ip = raw?.trim();
+  if (!ip || isIP(ip) === 0) return null;
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  return mapped?.[1] ?? ip.toLowerCase();
+}
+
+/**
+ * 레이트리밋·연결 수 제한에 쓰는 클라이언트 IP.
+ *
+ * X-Forwarded-For 의 맨 앞 값은 클라이언트가 마음대로 넣을 수 있다. Render 처럼 들어온 헤더 뒤에 덧붙이기만 하는
+ * 프록시 뒤에서는 위조된다. 그래서 (1) 엣지가 덮어쓰는 단일 값 헤더를 먼저 보고, (2) 아니면 X-Forwarded-For 를
+ * 오른쪽에서 신뢰 홉 수만큼 거슬러 올라간 값을 쓰며, (3) 둘 다 없으면 소켓 주소를 쓴다.
+ * 헤더가 기대와 다를 때는 위조 가능한 값 대신 소켓 주소로 떨어진다(제한이 더 엄격해지는 쪽).
+ */
+export function resolveClientIp(req: IncomingMessage, opts: ClientIpOptions): { ip: string; source: 'header' | 'xff' | 'socket' } {
+  for (const name of opts.headers) {
+    const ip = normalizeIp(firstHeader(req, name));
+    if (ip) return { ip, source: 'header' };
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  if (opts.trustedHops > 0) {
+    const raw = req.headers['x-forwarded-for'];
+    const chain = (Array.isArray(raw) ? raw.join(',') : raw ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const ip = normalizeIp(chain[chain.length - opts.trustedHops]);
+    if (ip) return { ip, source: 'xff' };
+  }
+  return { ip: normalizeIp(req.socket.remoteAddress) ?? 'unknown', source: 'socket' };
+}
+
+const CLIENT_IP_OPTIONS = parseClientIpOptions(process.env);
+let warnedFallback = false;
+
+export function clientIp(req: IncomingMessage): string {
+  const { ip, source } = resolveClientIp(req, CLIENT_IP_OPTIONS);
+  const expected = CLIENT_IP_OPTIONS.headers.length > 0 ? 'header' : CLIENT_IP_OPTIONS.trustedHops > 0 ? 'xff' : 'socket';
+  if (source !== expected && !warnedFallback) {
+    warnedFallback = true;
+    console.warn(
+      `[warn] 설정한 클라이언트 IP 출처(${expected})를 찾지 못해 ${source} 값을 사용합니다. ` +
+        'CLIENT_IP_HEADER / TRUST_PROXY 설정을 확인하세요. (이 경고는 한 번만 출력)',
+    );
+  }
+  return ip;
 }
 
 const EXTRA_ORIGINS = new Set(
@@ -122,4 +184,6 @@ export const SECURITY_HEADERS: Record<string, string> = {
   'Referrer-Policy': 'no-referrer',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  // 프로덕션은 TLS 를 끝내는 프록시(Render 등) 뒤에서만 돈다는 전제. HTTP 응답에서는 브라우저가 무시한다.
+  ...(isProd ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}),
 };

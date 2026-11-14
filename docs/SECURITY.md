@@ -32,7 +32,9 @@
 | 점수 위조 | 결과는 서버가 계산하고 HMAC 서명. 리더보드는 서명 검증된 결과만 수용(예정) | `room.ts` `finish` |
 | 세션 위조 / 탈취 재사용 | 서버 발급 HMAC 토큰, 10분 만료, **1회용**, `timingSafeEqual` 비교. 토큰은 URL 이 아닌 첫 메시지로 전달(로그 노출 방지) | `server/security.ts` |
 | Cross-Site WebSocket Hijacking | 업그레이드 시 `Origin` 검사 (same-origin + 허용 목록) | `security.ts` `originAllowed` |
-| 메시지 폭주 / DoS | 연결별 토큰 버킷(초당 40), 프레임 512B 제한, 바이너리 프레임 거부, IP 당 연결 6개, 전체 연결·방 개수 상한, hello 5초 타임아웃, 하트비트, 방치 방 정리, 느린 클라이언트 스냅샷 드롭 | `server/index.ts`, `room.ts` |
+| 메시지 폭주 / DoS | 연결별 토큰 버킷(초당 40), 프레임 512B 제한(압축 프레임은 **푼 크기** 기준이라 압축 폭탄도 1009), 바이너리 프레임 거부, IP 당 연결 6개, 전체 연결·방 개수 상한, hello 5초 타임아웃, 하트비트, 방치 방 정리, 느린 클라이언트 스냅샷 드롭 | `server/index.ts`, `room.ts` |
+| IP 위조로 IP 당 제한 우회 | `X-Forwarded-For` 맨 앞 값은 클라이언트가 넣을 수 있으므로 쓰지 않는다. 엣지가 덮어쓰는 단일 값 헤더(`CLIENT_IP_HEADER`, Render 는 `cf-connecting-ip`) 또는 오른쪽에서 신뢰 홉 수만큼의 값(`TRUST_PROXY=n`)만 쓰고, 값이 IP 가 아니면 소켓 주소로 떨어진다(제한이 더 엄격해지는 쪽) | `security.ts` `resolveClientIp` |
+| 압축 오라클 (CRIME 류) | WebSocket 압축은 서버→클라이언트 스냅샷 용량 때문에 켠다. 같은 압축 컨텍스트에 비밀값과 공격자가 반복 주입할 수 있는 값이 섞이지 않는다(세션 토큰은 클라이언트→서버 첫 메시지에만 있고, 결과 서명은 본인에게 한 번만 전송) | `server/index.ts` |
 | 리플레이 / 순서 조작 | `seq` 가 증가하지 않는 입력은 위반 처리 | `room.ts` `onInput` |
 | XSS (닉네임 등) | 서버에서 닉네임을 문자/숫자/일부 기호로 정제 + 클라이언트는 `textContent`/캔버스만 사용 (`innerHTML` 미사용) + CSP `script-src 'self'` | `protocol.ts` `sanitizeName`, `client/main.ts` |
 | 클릭재킹 / MIME 스니핑 | `frame-ancestors 'none'`, `X-Frame-Options`, `nosniff` 등 보안 헤더 | `security.ts` |
@@ -51,6 +53,8 @@
 
 - **자동 조작 봇**: 정상 입력을 기계가 대신 넣는 것은 프로토콜 수준에서 구분 불가 → 입력 패턴 통계, 리플레이 저장 후 사후 검증, 신고 시스템
 - **다중 계정 / 어뷰징**: 현재 익명 세션 → 계정 연동(OAuth), 계정 단위 레이트리밋
-- **L7 DDoS**: 앱 내부 제한만 있음 → 배포 시 CDN/WAF, 리버스 프록시 뒤에서는 `TRUST_PROXY=1`
+- **L7 DDoS**: 앱 내부 제한만 있음 → 배포 시 CDN/WAF. 프록시 뒤에서는 `CLIENT_IP_HEADER` / `TRUST_PROXY` 를 그 프록시에 맞게 설정
+- **IP 헤더 신뢰의 전제**: `cf-connecting-ip` 는 요청이 Cloudflare 를 거쳐 올 때만 믿을 수 있다. Render 원본에 Cloudflare 를 우회해 직접 닿는 경로가 있다면 위조 가능하다(확인 못 함). IP 당 제한은 남용 완화용이고 치팅 방지의 근거가 아니다
+- **호스팅 전송량 소진**: 무료 호스트의 월 전송량을 일부러 태워 서비스를 멈추게 할 수 있다 → 압축, IP 당 연결 제한, 방치 방 정리로 완화. 접속만 하고 플레이하지 않는 연결을 끊는 처리는 다음 단계
 - **전송 구간**: 반드시 HTTPS/WSS(TLS) 뒤에서 서비스할 것
 - **수평 확장**: 세션 1회용 기록과 방 상태가 프로세스 메모리에 있음 → 다중 인스턴스 시 Redis 등 공유 저장소와 방 단위 스티키 라우팅 필요
