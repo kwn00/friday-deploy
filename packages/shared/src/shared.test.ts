@@ -139,6 +139,11 @@ test('sim: 회복 아이템은 보스에게서 반드시 나오고, 체력이 �
   assert.equal(w.heals.length, 1);
   assert.equal(p.hp, maxHpOf(p));
 
+  // 화면에는 가득(올림 100)으로 보이는 99.6 같은 체력에서도 줍지 않는다
+  p.hp = maxHpOf(p) - 0.4;
+  step(w, DT);
+  assert.equal(w.heals.length, 1, '화면상 가득이면 아이템을 쓰지 않는다');
+
   // 다치면 줍고, 최대 체력의 일정 비율만큼 회복하되 최대치를 넘지 않는다
   p.hp = 40;
   step(w, DT);

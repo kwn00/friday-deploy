@@ -64,6 +64,10 @@ test('view: 기기별 배율', () => {
   assert.deepEqual(logical(1920, 1080, 1, true), [4, 480, 270]);
   assert.deepEqual(logical(1280, 800, 1, true), [3, 427, 267]);
   assert.deepEqual(logical(2560, 1440, 1, true), [5, 512, 288]);
+  // 작은 데스크톱 창에서도 캐릭터가 너무 작아지지 않는다 (배율 1 이 되지 않게)
+  assert.equal(computeView(480, 320, 1, true).scale, 2);
+  assert.equal(computeView(560, 400, 1, true).scale, 2);
+  assert.equal(computeView(800, 600, 1, true).scale, 2);
   // 어떤 화면에서도 모서리가 적 생성 거리(300) 안쪽에 있다: 적이 생기는 순간이 보이지 않는다
   for (const [w, h, d, f] of [
     [390, 844, 3, false], [844, 390, 3, false], [440, 956, 3, false], [768, 1024, 2, false], [1024, 768, 2, false],

@@ -445,6 +445,38 @@ body {
   margin: 6px 0 0;
   font-size: 11px;
   color: var(--red);
+  scroll-margin-bottom: calc(var(--safe-b) + 12px);
+}
+.status--info {
+  color: var(--muted);
+}
+
+/* 패널 오른쪽 위 모서리의 작은 버튼 (레벨업 선택 중에도 메뉴를 열 수 있게) */
+.panel--levelup {
+  position: relative;
+}
+.panel__corner {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: var(--px) solid transparent;
+  border-radius: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.panel__corner:active,
+.panel__corner:focus-visible {
+  color: var(--text);
+  border-color: var(--line);
+  outline: none;
 }
 
 .panel__title {
@@ -532,59 +564,6 @@ body {
   }
   .panel {
     padding: 20px 18px;
-  }
-}
-
-/* 가로 모드 폰: 세로 공간이 부족하므로 패널을 압축 */
-@media (orientation: landscape) and (max-height: 480px) {
-  .hud {
-    --map: 68px;
-  }
-  .panel {
-    max-width: 620px;
-    padding: 10px 14px;
-  }
-  .panel--menu {
-    max-width: 520px;
-  }
-  .panel--menu .buttons {
-    grid-template-columns: repeat(3, 1fr);
-  }
-  .field {
-    margin-bottom: 6px;
-  }
-  .join {
-    margin-top: 6px;
-  }
-  .code {
-    margin-bottom: 6px;
-    font-size: clamp(22px, 9vh, 32px);
-  }
-  .players {
-    grid-template-columns: 1fr 1fr;
-    margin-top: 6px;
-  }
-  .logo {
-    font-size: clamp(22px, 9vh, 36px);
-  }
-  .tagline {
-    margin: 4px 0 8px;
-  }
-  .buttons {
-    grid-template-columns: 1fr 1fr;
-  }
-  .offers {
-    grid-template-columns: repeat(3, 1fr);
-  }
-  .offer {
-    grid-template-columns: 1fr;
-    text-align: center;
-  }
-  .offer__icon {
-    grid-row: auto;
-  }
-  .hint {
-    margin-top: 6px;
   }
 }
 
@@ -697,6 +676,63 @@ body {
   }
   .panel:has(.offers) {
     max-width: 860px;
+  }
+}
+
+/* 가로 모드 폰: 세로 공간이 부족하므로 패널을 압축.
+ * 요즘 폰은 가로로 돌리면 폭이 768px 을 넘으므로, 넓은 화면용 규칙보다 뒤에 두어야 이 규칙이 이긴다. */
+@media (orientation: landscape) and (max-height: 480px) and (max-width: 1023px) {
+  .hud {
+    --map: 68px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 480px) {
+  .panel {
+    max-width: 620px;
+    padding: 10px 14px;
+  }
+  .panel--menu {
+    max-width: 520px;
+  }
+  .panel--menu .buttons {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .field {
+    margin-bottom: 6px;
+  }
+  .join {
+    margin-top: 6px;
+  }
+  .code {
+    margin-bottom: 6px;
+    font-size: clamp(22px, 9vh, 32px);
+  }
+  .players {
+    grid-template-columns: 1fr 1fr;
+    margin-top: 6px;
+  }
+  .logo {
+    font-size: clamp(22px, 9vh, 36px);
+  }
+  .tagline {
+    margin: 4px 0 8px;
+  }
+  .buttons {
+    grid-template-columns: 1fr 1fr;
+  }
+  .offers {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .offer {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+  .offer__icon {
+    grid-row: auto;
+  }
+  .hint {
+    margin-top: 6px;
   }
 }
 

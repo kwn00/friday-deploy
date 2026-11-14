@@ -34,8 +34,9 @@ export function computeView(cssW: number, cssH: number, dpr: number, finePointer
   const widest = Math.max(1, Math.ceil(Math.hypot(pxW, pxH) / (2 * MAX_HALF_DIAGONAL)));
   let scale: number;
   if (finePointer) {
-    // 데스크톱: 화면이 크고 눈에서 멀지 않으므로 가능한 한 넓게 본다
-    scale = widest;
+    // 데스크톱: 화면이 크고 눈에서 멀지 않으므로 가능한 한 넓게 본다.
+    // 다만 아주 작은 창에서 배율 1 (캐릭터 14px)까지 내려가지는 않게 한다.
+    scale = Math.max(widest, Math.min(2, Math.round(short / 200)));
   } else {
     // 터치: 손가락으로 조작하므로 캐릭터가 충분히 커야 한다. 짧은 변에 폰은 약 200, 태블릿은 약 250 논리 픽셀
     const target = Math.min(cssW, cssH) < 500 ? 200 : 250;

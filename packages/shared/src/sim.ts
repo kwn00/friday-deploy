@@ -538,10 +538,11 @@ export function step(world: World, dt: number): void {
       checkLevelUp(world, p);
     }
     // 회복 아이템: 체력이 가득이면 줍지 않고 남겨 둔다
+    // 화면에 보이는 체력(올림) 기준: 99.6 처럼 화면에는 가득으로 보일 때 아이템을 써 버리지 않는다
     const maxHp = maxHpOf(p);
-    if (p.hp < maxHp && world.heals.length > 0) {
+    if (Math.ceil(p.hp) < maxHp && world.heals.length > 0) {
       world.heals = world.heals.filter((h) => {
-        if (p.hp >= maxHp || (h.x - p.x) ** 2 + (h.y - p.y) ** 2 > r2) return true;
+        if (Math.ceil(p.hp) >= maxHp || (h.x - p.x) ** 2 + (h.y - p.y) ** 2 > r2) return true;
         p.hp = Math.min(maxHp, p.hp + Math.ceil(maxHp * HEAL_FRACTION));
         return false;
       });

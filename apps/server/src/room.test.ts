@@ -179,3 +179,19 @@ test('방 하나에서 오류가 나도 프로세스는 죽지 않고 그 방만
   assert.equal(healthy.closed, false);
   assert.ok(b.ws.snaps.length > 0, '다른 방은 계속 돈다');
 });
+
+test('선택 시간이 끝난 뒤 늦게 도착한 선택은 위반이 아니고, 대기 중의 엉뚱한 번호는 위반이다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  assert.equal(room.onPick(a.conn, 0), true, '선택 대기 중이 아닐 때의 클릭은 조용히 무시');
+  assert.deepEqual(me.up, { console_log: 1 }, '아무것도 바뀌지 않는다');
+  me.xp = me.xpNext;
+  room.world.gems.push({ id: 99_999, x: me.x, y: me.y, v: 1 });
+  advance(100);
+  assert.ok(me.offers, '레벨업 선택 대기');
+  assert.equal(room.onPick(a.conn, 7), false, '제시되지 않은 번호는 위반');
+  assert.equal(room.onPick(a.conn, 0), true);
+  assert.equal(room.onPick(a.conn, 0), true, '같은 클릭이 한 번 더 와도 위반이 아니다');
+});

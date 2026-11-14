@@ -123,6 +123,13 @@ const ERRORS: Record<string, string> = {
   idle: '오랫동안 입력이 없어서 연결이 끊겼어요.',
 };
 
+/** 타이틀 화면 아래의 안내 줄. 화면이 낮아 가려져 있으면 보이는 곳으로 스크롤한다. info: 오류가 아닌 진행 안내 */
+function setStatus(text: string, info = false): void {
+  el.status.textContent = text;
+  el.status.classList.toggle('status--info', info);
+  if (text) el.status.scrollIntoView({ block: 'nearest' });
+}
+
 function setPhase(next: Phase): void {
   phase = next;
   el.title.classList.toggle('hidden', next !== 'title' && next !== 'connecting');
@@ -132,6 +139,8 @@ function setPhase(next: Phase): void {
   if (next !== 'playing') {
     el.levelup.classList.add('hidden');
     hideMenu();
+    // 일시정지한 채로 판을 떠나면 "재개" 알림이 오지 않는다. 남겨 두면 다음 판의 선택 시간 표시가 틀어진다.
+    pausedSince = 0;
   }
   el.solo.disabled = el.create.disabled = el.join.disabled = next === 'connecting';
 }
@@ -359,7 +368,7 @@ function onClose(reason: string): void {
   if (phase === 'title') return;
   renderer.reset();
   setPhase('title');
-  el.status.textContent = why ?? `연결이 끊겼어요 (${reason}). 아마 누가 금요일에 배포했나 봐요.`;
+  setStatus(why ?? `연결이 끊겼어요 (${reason}). 아마 누가 금요일에 배포했나 봐요.`);
 }
 
 const net = new Net(onMessage, onClose);
@@ -369,15 +378,18 @@ async function start(m: GameMode, room?: string): Promise<void> {
   mode = m;
   gotResult = false;
   lastError = '';
-  el.status.textContent = '';
   const name = sanitizeName(el.name.value);
   store.set('name', name);
   setPhase('connecting');
+  // 무료 서버는 한동안 접속이 없으면 잠든다. 깨어나는 동안 아무 반응이 없어 보이지 않게 알려준다.
+  setStatus('연결 중… 서버가 잠들어 있었다면 1분쯤 걸릴 수 있어요.', true);
   try {
     await net.connect(name, m, room);
+    // 여기까지 오면 연결됐다. 방을 못 찾는 등의 거절은 이 뒤에 서버 메시지로 오고, 그때 다시 안내한다.
+    setStatus('', true);
   } catch (err) {
     setPhase('title');
-    el.status.textContent = err instanceof Error ? err.message : '연결 실패';
+    setStatus(err instanceof Error ? err.message : '연결 실패');
   }
 }
 
@@ -390,8 +402,8 @@ function readCode(raw: string): string | null {
 function joinByCode(): void {
   const code = readCode(el.code.value);
   if (!code) {
-    el.status.textContent = `방 코드는 ${ROOM_CODE_LEN}자리예요.`;
-    el.code.focus();
+    setStatus(`방 코드는 ${ROOM_CODE_LEN}자리예요.`);
+    el.code.focus({ preventScroll: true });
     return;
   }
   void start('coop', code);
@@ -402,6 +414,12 @@ el.create.addEventListener('click', () => void start('coop'));
 el.join.addEventListener('click', joinByCode);
 el.code.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') joinByCode();
+});
+// 초대 링크를 통째로 붙여넣으면 코드만 남긴다
+el.code.addEventListener('input', () => {
+  if (el.code.value.length <= ROOM_CODE_LEN) return;
+  const code = readCode(el.code.value);
+  if (code) el.code.value = code;
 });
 el.name.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') el.code.value.trim() ? joinByCode() : void start('solo');
@@ -421,6 +439,8 @@ el.invite.addEventListener('click', () => void invite());
 el.start.addEventListener('click', () => net.sendStart());
 el.leave.addEventListener('click', quitToTitle);
 el.pauseBtn.addEventListener('click', openMenu);
+// 레벨업 선택창이 떠 있는 동안에는 화면의 Ⅱ 버튼이 가려지므로, 선택창 안에도 같은 버튼을 둔다
+$('btn-levelup-menu').addEventListener('click', openMenu);
 el.resume.addEventListener('click', closeMenu);
 el.minimapBtn.addEventListener('click', toggleMinimap);
 el.quit.addEventListener('click', quitToTitle);
@@ -448,7 +468,7 @@ el.name.value = store.get('name') ?? '';
 const invited = normalizeRoomCode(new URLSearchParams(location.search).get('room'));
 if (invited) {
   el.code.value = invited;
-  el.status.textContent = `초대받은 방 ${invited} — 닉네임을 넣고 참가를 누르세요.`;
+  setStatus(`초대받은 방 ${invited} — 닉네임을 넣고 참가를 누르세요.`, true);
 }
 
 // 입력 전송: 값이 바뀌었을 때 + 최대 20Hz (서버 레이트리밋보다 충분히 낮게). 1초에 한 번은 변화가 없어도 보낸다(연결 유지).
@@ -474,7 +494,9 @@ function frame(now: number): void {
   if (minimapOn && phase === 'playing' && renderer.sample) minimap.draw(renderer.sample.curr, renderer.viewSize, now);
   if (!el.levelup.classList.contains('hidden')) {
     const left = pausedSince > 0 ? offerDeadline - pausedSince : offerDeadline - now;
-    el.offerTimer.textContent = `(${Math.max(0, Math.ceil(left / 1000))}s)`;
+    // 시간이 끝나면 서버가 첫 번째 것을 대신 고르고 게임을 이어 간다. 선택창을 남겨 두면 화면과 조작을 가린다.
+    if (left <= 0) el.levelup.classList.add('hidden');
+    else el.offerTimer.textContent = `(${Math.ceil(left / 1000)}s)`;
   }
   requestAnimationFrame(frame);
 }

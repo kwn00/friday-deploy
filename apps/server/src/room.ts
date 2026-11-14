@@ -129,6 +129,9 @@ export class Room {
   }
 
   onPick(conn: Conn, choice: number): boolean {
+    // 선택 시간이 끝나 서버가 대신 고른 직후에 도착한 클릭: 아무것도 바꾸지 않고 조용히 넘긴다 (위반이 아니다).
+    // 선택 대기 중에 범위를 벗어난 번호를 보내는 것은 여전히 위반이다.
+    if (!this.world.players.get(conn.pid)?.offers) return true;
     if (this.started) this.lastActivity = Date.now();
     const ok = pickOffer(this.world, conn.pid, choice);
     // 일시정지 중에는 틱이 돌지 않으므로 연속 레벨업의 다음 선택지를 여기서 바로 보낸다

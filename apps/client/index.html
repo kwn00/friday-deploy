@@ -43,7 +43,7 @@
           <button id="btn-create" class="btn" type="button">👥 pair programming <small>방 만들기</small></button>
         </div>
         <div class="join">
-          <input id="code-input" type="text" maxlength="12" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="방 코드" aria-label="참가할 방 코드" />
+          <input id="code-input" type="text" maxlength="200" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="방 코드" aria-label="참가할 방 코드" />
           <button id="btn-join" class="btn" type="button">git checkout <small>참가</small></button>
         </div>
         <p class="hint hint--touch">화면을 드래그해서 이동 · 공격은 자동</p>
@@ -70,7 +70,8 @@
     </section>
 
     <section id="screen-levelup" class="screen hidden">
-      <div class="panel">
+      <div class="panel panel--levelup">
+        <button id="btn-levelup-menu" class="panel__corner" type="button" aria-label="일시정지 / 메뉴">Ⅱ</button>
         <h2 class="panel__title">🎉 PR Merged!</h2>
         <p class="panel__sub">리뷰어가 보상을 하나 승인해줬다 <span id="offer-timer"></span></p>
         <div id="offers" class="offers"></div>

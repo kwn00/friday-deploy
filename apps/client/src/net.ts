@@ -31,7 +31,12 @@ export class Net {
   /** room: 페어 모드에서 참가할 방 코드. 없으면 새 방을 만든다. */
   async connect(name: string, mode: GameMode, room?: string): Promise<void> {
     this.close();
-    const res = await fetch(`${HTTP_BASE}/api/session`, { method: 'POST' });
+    let res: Response;
+    try {
+      res = await fetch(`${HTTP_BASE}/api/session`, { method: 'POST' });
+    } catch {
+      throw new Error('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+    }
     if (!res.ok) throw new Error(res.status === 429 ? '요청이 너무 많아요. 잠시 후 다시 시도해주세요.' : '세션 발급 실패');
     const { token } = (await res.json()) as { token: string };
 
