@@ -1,9 +1,10 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import type { RunReport } from './leaderboard';
+import type { RunPlacement, RunReport } from './leaderboard';
 import { newWorld } from './world';
 import type { WebSocket } from 'ws';
 import {
   DT,
+  LEADERBOARD_MIN_SECONDS,
   MAX_PAUSE_SECONDS,
   MAX_PLAYERS_PER_ROOM,
   OFFER_TIMEOUT,
@@ -18,6 +19,7 @@ import {
   removePlayer,
   setInput,
   step,
+  type BoardId,
   type GameMode,
   type RunResult,
   type ServerMsg,
@@ -68,7 +70,10 @@ export class Room {
   private pauseUsed = 0;
   /** 이번 판에서 누군가 쓰러진 적이 있는지. 있으면 이후에 들어오는 사람은 다음 판까지 관전한다. */
   private casualty = false;
-  /** 이번 판에서 동시에 있었던 최대 인원. 2 이상이면 함께 한 판(coop 순위표)으로 기록한다 */
+  /**
+   * 이번 판이 진행되는 동안 동시에 있었던 최대 인원. 2 이상이면 함께 한 판(coop 순위표)으로 기록한다.
+   * 대기실에만 있다가 나간 사람은 세지 않는다 (판이 시작될 때부터 센다).
+   */
   private peak = 0;
   closed = false;
 
@@ -78,7 +83,7 @@ export class Room {
     readonly code: string,
     private readonly onClose: (room: Room) => void,
     /** 끝난 판을 리더보드에 기록한다. 순위표에 들면 순위를 돌려준다. 없으면 기록하지 않는다 */
-    private readonly onRun?: (report: RunReport) => number | null,
+    private readonly onRun?: (report: RunReport) => RunPlacement,
   ) {
     this.world = newWorld();
     this.started = mode === 'solo';
@@ -108,7 +113,7 @@ export class Room {
     }
     const conn: Conn = { ws, sid, name: p.name, pid: p.id, lastSeq: -1, joinedAt: this.world.time };
     this.conns.set(p.id, conn);
-    this.peak = Math.max(this.peak, this.conns.size);
+    if (this.started) this.peak = Math.max(this.peak, this.conns.size);
     if (this.hostPid < 0) this.hostPid = p.id;
     this.lastActivity = Date.now();
     this.send(conn, { t: 'welcome', id: p.id, mode: this.mode, code: this.code, tickRate: TICK_RATE });
@@ -150,6 +155,7 @@ export class Room {
   onStart(conn: Conn): void {
     if (this.started || this.closed || conn.pid !== this.hostPid) return;
     this.started = true;
+    this.peak = this.conns.size;
     this.lastActivity = Date.now();
     this.broadcastRoster();
   }
@@ -244,12 +250,13 @@ export class Room {
    * 끝난 판을 리더보드에 올린다. 기록은 서버가 직접 만든다 (클라이언트가 내는 값은 없다).
    * 이름이 오르는 것은 처음부터 함께 해서 끝까지 남은 사람뿐이다: 도중에 들어온 사람이나 관전자는 빠진다.
    */
-  private report(endedAt: number): { place: { board: 'solo' | 'coop'; rank: number }; crew: Set<Conn> } | null {
+  private report(endedAt: number): { board: BoardId; rank: RunPlacement; crew: Set<Conn> } | null {
     if (!this.onRun) return null;
     const crew = [...this.conns.values()].filter((c) => c.joinedAt <= CREW_GRACE_SECONDS && this.world.players.has(c.pid));
-    if (crew.length === 0) return null;
+    const board: BoardId = this.peak >= 2 ? 'coop' : 'solo';
+    // 처음부터 있던 사람이 아무도 남지 않았으면 기록하지 않는다 (남은 사람은 모두 도중 합류)
+    if (crew.length === 0) return { board, rank: null, crew: new Set() };
     const players = crew.map((c) => this.world.players.get(c.pid)!);
-    const board = this.peak >= 2 ? 'coop' : 'solo';
     try {
       const rank = this.onRun({
         id: randomUUID(),
@@ -261,7 +268,7 @@ export class Room {
         pausedSeconds: Math.round(this.pauseUsed / 1000),
         endedAt,
       });
-      return rank === null ? null : { place: { board, rank }, crew: new Set(crew) };
+      return { board, rank, crew: new Set(crew) };
     } catch (err) {
       console.error('[error] leaderboard record', err);
       return null;
@@ -286,8 +293,15 @@ export class Room {
         level: p.level,
         endedAt,
       };
-      const over: ServerMsg = { t: 'over', result, sig: sign(JSON.stringify(result)) };
-      if (ranked?.crew.has(conn)) over.place = ranked.place;
+      const over: Extract<ServerMsg, { t: 'over' }> = { t: 'over', result, sig: sign(JSON.stringify(result)) };
+      if (ranked) {
+        const named = ranked.crew.has(conn);
+        // 순위가 없으면 이유를 알려준다 (화면이 "순위표 밖"이라고 잘못 말하지 않게)
+        if (named && typeof ranked.rank === 'number') over.place = { board: ranked.board, rank: ranked.rank };
+        else if (this.world.time < LEADERBOARD_MIN_SECONDS) over.unranked = 'short';
+        else if (!named) over.unranked = 'late';
+        else over.unranked = ranked.rank === 'pending' ? 'pending' : 'outside';
+      }
       this.send(conn, over);
       if (this.mode === 'solo') conn.ws.close(1000, 'over');
     }
@@ -303,7 +317,7 @@ export class Room {
     this.started = false;
     this.casualty = false;
     this.pauseUsed = 0;
-    this.peak = members.length;
+    this.peak = 0;
     this.lastActivity = Date.now();
     this.conns.clear();
     for (const conn of members) {
@@ -346,7 +360,7 @@ export class RoomManager {
   private byCode = new Map<string, Room>();
 
   /** onRun: 끝난 판을 리더보드에 기록하는 함수 (없으면 기록하지 않는다) */
-  constructor(private readonly onRun?: (report: RunReport) => number | null) {}
+  constructor(private readonly onRun?: (report: RunReport) => RunPlacement) {}
 
   get count(): number {
     return this.rooms.size;

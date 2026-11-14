@@ -71,9 +71,12 @@ export class Leaderboard {
       });
     }
     this.root.addEventListener('keydown', (e) => {
-      // 오버레이 안에서만 Tab 을 돌린다 (뒤 화면은 inert 이지만 브라우저 주소창으로 빠지는 것도 막는다)
+      // 오버레이 안에서만 Tab 을 돌린다 (뒤 화면은 inert 이지만 브라우저 주소창으로 빠지는 것도 막는다).
+      // 실제로 Tab 이 멈추는 것만 센다: 선택되지 않은 탭은 tabindex=-1 이라 건너뛴다 (화살표 키로 옮긴다).
       if (e.key !== 'Tab') return;
-      const items = [this.closeBtn, this.tabs.solo, this.tabs.coop, ...this.body.querySelectorAll<HTMLElement>('button')];
+      const items = [this.closeBtn, this.tabs.solo, this.tabs.coop, this.body, ...this.body.querySelectorAll<HTMLElement>('button')].filter(
+        (item) => item.tabIndex >= 0,
+      );
       const first = items[0]!;
       const lastItem = items[items.length - 1]!;
       if (e.shiftKey && document.activeElement === first) {
@@ -145,7 +148,9 @@ export class Leaderboard {
     try {
       const data = await fetchLeaderboard(board, this.abort.signal);
       if (seq !== this.seq) return; // 그 사이 다른 탭을 눌렀거나 닫았다
-      this.cache[board] = { at: Date.now(), data };
+      // 서버가 저장된 기록을 아직 불러오는 중이면 목록이 곧 바뀌므로 보관하지 않는다
+      if (data.loading) delete this.cache[board];
+      else this.cache[board] = { at: Date.now(), data };
       this.render(data);
     } catch (err) {
       if (seq !== this.seq) return;
@@ -160,10 +165,16 @@ export class Leaderboard {
 
   private render(data: LeaderboardResponse): void {
     this.body.removeAttribute('aria-busy');
-    this.note.classList.toggle('hidden', data.persistent);
-    this.note.textContent = data.persistent ? '' : '기록은 서버 메모리에 있어서 서버가 다시 시작되면 사라져요.';
+    const note = !data.persistent
+      ? '기록은 서버 메모리에 있어서 서버가 다시 시작되면 사라져요.'
+      : data.loading
+        ? '저장된 기록을 아직 불러오지 못했어요. 잠시 뒤 다시 열면 목록과 순위가 달라질 수 있어요.'
+        : '';
+    this.note.classList.toggle('hidden', !note);
+    this.note.textContent = note;
     if (data.entries.length === 0) {
-      this.body.replaceChildren(node('p', 'board__msg', '아직 기록이 없어요. 첫 번째 배포의 주인공이 되어보세요!'));
+      const empty = data.loading ? '저장된 기록을 불러오는 중이에요. 잠시 뒤 다시 열어 주세요.' : '아직 기록이 없어요. 첫 번째 배포의 주인공이 되어보세요!';
+      this.body.replaceChildren(node('p', 'board__msg', empty));
       return;
     }
     const m = this.mine;

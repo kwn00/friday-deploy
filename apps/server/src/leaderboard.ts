@@ -27,6 +27,15 @@ export interface RunRecord {
 /** Room 이 판이 끝났을 때 넘기는 내용 (시즌은 리더보드가 붙인다) */
 export type RunReport = Omit<RunRecord, 'season'>;
 
+/**
+ * 기록한 판의 순위.
+ * - 숫자: 순위표(상위 LEADERBOARD_SIZE)에 든 순위 (1부터)
+ * - null: 순위표 밖이거나 기록 대상이 아님
+ * - 'pending': 기록은 받았지만, 저장된 기록을 아직 불러오지 못해서 순위를 말할 수 없음
+ *   (이때 메모리의 목록은 일부뿐이라, 거기서 센 순위를 알려주면 나중에 내려가거나 사라진다)
+ */
+export type RunPlacement = number | 'pending' | null;
+
 export interface LeaderboardStore {
   /** false 면 프로세스가 끝날 때 기록이 사라진다 */
   readonly persistent: boolean;
@@ -59,7 +68,10 @@ const BOARDS: BoardId[] = ['solo', 'coop'];
 /** 메모리에 들고 있는 기록 수 (보여주는 것보다 넉넉히: 동점·삭제 여유) */
 const KEEP = LEADERBOARD_SIZE * 4;
 const MAX_PENDING = 200;
-const RETRY_MS = [1_000, 5_000, 30_000, 120_000];
+/** 저장 실패 뒤 다시 시도하기까지의 간격. 다 합쳐 약 18분: DB 가 잠깐 안 되는 정도로는 기록을 버리지 않는다 */
+const RETRY_MS = [1_000, 5_000, 30_000, 120_000, 300_000, 600_000];
+/** 처음 불러오기에 실패했을 때 다시 시도하는 간격 (마지막 값을 반복). DB 가 깨어나는 중이면 금방 된다 */
+const LOAD_RETRY_MS = [3_000, 10_000, 30_000];
 
 const int = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, Math.floor(Number.isFinite(v) ? v : min)));
 
@@ -70,8 +82,11 @@ export class Leaderboard {
   private pending: { record: RunRecord; attempt: number }[] = [];
   /** 지금 돌고 있는 저장 작업. 동시에 둘이 돌지 않게 하고, 종료할 때 이것을 기다린다 */
   private flushing: Promise<void> | null = null;
+  /** 저장이 실패해 다음 재시도를 기다리는 중인지. 그동안에는 새 기록이 들어와도 저장소를 건드리지 않는다 */
+  private resting = false;
   private closed = false;
   private loaded = false;
+  private loadAttempt = 0;
 
   constructor(
     private readonly store: LeaderboardStore,
@@ -94,16 +109,19 @@ export class Leaderboard {
       }
       this.loaded = true;
     } catch (err) {
-      console.error('[leaderboard] 기록을 불러오지 못했습니다. 30초 뒤 다시 시도합니다.', err);
-      setTimeout(() => void this.init(), 30_000).unref();
+      if (this.closed) return;
+      const wait = LOAD_RETRY_MS[Math.min(this.loadAttempt++, LOAD_RETRY_MS.length - 1)]!;
+      console.error(`[leaderboard] 기록을 불러오지 못했습니다. ${wait / 1000}초 뒤 다시 시도합니다.`, err);
+      setTimeout(() => void this.init(), wait).unref();
     }
   }
 
   /**
    * 끝난 판을 기록한다. 순위표(상위 LEADERBOARD_SIZE)에 들면 그 순위(1부터)를, 아니면 null 을 돌려준다.
+   * 저장된 기록을 아직 불러오지 못했으면 기록만 받아 두고 'pending' 을 돌려준다.
    * 동기 함수다: 순위는 메모리에서 바로 계산하고, 저장은 뒤에서 한다.
    */
-  record(report: RunReport): number | null {
+  record(report: RunReport): RunPlacement {
     const names = report.names.map((n) => sanitizeName(n)).slice(0, 8);
     if (names.length === 0 || !BOARDS.includes(report.board)) return null;
     const record: RunRecord = {
@@ -121,6 +139,7 @@ export class Leaderboard {
     const index = this.insert(record);
     if (index === null) return null;
     this.persist(record);
+    if (!this.ready) return 'pending';
     return index < LEADERBOARD_SIZE ? index + 1 : null;
   }
 
@@ -172,9 +191,14 @@ export class Leaderboard {
   }
 
   private persist(record: RunRecord): void {
-    if (this.pending.length >= MAX_PENDING) this.pending.shift();
+    if (this.pending.length >= MAX_PENDING) {
+      const dropped = this.pending.shift()!;
+      console.error('[leaderboard] 저장 대기열이 가득 차 가장 오래된 기록의 저장을 포기합니다.', dropped.record.id);
+    }
     this.pending.push({ record, attempt: 0 });
-    void this.flush();
+    // 저장이 실패해 쉬는 중이면 예약된 재시도가 이 기록까지 함께 처리한다.
+    // (여기서 바로 다시 시도하면 판이 끝날 때마다 맨 앞 기록의 재시도 횟수만 써 버려, 잠깐의 장애에도 기록을 버리게 된다)
+    if (!this.resting) void this.flush();
   }
 
   /** 밀린 기록을 저장한다. 이미 돌고 있으면 그 작업을 돌려준다 (호출한 쪽이 끝을 기다릴 수 있게) */
@@ -203,14 +227,21 @@ export class Leaderboard {
           continue;
         }
         console.error(`[leaderboard] 기록 저장 실패, ${wait / 1000}초 뒤 재시도`, job.record.id, err);
-        setTimeout(() => void this.flush(), wait).unref();
+        this.resting = true;
+        setTimeout(() => {
+          this.resting = false;
+          void this.flush();
+        }, wait).unref();
         return;
       }
     }
   }
 
-  /** 저장소를 아직 읽지 못했는지 (읽기 전에 기록된 판도 메모리에는 들어간다) */
+  /**
+   * 순위를 말할 수 있는 상태인지: 저장된 기록을 다 불러왔거나, 불러올 것이 없는 저장소(메모리)다.
+   * false 인 동안에도 판은 기록된다 (메모리에 넣고 저장을 시도한다). 순위만 알려주지 않는다.
+   */
   get ready(): boolean {
-    return this.loaded;
+    return this.loaded || !this.store.persistent;
   }
 }

@@ -136,3 +136,28 @@ test('rng: 시드와 비밀 난수가 같으면 월드 전체가 재현된다', 
   // 비밀 난수를 주지 않은 경우(시드에서 유도)도 재현된다
   assert.deepEqual(record(createWorld(seed), 20 * 60).snaps, record(createWorld(seed), 20 * 60).snaps);
 });
+
+test('rng: 난수 함수를 직접 넘기면 그것만 쓴다 (서버의 CSPRNG 경로: 시드에서 만든 생성기가 끼어들지 않는다)', () => {
+  let visible = 0;
+  let secret = 0;
+  const base = sfc32(99);
+  const hidden = sfc32(100);
+  const world = createWorld({
+    rng: () => (visible++, base()),
+    secret: () => (secret++, hidden()),
+  });
+  const p = addPlayer(world, 'a');
+  assert.ok(visible > 0, '합류 위치부터 넘겨준 난수에서 나온다');
+  const before = visible;
+  let offered = false;
+  for (let i = 0; i < 20 * 15; i++) {
+    p.hp = 1e9;
+    if (i === 100) p.xp = p.xpNext;
+    if (i === 100) world.gems.push({ id: 900_000, x: p.x, y: p.y, v: 1 });
+    step(world, DT);
+    offered ||= !!p.offers;
+  }
+  assert.ok(visible > before + 20, `스폰이 넘겨준 난수를 쓴다 (${visible - before}회)`);
+  assert.ok(offered, '레벨업 선택지가 나왔다');
+  assert.ok(secret >= 1, `선택지는 넘겨준 비밀 난수에서 나온다 (${secret}회)`);
+});

@@ -107,7 +107,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (pathname === '/api/leaderboard') {
     // 읽기 전용 공개 정보. 메모리의 순위표를 그대로 돌려주므로 요청마다 DB 를 읽지 않는다.
     const board = queryOf(req.url, 'board') === 'coop' ? 'coop' : 'solo';
-    const body: LeaderboardResponse = { board, season: leaderboard.season, persistent: leaderboard.persistent, entries: leaderboard.top(board) };
+    const body: LeaderboardResponse = {
+      board,
+      season: leaderboard.season,
+      persistent: leaderboard.persistent,
+      loading: !leaderboard.ready,
+      entries: leaderboard.top(board),
+    };
     return json(res, 200, body, { 'Access-Control-Allow-Origin': '*' });
   }
   serveStatic(req, res, pathname);

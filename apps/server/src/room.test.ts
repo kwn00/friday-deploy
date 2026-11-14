@@ -244,6 +244,7 @@ test('리더보드: 너무 짧은 판은 순위가 없고 결과에도 순위가
   down(room, a.conn);
   advance(100);
   assert.equal(last(a.ws, 'over')!.place, undefined);
+  assert.equal(last(a.ws, 'over')!.unranked, 'short');
   assert.deepEqual(lb.top('solo'), []);
 });
 
@@ -270,6 +271,8 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.deepEqual(last(b.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.equal(last(late.ws, 'over')!.place, undefined, '도중에 들어온 사람에게는 순위를 주지 않는다');
+  assert.equal(last(late.ws, 'over')!.unranked, 'late', '순위표 밖이 아니라 도중 합류라고 알려준다');
+  assert.equal(last(a.ws, 'over')!.unranked, undefined);
   assert.deepEqual(lb.top('solo'), []);
 
   // 같은 방의 다음 판: 한 사람이 나가도 "함께 시작한 판"이면 coop 으로 남는다. 같은 판이 두 번 기록되지 않는다.
@@ -295,6 +298,70 @@ test('리더보드: 페어 방에서 혼자 한 판은 솔로 순위표에 오�
   down(room, a.conn);
   advance(100);
   assert.deepEqual([reports[0]!.board, reports[0]!.names], ['solo', ['alone']]);
+  assert.equal(last(a.ws, 'over')!.unranked, 'outside');
+});
+
+test('리더보드: 대기실에만 있다가 나간 사람은 인원으로 세지 않는다 (혼자 한 판이 함께 순위표로 가지 않는다)', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), 1));
+  const room = rooms.create('coop')!;
+  const a = join(room, 'host');
+  // (가) 친구(또는 본인의 두 번째 접속)가 대기실에 들어왔다 나간 뒤 혼자 시작
+  const ghost = join(room, 'ghost');
+  room.leave(ghost.conn);
+  room.onStart(a.conn);
+  survive(room, [a.conn], 35);
+  down(room, a.conn);
+  advance(100);
+  assert.deepEqual([reports[0]!.board, reports[0]!.names], ['solo', ['host']]);
+  assert.deepEqual(last(a.ws, 'over')!.place, { board: 'solo', rank: 1 });
+
+  // (나) 같은 방에서 둘이 한 판 한 뒤, 상대가 대기실에서 나가고 다음 판을 혼자
+  const b = join(room, 'mate');
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn], 35);
+  down(room, a.conn);
+  down(room, b.conn);
+  advance(100);
+  assert.deepEqual([reports[1]!.board, reports[1]!.names], ['coop', ['host', 'mate']]);
+  room.leave(b.conn);
+  room.onStart(a.conn);
+  survive(room, [a.conn], 35);
+  down(room, a.conn);
+  advance(100);
+  assert.deepEqual([reports[2]!.board, reports[2]!.names], ['solo', ['host']]);
+
+  // (다) 판이 시작된 뒤에 잠깐이라도 함께 있었다면 함께 한 판이다 (도움을 받은 판이 혼자 순위표에 오르지 않는다)
+  const c = join(room, 'helper');
+  room.onStart(a.conn);
+  survive(room, [a.conn, c.conn], 10);
+  room.leave(c.conn);
+  survive(room, [a.conn], 30);
+  down(room, a.conn);
+  advance(100);
+  assert.deepEqual([reports[3]!.board, reports[3]!.names], ['coop', ['host']]);
+
+  // (라) 혼자 시작했어도 도중에 누가 합류했다면 함께 한 판이고, 이름은 처음부터 있던 사람만
+  room.onStart(a.conn);
+  survive(room, [a.conn], 20);
+  const d = join(room, 'late');
+  survive(room, [a.conn, d.conn], 20);
+  down(room, a.conn);
+  down(room, d.conn);
+  advance(100);
+  assert.deepEqual([reports[4]!.board, reports[4]!.names], ['coop', ['host']]);
+});
+
+test('리더보드: 저장된 기록을 아직 못 불러왔으면 순위 대신 그 사실을 알려준다', () => {
+  const rooms = new RoomManager(() => 'pending');
+  const room = rooms.create('solo')!;
+  const a = join(room, 'early');
+  survive(room, [a.conn], 35);
+  down(room, a.conn);
+  advance(100);
+  const over = last(a.ws, 'over')!;
+  assert.equal(over.place, undefined);
+  assert.equal(over.unranked, 'pending');
 });
 
 test('리더보드: 일시정지한 시간은 기록에 남고, 기록 함수가 예외를 던져도 판은 정상적으로 끝난다', () => {

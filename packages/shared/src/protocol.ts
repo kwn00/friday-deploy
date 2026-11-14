@@ -58,8 +58,17 @@ export interface LeaderboardResponse {
   season: number;
   /** false 면 기록이 서버 메모리에만 있어서 서버가 다시 시작되면 사라진다 */
   persistent: boolean;
+  /** true 면 저장된 기록을 아직 불러오지 못했다 (DB 가 깨어나는 중이거나 잠깐 안 됨). 지금 목록은 일부일 수 있다 */
+  loading: boolean;
   entries: LeaderboardEntry[];
 }
+
+/**
+ * 끝난 판에 순위가 없는 이유.
+ * short: 너무 짧은 판 / late: 도중에 합류했거나 관전한 사람 / outside: 순위표 밖 /
+ * pending: 저장된 기록을 아직 불러오지 못해 순위를 말할 수 없다 (기록 자체는 남는다)
+ */
+export type UnrankedReason = 'short' | 'late' | 'outside' | 'pending';
 
 export interface Snapshot {
   t: 'snap';
@@ -101,7 +110,7 @@ export type ServerMsg =
   | { t: 'pause'; on: boolean; max: number }
   | { t: 'levelup'; offers: Offer[]; timeout: number }
   /** place: 이번 판이 순위표에 올랐을 때의 순위 (오르지 못했으면 없음) */
-  | { t: 'over'; result: RunResult; sig: string; place?: { board: BoardId; rank: number } }
+  | { t: 'over'; result: RunResult; sig: string; place?: { board: BoardId; rank: number }; unranked?: UnrankedReason }
   | { t: 'pong'; ts: number }
   | { t: 'error'; code: string };
 

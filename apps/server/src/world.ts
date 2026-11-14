@@ -19,11 +19,12 @@ export function cryptoRand(): Rand {
 }
 
 /**
- * 새 판의 월드를 만든다. 난수는 서버의 CSPRNG 에서 뽑고 클라이언트에 공개하지 않는다
- * (스폰/드롭/선택지 예측 방지). 방(Room)은 이 함수만 쓴다.
- * - 보이는 난수의 시드: CSPRNG 128비트 (시드 대입 불가능)
- * - 비밀 난수(레벨업 선택지, 회복 아이템): 매번 CSPRNG 에서 직접 (관찰로 예측 불가능)
+ * 새 판의 월드를 만든다. 방(Room)은 이 함수만 쓴다.
+ * 난수는 전부 운영체제 CSPRNG 에서 바로 뽑는다. 출력에서 되짚어 갈 시드가 없으므로,
+ * 화면에 보이는 결과(스폰 위치 등)를 아무리 모아도 다음 결과를 계산할 수 없다.
+ * - 보이는 난수(스폰, 재배치, 합류 위치, AI 에이전트 조준)와 비밀 난수(레벨업 선택지, 회복 아이템)는 버퍼도 따로 쓴다.
+ * - 판마다, 방마다 새로 만든다 (서로 이어지는 값이 없다).
  */
 export function newWorld(): World {
-  return createWorld(randomFillSync(new Uint32Array(4)), cryptoRand());
+  return createWorld({ rng: cryptoRand(), secret: cryptoRand() });
 }

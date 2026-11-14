@@ -40,3 +40,19 @@ test('newWorld: 판마다 스폰과 레벨업 선택지가 다르다 (예측할 
   const runs = new Set([trace(), trace(), trace(), trace()]);
   assert.equal(runs.size, 4);
 });
+
+test('newWorld: 보이는 난수와 비밀 난수 모두 CSPRNG 이고 서로 다른 버퍼를 쓴다 (시드로 만든 생성기가 아니다)', () => {
+  const a = newWorld();
+  const b = newWorld();
+  assert.notEqual(a.rng, a.secret);
+  assert.notEqual(a.rng, b.rng);
+  // 두 월드의 보이는 난수는 처음부터 다르고(고정 시드가 아니다), 값은 [0,1) 이다
+  const xs = Array.from({ length: 600 }, () => a.rng());
+  const ys = Array.from({ length: 600 }, () => b.rng());
+  assert.ok(xs.every((v) => v >= 0 && v < 1));
+  assert.notDeepEqual(xs.slice(0, 8), ys.slice(0, 8));
+  // 한쪽을 많이 뽑아도 다른 쪽이 밀리지 않는다 (버퍼를 나눠 쓰지 않는다): 비밀 난수 버퍼(256개)를 넘기도록 뽑아 본다
+  const c = newWorld();
+  for (let i = 0; i < 1000; i++) c.secret();
+  assert.ok(c.rng() < 1);
+});

@@ -159,7 +159,7 @@ export async function fetchLeaderboard(board: BoardId, signal?: AbortSignal): Pr
     const o = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
     const entries = parseEntries(o.entries);
     if (!entries || (o.board !== 'solo' && o.board !== 'coop')) throw new LeaderboardError('bad', '순위표 응답을 읽지 못했어요.');
-    return { board: o.board, season: isNum(o.season) ? o.season : 0, persistent: o.persistent === true, entries };
+    return { board: o.board, season: isNum(o.season) ? o.season : 0, persistent: o.persistent === true, loading: o.loading === true, entries };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

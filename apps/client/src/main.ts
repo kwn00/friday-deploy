@@ -14,6 +14,7 @@ import {
   type RunResult,
   type ServerMsg,
   type Snapshot,
+  type UnrankedReason,
   type UpgradeId,
 } from '@friday-deploy/shared';
 import { Input } from './input';
@@ -300,7 +301,7 @@ async function invite(): Promise<void> {
 
 /* ───────────── 결과 ───────────── */
 
-function showResult(r: RunResult, place?: { board: BoardId; rank: number }): void {
+function showResult(r: RunResult, place?: { board: BoardId; rank: number }, unranked?: UnrankedReason): void {
   gotResult = true;
   const rows: [string, string][] = [
     ['uptime', mmss(r.time)],
@@ -309,28 +310,34 @@ function showResult(r: RunResult, place?: { board: BoardId; rank: number }): voi
   ];
   el.result.replaceChildren(...rows.flatMap(([k, v]) => [node('dt', '', k), node('dd', '', v)]));
   el.retry.textContent = mode === 'coop' ? '↻ 한 판 더 (대기실로)' : '↻ git revert && retry';
-  showPlace(r, place);
+  showPlace(r, place, unranked);
   setPhase('over');
 }
 
 /** 결과 화면의 순위 안내. 서버가 준 값이라도 모양을 확인하고 textContent 로만 넣는다. */
-function showPlace(r: RunResult, place?: { board: BoardId; rank: number }): void {
+function showPlace(r: RunResult, place?: { board: BoardId; rank: number }, unranked?: UnrankedReason): void {
   const ok = place && (place.board === 'solo' || place.board === 'coop') && Number.isInteger(place.rank) && place.rank >= 1 && place.rank <= LEADERBOARD_SIZE;
   resultBoard = ok ? place.board : null;
   el.place.classList.toggle('hidden', !ok);
   el.resultBoard.classList.toggle('hidden', !ok);
-  el.resultHint.classList.toggle('hidden', !!ok);
+  // 순위가 없을 때는 서버가 알려준 이유를 그대로 보여준다. 이유를 모르면 아무 말도 하지 않는다 (틀린 안내보다 낫다).
+  const hint = !ok && typeof unranked === 'string' && Object.hasOwn(UNRANKED_HINT, unranked) ? UNRANKED_HINT[unranked] : '';
+  el.resultHint.classList.toggle('hidden', !hint);
+  el.resultHint.textContent = hint;
   if (ok) {
     el.place.textContent = `🏆 ${place.board === 'solo' ? '솔로' : '함께'} 순위표 ${place.rank}위`;
     board.setMine({ board: place.board, rank: place.rank, time: r.time, kills: r.kills, level: r.level });
   } else {
     board.setMine(null);
-    el.resultHint.textContent =
-      r.time < LEADERBOARD_MIN_SECONDS
-        ? `순위표에는 ${LEADERBOARD_MIN_SECONDS}초 이상 버틴 판부터 기록돼요.`
-        : `아쉽게도 순위표 ${LEADERBOARD_SIZE}위 안에는 들지 못했어요.`;
   }
 }
+
+const UNRANKED_HINT: Record<UnrankedReason, string> = {
+  short: `순위표에는 ${LEADERBOARD_MIN_SECONDS}초 이상 버틴 판부터 기록돼요.`,
+  late: '도중에 합류한 판이라 순위표에는 이름이 오르지 않아요.',
+  outside: `아쉽게도 순위표 ${LEADERBOARD_SIZE}위 안에는 들지 못했어요.`,
+  pending: '서버가 저장된 기록을 불러오는 중이라 순위를 아직 알 수 없어요. 잠시 뒤 순위표에서 확인해 주세요.',
+};
 
 /* ───────────── 서버 메시지 ───────────── */
 
@@ -387,7 +394,7 @@ function onMessage(msg: ServerMsg): void {
       }
       break;
     case 'over':
-      showResult(msg.result, msg.place);
+      showResult(msg.result, msg.place, msg.unranked);
       break;
     case 'error':
       lastError = msg.code;

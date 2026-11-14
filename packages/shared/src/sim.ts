@@ -110,13 +110,14 @@ export interface World {
   nextId: number;
   /**
    * 보이는 난수: 결과가 스냅샷에 그대로 드러나는 것(스폰 위치/종류, 재배치, 합류 위치, AI 에이전트 조준)에만 쓴다.
-   * 128비트 시드라 시드 대입은 불가능하지만 암호학적이지는 않다.
+   * 실제 서버는 이것도 CSPRNG 로 넘긴다. 시드로 만들 때(테스트, 도구)는 sfc32 이고 암호학적이지 않다.
    */
   rng: Rand;
   /**
    * 비밀 난수: 미리 알면 이득인 것(레벨업 선택지, 회복 아이템 드롭)에만 쓴다. 서버는 CSPRNG 를 넘긴다.
    * 규칙: 두 난수가 몇 번 소비되는지는 서로의 결과에 따라 달라지면 안 된다.
-   * (예: 비밀 난수 결과에 따라 보이는 난수를 한 번 더 뽑으면, 보이는 스폰이 어긋나는 것으로 비밀 결과가 새어 나간다)
+   * (예: 비밀 난수 결과에 따라 보이는 난수를 한 번 더 뽑으면, 보이는 스폰이 어긋나는 것으로 비밀 결과가 새어 나간다.
+   *  서버에서는 둘 다 CSPRNG 라 새어 나가도 쓸 데가 없지만, 한 겹 더 막아 두는 규칙으로 유지한다)
    */
   secret: Rand;
   players: Map<number, Player>;
@@ -131,19 +132,29 @@ export interface World {
   events: WorldEvent[];
 }
 
+/** 월드가 쓸 두 난수를 직접 넘길 때의 모양 (서버: 둘 다 CSPRNG) */
+export interface WorldRandom {
+  rng: Rand;
+  secret: Rand;
+}
+
 /**
- * 새 월드. seed 는 숫자(테스트용, splitmix32 로 128비트로 펼침) 또는 32비트 단어 4개.
- * secret 을 주지 않으면 시드에서 유도한 별도의 결정론적 난수를 쓴다 (테스트가 재현 가능하도록).
+ * 새 월드.
+ * - 시드(숫자 = 테스트용, splitmix32 로 128비트로 펼침 / 32비트 단어 4개): 같은 시드는 같은 판을 만든다 (테스트, 밸런스 도구).
+ *   secret 을 주지 않으면 시드에서 유도한 별도의 결정론적 난수를 쓴다.
+ * - { rng, secret }: 난수 함수를 그대로 쓴다. 실제 서버는 이쪽으로 CSPRNG 두 개를 넘긴다 (재현할 수 없고, 예측할 수도 없다).
  */
-export function createWorld(seed: Seed, secret?: Rand): World {
+export function createWorld(source: Seed | WorldRandom, secret?: Rand): World {
+  const random: WorldRandom =
+    typeof source === 'object' && 'rng' in source ? source : { rng: sfc32(source), secret: secret ?? derivedSecret(source) };
   return {
     tick: 0,
     time: 0,
     paused: false,
     over: false,
     nextId: 1,
-    rng: sfc32(seed),
-    secret: secret ?? derivedSecret(seed),
+    rng: random.rng,
+    secret: random.secret,
     players: new Map(),
     enemies: [],
     shots: [],

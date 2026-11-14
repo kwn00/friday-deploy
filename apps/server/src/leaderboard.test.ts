@@ -91,7 +91,9 @@ test('저장소가 실패해도 예외가 새지 않고, 순위는 계속 계산
   await assert.doesNotReject(lb.init());
   assert.equal(lb.ready, false);
   assert.doesNotThrow(() => lb.record(run({ time: 400 })));
-  assert.equal(lb.record(run({ time: 300 })), 2, 'DB 가 죽어 있어도 순위는 나온다');
+  // 저장된 기록을 아직 못 불러왔으면 순위를 말하지 않는다 (지금 메모리에는 이번 실행의 기록뿐이라 순위가 부풀려진다)
+  assert.equal(lb.record(run({ time: 300 })), 'pending');
+  assert.deepEqual(lb.top('solo').map((e) => e.time), [400, 300], '그래도 기록은 받아 둔다');
   await tick();
   assert.equal(lb.unsaved, 2);
   down = false;
@@ -101,6 +103,74 @@ test('저장소가 실패해도 예외가 새지 않고, 순위는 계속 계산
   assert.equal(lb.unsaved, 0);
   assert.deepEqual(saved.map((r) => r.time), [400, 300], '순서대로 저장');
   assert.ok(errors.mock.callCount() >= 2);
+  // 불러오기는 3초 뒤에 다시 시도하고, 성공하면 그때부터 순위를 알려준다
+  assert.equal(lb.ready, false);
+  t.mock.timers.tick(2000);
+  await tick();
+  await tick();
+  assert.equal(lb.ready, true);
+  assert.equal(lb.record(run({ time: 350 })), 2);
+});
+
+test('불러오기 전에 받은 기록은 불러온 기록과 합쳐지고, 순위는 합친 뒤의 것이다', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(console, 'error', () => {});
+  let down = true;
+  const old: RunRecord[] = [500, 450, 420].map((time, i) => ({ id: `old${i}`, board: 'solo', season: 1, names: ['old'], time, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1000 + i }));
+  const store: LeaderboardStore = {
+    persistent: true,
+    load: async (board) => { if (down) throw new Error('db asleep'); return board === 'solo' ? old : []; },
+    save: async () => {},
+    close: async () => {},
+  };
+  const lb = new Leaderboard(store, 1);
+  await lb.init();
+  assert.equal(lb.record(run({ names: ['new'], time: 430 })), 'pending', '메모리에는 이 기록뿐이지만 1위라고 말하지 않는다');
+  down = false;
+  t.mock.timers.tick(3000);
+  await tick();
+  await tick();
+  assert.equal(lb.ready, true);
+  assert.deepEqual(lb.top('solo').map((e) => [e.rank, e.names[0], e.time]), [[1, 'old', 500], [2, 'old', 450], [3, 'new', 430], [4, 'old', 420]]);
+});
+
+test('메모리 저장소는 불러올 것이 없으므로 init 을 기다리지 않아도 순위를 알려준다', () => {
+  const lb = new Leaderboard(new MemoryStore());
+  assert.equal(lb.ready, true);
+  assert.equal(lb.record(run({ time: 100 })), 1);
+});
+
+test('DB 가 잠깐 안 되는 동안 판이 여러 번 끝나도 기록을 버리지 않는다 (새 기록이 재시도 횟수를 써 버리지 않는다)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(console, 'error', () => {});
+  const saved: string[] = [];
+  let calls = 0;
+  let down = true;
+  const store: LeaderboardStore = {
+    persistent: true,
+    load: async () => [],
+    save: async (r) => { calls++; if (down) throw new Error('db down'); saved.push(r.names[0]!); },
+    close: async () => {},
+  };
+  const lb = new Leaderboard(store);
+  await lb.init();
+  for (let i = 0; i < 8; i++) {
+    lb.record(run({ names: [`p${i}`], time: 100 + i }));
+    await tick();
+    await tick();
+  }
+  assert.equal(calls, 1, '쉬는 동안에는 저장소를 다시 두드리지 않는다');
+  assert.equal(lb.unsaved, 8);
+  down = false;
+  t.mock.timers.tick(1000);
+  await tick();
+  await tick();
+  assert.deepEqual(saved, ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'], '하나도 빠지지 않고 순서대로');
+  assert.equal(lb.unsaved, 0);
+  // 다시 정상이면 새 기록은 바로 저장한다
+  lb.record(run({ names: ['after'], time: 90 }));
+  await tick();
+  assert.equal(saved.at(-1), 'after');
 });
 
 test('compareRuns 는 완전한 순서를 준다 (정렬이 흔들리지 않는다)', () => {

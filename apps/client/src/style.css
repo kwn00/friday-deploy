@@ -607,6 +607,8 @@ body {
   font-size: 11px;
   color: var(--muted);
   text-shadow: none;
+  /* 좁은 화면에서 단어 중간이 끊기지 않게: 자리가 없으면 통째로 다음 줄로 */
+  white-space: nowrap;
 }
 .board__close {
   flex: none;
@@ -628,6 +630,11 @@ body {
 .board__retry:focus-visible {
   outline: var(--px) solid var(--yellow);
   outline-offset: var(--px);
+}
+/* 목록은 키보드로 스크롤할 수 있게 Tab 이 멈춘다. 테두리는 안쪽으로 (패널 밖으로 잘리지 않게) */
+.board__body:focus-visible {
+  outline: var(--px) solid var(--yellow);
+  outline-offset: calc(var(--px) * -1);
 }
 .board__tabs {
   flex: 1 1 100%;
