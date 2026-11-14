@@ -65,11 +65,12 @@ npm version x.y.z --workspaces --include-workspace-root --no-git-tag-version
 화면 구석의 버전 표기도 이 값에서 나온다. 쓰는 법은 아래 "게임 안 새 소식 쓰는 법" 참고.
 `.md` 파일만 바꾼 커밋은 배포를 일으키지 않게 설정되어 있으므로(`render.yaml` 의 `buildFilter`), 플레이어에게 보일 문구는 반드시 이 파일에 있어야 한다.
 
-**(다) GitHub 릴리즈 본문** — `docs/releases/x.y.z.md` 를 새로 만든다. 첫 줄(`# vX.Y.Z — 한 줄 요약`)이 릴리즈 제목이 되고 나머지가 본문이 된다.
+**(다) GitHub 릴리즈 본문** — `docs/releases/x.y.z.md` 를 새로 만든다. 첫 줄은 버전만 적은 제목 줄(`# vX.Y.Z`)이고, 나머지가 릴리즈 본문이 된다.
+GitHub 릴리즈의 제목은 **버전만** 쓴다 (`v0.0.2`). "— 첫 버전" 같은 요약 문구를 붙이지 않는다: 무엇이 바뀌었는지는 본문에 적는다.
 이전 버전의 파일을 복사해서 시작했다면 첫 줄의 버전부터 고친다 (테스트가 확인한다).
 
 ```markdown
-# vX.Y.Z — 한 줄 요약
+# vX.Y.Z
 
 ## 달라진 점
 - (플레이어가 체감하는 변화. 게임 안 새 소식과 같은 내용을 조금 더 자세히)
@@ -103,6 +104,8 @@ npm run typecheck && npm test && npm run build
 git push -u origin release/x.y.z
 gh api -X POST repos/{owner}/{repo}/pulls -f title='vX.Y.Z — 한 줄 요약' -f head='release/x.y.z' -f base='main' -F body=@/경로/pr-body.md
 ```
+
+PR 제목에는 무엇이 들어가는지 알 수 있게 요약을 붙인다. (GitHub 릴리즈의 제목은 다르다: 버전만 쓴다.)
 
 PR 본문에는 사용자가 승인 여부를 판단할 수 있는 것을 담는다.
 
@@ -143,18 +146,18 @@ gh api -X PUT repos/{owner}/{repo}/pulls/{번호}/merge -f merge_method=merge
 
 ## 8. 머지한 뒤
 
-- `.github/workflows/release.yml` 이 `main` 의 버전을 읽어 태그 `vX.Y.Z` 와 GitHub 릴리즈를 만든다 (본문은 `docs/releases/x.y.z.md`).
+- `.github/workflows/release.yml` 이 `main` 의 버전을 읽어 태그 `vX.Y.Z` 와 GitHub 릴리즈를 만든다 (제목은 버전만, 본문은 `docs/releases/x.y.z.md`).
   1~2분 뒤에 만들어졌는지 확인한다.
 
   ```bash
   gh api repos/{owner}/{repo}/releases/tags/vX.Y.Z --jq '.html_url'
   ```
 
-- 만들어지지 않았으면 Actions 실행 기록을 보고 원인을 알린다. 급하면 직접 만든다 (본문은 첫 줄을 뺀 나머지).
+- 만들어지지 않았으면 Actions 실행 기록을 보고 원인을 알린다. 급하면 직접 만든다 (제목은 버전만, 본문은 첫 줄을 뺀 나머지).
 
   ```bash
   tail -n +2 docs/releases/x.y.z.md > /tmp/body.md
-  gh api -X POST repos/{owner}/{repo}/releases -f tag_name='vX.Y.Z' -f target_commitish='main' -f name='vX.Y.Z — 한 줄 요약' -F body=@/tmp/body.md
+  gh api -X POST repos/{owner}/{repo}/releases -f tag_name='vX.Y.Z' -f target_commitish='main' -f name='vX.Y.Z' -F body=@/tmp/body.md
   ```
 
 - 배포가 끝나면 서버의 `/healthz` 가 새 버전을 돌려준다 (`{"ok":true,...,"version":"x.y.z"}`).
