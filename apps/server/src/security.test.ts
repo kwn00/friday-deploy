@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import type { IncomingMessage } from 'node:http';
 import { test } from 'node:test';
-import { parseClientIpOptions, resolveClientIp } from './security';
+import { parseClientIpOptions, pathnameOf, resolveClientIp } from './security';
 
 function req(headers: Record<string, string | string[]>, remoteAddress = '10.0.0.9'): IncomingMessage {
   return { headers, socket: { remoteAddress } } as unknown as IncomingMessage;
@@ -67,4 +67,21 @@ test('IPv6 는 /64 단위로 묶는다 (한 가입자가 주소를 바꿔 가며
   // IPv4 는 그대로
   assert.equal(key('203.0.113.7'), '203.0.113.7');
   assert.equal(key('::ffff:203.0.113.7'), '203.0.113.7');
+});
+
+test('pathnameOf: 형식이 틀린 요청 대상은 예외 없이 null (예외가 새면 서버 프로세스가 죽는다)', () => {
+  assert.equal(pathnameOf('/'), '/');
+  assert.equal(pathnameOf('/ws?x=1'), '/ws');
+  assert.equal(pathnameOf('/assets/a.js#frag'), '/assets/a.js');
+  assert.equal(pathnameOf(undefined), '/');
+  assert.equal(pathnameOf('/a//b'), '/a//b');
+  // 실제로 서버를 죽였던 입력들
+  for (const bad of ['//', '/\\\\', '//?a=1', 'http://a:b/', '//x:99999/', '//[', 'http://[::1/', '\\\\']) {
+    assert.doesNotThrow(() => pathnameOf(bad), bad);
+    assert.equal(pathnameOf(bad), null, bad);
+  }
+  // 그 밖의 이상한 입력도 던지지 않는다
+  for (const odd of ['', '*', '%', '/%zz', '/\u0000', 'x'.repeat(10000), '/..//..', '?', '#', 'javascript:alert(1)']) {
+    assert.doesNotThrow(() => pathnameOf(odd), odd);
+  }
 });

@@ -30,6 +30,8 @@ export interface Conn {
   name: string;
   pid: number;
   lastSeq: number;
+  /** 이 판에 합류했을 때의 게임 시간(초). 결과에는 "함께 한 시간"만 적는다. */
+  joinedAt: number;
 }
 
 const MAX_ROOMS = 200;
@@ -38,6 +40,8 @@ const ROOM_IDLE_MS = 3 * 60 * 1000;
 /** 시작하지 않은 대기실을 정리하는 시간 */
 const LOBBY_IDLE_MS = 10 * 60 * 1000;
 const MAX_PAUSE_MS = MAX_PAUSE_SECONDS * 1000;
+/** 한 판에서 일시정지로 쓸 수 있는 시간의 합. 껐다 켜기를 반복해 방을 끝없이 붙잡아 두지 못하게 한다. */
+const PAUSE_BUDGET_MS = 30 * 60 * 1000;
 /** 느린 클라이언트 보호: 송신 버퍼가 이 이상 쌓이면 스냅샷을 건너뛴다 (스냅샷 약 30개 분량) */
 const MAX_BUFFERED = 64 * 1024;
 
@@ -55,6 +59,12 @@ export class Room {
   /** 솔로 전용 일시정지. 페어 방에서는 절대 true 가 되지 않는다. */
   private userPaused = false;
   private pausedAt = 0;
+  /** 지금의 일시정지가 자동으로 풀리기까지의 시간 (ms) */
+  private pauseLimit = 0;
+  /** 이번 판에서 이미 쓴 일시정지 시간 (ms) */
+  private pauseUsed = 0;
+  /** 이번 판에서 누군가 쓰러진 적이 있는지. 있으면 이후에 들어오는 사람은 다음 판까지 관전한다. */
+  private casualty = false;
   closed = false;
 
   constructor(
@@ -66,7 +76,15 @@ export class Room {
     // 시드는 서버의 CSPRNG 에서 뽑고 클라이언트에 공개하지 않는다 (스폰/드롭/선택지 예측 방지)
     this.world = createWorld(randomInt(0, 2 ** 31));
     this.started = mode === 'solo';
-    this.timer = setInterval(() => this.tick(), 1000 / TICK_RATE);
+    this.timer = setInterval(() => {
+      try {
+        this.tick();
+      } catch (err) {
+        // 한 방의 오류가 프로세스(= 모든 방)를 죽이지 않게, 그 방만 닫는다
+        console.error('[error] room tick', err);
+        this.kick('server_error');
+      }
+    }, 1000 / TICK_RATE);
   }
 
   /** 코드로 참가할 수 있는 상태인지 (진행 중인 판에도 자리가 있으면 합류 가능) */
@@ -76,7 +94,13 @@ export class Room {
 
   join(ws: WebSocket, sid: string, name: string): Conn {
     const p = addPlayer(this.world, name);
-    const conn: Conn = { ws, sid, name: p.name, pid: p.id, lastSeq: -1 };
+    // 누군가 쓰러진 뒤에 들어오면 이번 판은 관전만 한다. 그렇지 않으면 쓰러진 사람이 나갔다 다시 들어와
+    // 새 캐릭터로 살아나는 것을 반복해 판을 끝없이 이어갈 수 있다.
+    if (this.started && this.casualty) {
+      p.alive = false;
+      p.hp = 0;
+    }
+    const conn: Conn = { ws, sid, name: p.name, pid: p.id, lastSeq: -1, joinedAt: this.world.time };
     this.conns.set(p.id, conn);
     if (this.hostPid < 0) this.hostPid = p.id;
     this.lastActivity = Date.now();
@@ -98,13 +122,14 @@ export class Room {
     // 시퀀스는 단조 증가해야 한다 (리플레이/순서 조작 방지)
     if (seq <= conn.lastSeq) return false;
     conn.lastSeq = seq;
-    this.lastActivity = Date.now();
+    // 대기실에서는 입력이 "활동"이 아니다 (입력만 보내며 대기실을 끝없이 붙잡아 두지 못하게)
+    if (this.started) this.lastActivity = Date.now();
     setInput(this.world, conn.pid, dx, dy);
     return true;
   }
 
   onPick(conn: Conn, choice: number): boolean {
-    this.lastActivity = Date.now();
+    if (this.started) this.lastActivity = Date.now();
     const ok = pickOffer(this.world, conn.pid, choice);
     // 일시정지 중에는 틱이 돌지 않으므로 연속 레벨업의 다음 선택지를 여기서 바로 보낸다
     if (ok && this.userPaused) this.flushEvents();
@@ -125,24 +150,34 @@ export class Room {
    */
   onPause(conn: Conn, on: boolean): void {
     if (this.closed || !this.started || this.world.over) return;
-    if (this.mode !== 'solo') {
+    // 페어 방이거나, 이번 판의 일시정지 시간을 다 썼으면 거부한다
+    if (this.mode !== 'solo' || (on && !this.userPaused && this.pauseLeft() < 1000)) {
       if (on) this.send(conn, { t: 'pause', on: false, max: 0 });
       return;
     }
     this.setPaused(on);
   }
 
+  /** 지금 일시정지하면 멈춰 있을 수 있는 시간 (ms): 한 번의 상한과 남은 예산 중 작은 쪽 */
+  private pauseLeft(): number {
+    return Math.max(0, Math.min(MAX_PAUSE_MS, PAUSE_BUDGET_MS - this.pauseUsed));
+  }
+
   private setPaused(on: boolean): void {
     if (on === this.userPaused) return;
-    this.userPaused = on;
     const now = Date.now();
+    const max = on ? this.pauseLeft() : 0;
+    if (!on) this.pauseUsed += now - this.pausedAt;
+    this.userPaused = on;
+    // pausedAt 에는 "언제까지 멈출 수 있는지"를 계산할 수 있게 시작 시각을 둔다
     if (on) this.pausedAt = now;
+    this.pauseLimit = max;
     // 재개 직후 방치 타이머가 바로 터지지 않게 한다
     this.lastActivity = now;
     for (const conn of this.conns.values()) {
       // 멈춘 순간의 마지막 상태를 paused 표시와 함께 한 번 보내 화면이 정확히 그 자리에서 멈추게 한다
       if (on) this.sendSnapshot(conn);
-      this.send(conn, { t: 'pause', on, max: on ? MAX_PAUSE_SECONDS : 0 });
+      this.send(conn, { t: 'pause', on, max: Math.floor(max / 1000) });
     }
   }
 
@@ -155,12 +190,13 @@ export class Room {
     }
     if (this.userPaused) {
       // 멈춘 동안에는 시뮬레이션도 스냅샷 전송도 하지 않는다 (서버 CPU·전송량 0). 너무 오래 멈춰 두면 자동 재개.
-      if (now - this.pausedAt <= MAX_PAUSE_MS) return;
+      if (now - this.pausedAt <= this.pauseLimit) return;
       this.setPaused(false);
     }
     if (now - this.lastActivity > ROOM_IDLE_MS) return this.kick('idle');
 
     step(this.world, DT);
+    if (!this.casualty) for (const p of this.world.players.values()) if (!p.alive) this.casualty = true;
     if (this.flushEvents()) return;
     for (const conn of this.conns.values()) this.sendSnapshot(conn);
   }
@@ -205,7 +241,8 @@ export class Room {
         sid: conn.sid,
         run: this.runs,
         name: p.name,
-        time: Math.floor(this.world.time),
+        // 도중에 들어온 사람에게 판 전체의 시간을 서명해 주지 않는다: 본인이 함께 한 시간만
+        time: Math.floor(Math.max(0, this.world.time - conn.joinedAt)),
         kills: p.kills,
         level: p.level,
         endedAt,
@@ -223,10 +260,13 @@ export class Room {
     const host = this.conns.get(this.hostPid) ?? members[0];
     this.world = createWorld(randomInt(0, 2 ** 31));
     this.started = false;
+    this.casualty = false;
+    this.pauseUsed = 0;
     this.lastActivity = Date.now();
     this.conns.clear();
     for (const conn of members) {
       conn.pid = addPlayer(this.world, conn.name).id;
+      conn.joinedAt = 0;
       this.conns.set(conn.pid, conn);
     }
     this.hostPid = host?.pid ?? -1;

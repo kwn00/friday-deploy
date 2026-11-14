@@ -2,10 +2,10 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
 import { RoomManager, type Conn, type Room } from './room';
-import { IpLimiter, SECURITY_HEADERS, TokenBucket, clientIp, issueSession, originAllowed, verifySession } from './security';
+import { IpLimiter, SECURITY_HEADERS, TokenBucket, clientIp, issueSession, originAllowed, pathnameOf, verifySession } from './security';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
@@ -68,10 +68,11 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string
   createReadStream(file).pipe(res);
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  if (url.pathname === '/healthz') return json(res, 200, { ok: true, rooms: rooms.count });
-  if (url.pathname === '/api/session') {
+function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+  const pathname = pathnameOf(req.url);
+  if (pathname === null) return json(res, 400, { error: 'bad_request' });
+  if (pathname === '/healthz') return json(res, 200, { ok: true, rooms: rooms.count });
+  if (pathname === '/api/session') {
     if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
     if (!originAllowed(req)) return json(res, 403, { error: 'forbidden_origin' });
     // 허용된 Origin 에만 CORS 응답 (클라이언트가 Vercel 등 다른 도메인에 있을 때). 쿠키는 쓰지 않으므로 credentials 불필요.
@@ -82,7 +83,18 @@ const server = http.createServer((req, res) => {
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
   if (!staticLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': '10' });
-  serveStatic(req, res, url.pathname);
+  serveStatic(req, res, pathname);
+}
+
+// 요청 하나의 처리 중에 난 예외가 프로세스를 죽이지 않게 한다 (프로세스가 죽으면 모든 방이 함께 사라진다)
+const server = http.createServer((req, res) => {
+  try {
+    handleRequest(req, res);
+  } catch (err) {
+    console.error('[error] request handler', err);
+    if (res.headersSent) res.destroy();
+    else json(res, 500, { error: 'internal' });
+  }
 });
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;
@@ -112,14 +124,18 @@ function reject(socket: import('node:stream').Duplex, status: string): void {
 }
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  if (url.pathname !== '/ws') return reject(socket, '404 Not Found');
-  if (!originAllowed(req)) return reject(socket, '403 Forbidden');
-  const ip = clientIp(req);
-  if (wss.clients.size >= MAX_CONNS_TOTAL || (connsPerIp.get(ip) ?? 0) >= MAX_CONNS_PER_IP) {
-    return reject(socket, '429 Too Many Requests');
+  try {
+    if (pathnameOf(req.url) !== '/ws') return reject(socket, '404 Not Found');
+    if (!originAllowed(req)) return reject(socket, '403 Forbidden');
+    const ip = clientIp(req);
+    if (wss.clients.size >= MAX_CONNS_TOTAL || (connsPerIp.get(ip) ?? 0) >= MAX_CONNS_PER_IP) {
+      return reject(socket, '429 Too Many Requests');
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, ip));
+  } catch (err) {
+    console.error('[error] upgrade handler', err);
+    socket.destroy();
   }
-  wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, ip));
 });
 
 function onConnection(ws: WebSocket, ip: string): void {
@@ -130,12 +146,23 @@ function onConnection(ws: WebSocket, ip: string): void {
   let violations = 0;
   let alive = true;
 
-  const send = (msg: ServerMsg): void => ws.send(JSON.stringify(msg));
+  const send = (msg: ServerMsg): void => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+  };
+  /**
+   * 연결을 끊는다. close 프레임만 보내면 상대가 응답할 때까지(최대 30초) 소켓이 살아 있어서,
+   * 응답하지 않는 클라이언트는 쫓겨난 뒤에도 자리를 차지한다. 그래서 잠시 뒤 강제로 닫는다.
+   */
+  const drop = (code: number, reason: string): void => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.close(code, reason);
+    setTimeout(() => ws.terminate(), 1000).unref();
+  };
   const violation = (code: string): void => {
-    if (++violations >= MAX_VIOLATIONS) ws.close(1008, code);
+    if (++violations >= MAX_VIOLATIONS) drop(1008, code);
   };
 
-  const helloTimer = setTimeout(() => ws.close(4001, 'hello_timeout'), HELLO_TIMEOUT_MS);
+  const helloTimer = setTimeout(() => drop(4001, 'hello_timeout'), HELLO_TIMEOUT_MS);
   const heartbeat = setInterval(() => {
     if (!alive) return ws.terminate();
     alive = false;
@@ -143,9 +170,11 @@ function onConnection(ws: WebSocket, ip: string): void {
   }, 15_000);
   ws.on('pong', () => (alive = true));
 
-  ws.on('message', (data, isBinary) => {
-    if (isBinary) return ws.close(1003, 'binary_not_supported');
-    if (!bucket.take()) return ws.close(1008, 'rate_limited');
+  const onMessage = (data: RawData, isBinary: boolean): void => {
+    // 서버가 이미 끊기로 한 연결에서 뒤늦게 온 메시지는 처리하지 않는다
+    if (ws.readyState !== ws.OPEN) return;
+    if (isBinary) return drop(1003, 'binary_not_supported');
+    if (!bucket.take()) return drop(1008, 'rate_limited');
     const msg = parseClientMsg(data.toString());
     if (!msg) return violation('bad_message');
 
@@ -154,12 +183,12 @@ function onConnection(ws: WebSocket, ip: string): void {
       if (msg.t !== 'hello') return violation('hello_required');
       if (msg.v !== PROTOCOL_VERSION) {
         send({ t: 'error', code: 'version_mismatch' });
-        return ws.close(4002, 'version_mismatch');
+        return drop(4002, 'version_mismatch');
       }
       const sid = verifySession(msg.token);
       if (!sid || usedSessions.has(sid)) {
         send({ t: 'error', code: 'bad_session' });
-        return ws.close(4003, 'bad_session');
+        return drop(4003, 'bad_session');
       }
       // 토큰은 방을 찾기 전에 소모한다. 방 코드를 틀려도 토큰 하나를 쓰게 되므로,
       // 코드를 마구 대입해 남의 방을 찾으려는 시도는 세션 발급 레이트리밋(IP 당 초당 0.5개)에 묶인다.
@@ -170,7 +199,7 @@ function onConnection(ws: WebSocket, ip: string): void {
         if (!target || !target.joinable) {
           const code = target ? 'room_full' : 'room_not_found';
           send({ t: 'error', code });
-          return ws.close(4005, code);
+          return drop(4005, code);
         }
         found = target;
       } else {
@@ -178,7 +207,7 @@ function onConnection(ws: WebSocket, ip: string): void {
       }
       if (!found) {
         send({ t: 'error', code: 'server_full' });
-        return ws.close(4004, 'server_full');
+        return drop(4004, 'server_full');
       }
       clearTimeout(helloTimer);
       room = found;
@@ -205,6 +234,16 @@ function onConnection(ws: WebSocket, ip: string): void {
       case 'hello':
         violation('duplicate_hello');
         break;
+    }
+  };
+
+  ws.on('message', (data, isBinary) => {
+    try {
+      onMessage(data, isBinary);
+    } catch (err) {
+      // 메시지 하나의 처리 중에 난 예외로 서버 전체가 죽지 않게, 그 연결만 끊는다
+      console.error('[error] message handler', err);
+      drop(1011, 'internal');
     }
   });
 

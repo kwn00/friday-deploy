@@ -183,6 +183,22 @@ body {
   font-size: 18px;
 }
 
+/* 쓰러졌거나 도중에 들어와 관전 중일 때의 안내 */
+.hud__note {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-b) + 56px);
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 4px 10px;
+  max-width: calc(100% - 24px);
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--yellow);
+  background: rgba(17, 17, 27, 0.8);
+  border: var(--px) solid var(--line);
+}
+
 .hud__loadout {
   grid-area: load;
   align-self: end;

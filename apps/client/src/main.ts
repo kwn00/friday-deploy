@@ -50,6 +50,7 @@ const el = {
   minimapBtn: $<HTMLButtonElement>('btn-minimap'),
   quit: $<HTMLButtonElement>('btn-quit'),
   minimap: $<HTMLCanvasElement>('minimap'),
+  spectate: $('spectate-text'),
   offers: $('offers'),
   offerTimer: $('offer-timer'),
   result: $('result'),
@@ -145,6 +146,8 @@ function updateHud(s: Snapshot): void {
   el.lvText.textContent = `Lv.${me.level} · coverage ${Math.floor((me.xp / me.xpNext) * 100)}%`;
   el.time.textContent = mmss(s.time);
   el.kills.textContent = `🐛 ${me.kills}`;
+  // 페어에서 쓰러졌거나(또는 누군가 쓰러진 뒤에 들어와서) 이번 판을 관전 중일 때
+  el.spectate.classList.toggle('hidden', me.alive || mode !== 'coop' || phase !== 'playing');
   const key = JSON.stringify(me.up);
   if (key !== loadoutKey) {
     loadoutKey = key;
@@ -210,7 +213,7 @@ function openMenu(): void {
   const solo = mode === 'solo';
   el.pauseTitle.textContent = solo ? '⏸ git stash' : '☰ 메뉴';
   el.pauseSub.textContent = solo
-    ? `게임을 멈췄어요. ${Math.round(MAX_PAUSE_SECONDS / 60)}분이 지나면 자동으로 다시 시작돼요.`
+    ? `게임을 멈췄어요. 최대 ${Math.round(MAX_PAUSE_SECONDS / 60)}분까지 멈춰 둘 수 있어요.`
     : '페어 모드에서는 게임이 멈추지 않아요. 버그들은 기다려주지 않습니다.';
   el.pause.classList.toggle('screen--live', !solo);
   el.pauseCode.classList.toggle('hidden', solo);
@@ -322,12 +325,22 @@ function onMessage(msg: ServerMsg): void {
     case 'pause':
       if (msg.on) {
         pausedSince = performance.now();
+        el.pauseSub.textContent = `게임을 멈췄어요. ${Math.max(1, Math.ceil(msg.max / 60))}분이 지나면 자동으로 다시 시작돼요.`;
       } else {
+        const wasPaused = pausedSince > 0;
         // 멈춰 있던 시간만큼 선택 제한 시간 표시도 미룬다
-        if (pausedSince > 0) offerDeadline += performance.now() - pausedSince;
+        if (wasPaused) offerDeadline += performance.now() - pausedSince;
         pausedSince = 0;
-        // 서버가 스스로 재개했거나(시간 초과) 일시정지를 받아주지 않은 경우 화면도 맞춘다
-        if (menuOpen && mode === 'solo') hideMenu();
+        if (menuOpen && mode === 'solo') {
+          if (wasPaused) {
+            hideMenu(); // 서버가 스스로 재개했다 (시간 초과)
+          } else {
+            // 서버가 일시정지를 받아주지 않았다 (이번 판의 일시정지 시간을 다 씀): 메뉴는 그대로 쓰되 사실대로 알린다
+            el.pauseTitle.textContent = '☰ 메뉴';
+            el.pauseSub.textContent = '이번 판의 일시정지 시간을 모두 썼어요. 게임은 계속 진행돼요.';
+            el.pause.classList.add('screen--live');
+          }
+        }
       }
       break;
     case 'over':

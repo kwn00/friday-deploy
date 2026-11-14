@@ -197,6 +197,19 @@ export function originAllowed(req: IncomingMessage): boolean {
   }
 }
 
+/**
+ * 요청 대상(request target)에서 경로만 안전하게 꺼낸다. 형식이 틀리면 null.
+ * `new URL()` 은 `//`, `/\\`, 호스트가 잘못된 절대 형식 등에서 예외를 던진다. 요청 처리 중에 그 예외가 새면
+ * 프로세스가 죽고 진행 중인 모든 방이 사라지므로, 반드시 여기서 걸러낸다.
+ */
+export function pathnameOf(target: string | undefined): string | null {
+  try {
+    return new URL(target ?? '/', 'http://localhost').pathname;
+  } catch {
+    return null;
+  }
+}
+
 export const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy':
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
