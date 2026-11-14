@@ -153,12 +153,10 @@ gh api -X PUT repos/{owner}/{repo}/pulls/{번호}/merge -f merge_method=merge
   gh api repos/{owner}/{repo}/releases/tags/vX.Y.Z --jq '.html_url'
   ```
 
-- 만들어지지 않았으면 Actions 실행 기록을 보고 원인을 알린다. 급하면 직접 만든다 (제목은 버전만, 본문은 첫 줄을 뺀 나머지).
-
-  ```bash
-  tail -n +2 docs/releases/x.y.z.md > /tmp/body.md
-  gh api -X POST repos/{owner}/{repo}/releases -f tag_name='vX.Y.Z' -f target_commitish='main' -f name='vX.Y.Z' -F body=@/tmp/body.md
-  ```
+- 만들어지지 않았으면 Actions 실행 기록을 보고 원인을 사용자에게 알린다.
+  클라우드 세션에서는 GitHub 릴리즈를 만들거나, 고치거나, 지울 수 없다 (API 가 거부한다). 일부러 막아 둔 것이므로 다른 길로 돌아가려 하지 않는다.
+  릴리즈를 직접 만들거나 고쳐야 할 때는 사용자에게 GitHub 화면에서 해 달라고 한다
+  (Actions 탭에서 다시 실행하거나, Releases 화면에서 제목은 버전만, 본문은 `docs/releases/x.y.z.md` 에서 첫 줄을 뺀 나머지).
 
 - 배포가 끝나면 서버의 `/healthz` 가 새 버전을 돌려준다 (`{"ok":true,...,"version":"x.y.z"}`).
   클라우드 세션에서는 운영 사이트 접속이 막혀 있을 수 있다. 그때는 확인하지 못했다고 말하고, 사용자에게 타이틀 화면 구석의 버전을 봐 달라고 한다.
