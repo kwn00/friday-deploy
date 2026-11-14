@@ -100,9 +100,10 @@ export interface Snapshot {
   /**
    * [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다).
    * alive 가 0 이면 그 자리에 묘비가 있다. 관전으로 합류해 몸이 없는 사람은 들어 있지 않다 (나 자신이라도).
-   * 마지막 값은 방금 되살아나 피해를 받지 않는 중인지 (0|1). 화면에서 깜빡인다.
+   * 여덟째 값은 방금 되살아나 피해를 받지 않는 중인지 (0|1). 화면에서 깜빡인다.
+   * 아홉째 값은 공격 범위 강화(듀얼 모니터) 단계. 러버덕이 도는 반경을 화면에서 서버와 똑같이 그리는 데 쓴다.
    */
-  p: [number, number, number, number, number, number, number, number][];
+  p: [number, number, number, number, number, number, number, number, number][];
   /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1)] */
   e: [number, number, number, number, number][];
   /** [id, shotKindIndex, x, y] */

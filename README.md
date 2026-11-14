@@ -17,7 +17,7 @@
 | 플레이어 | 후드티 + 헤드폰 + 노트북의 온콜 개발자 |
 | 적 | 🐞 버그 · 👻 NullPointerException · 🔀 Merge Conflict · 💧 Memory Leak · 🖥️ 레거시 코드(보스) |
 | 무기 | `console.log()` · 🦆 러버덕 · 🔣 정규표현식 · 🤖 AI 에이전트(15% 확률로 할루시네이션) |
-| 패시브 | ☕ 아이스 아메리카노 · ⌨️ 기계식 키보드 · 📋 Stack Overflow · 📦 npm install · 🌙 다크 모드 |
+| 패시브 | ☕ 아이스 아메리카노 · ⌨️ 기계식 키보드 · 📋 Stack Overflow · 📦 npm install (획득 범위) · 🌙 다크 모드 · 🖥️ 듀얼 모니터 (공격 범위) |
 | 경험치 | 초록색 커밋 조각. 다 모으면 **PR Merged!** (레벨업) |
 | 게임오버 | `Segmentation fault (core dumped)` |
 

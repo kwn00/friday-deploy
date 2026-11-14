@@ -33,7 +33,8 @@ export type ShotKind = (typeof SHOT_KINDS)[number];
 export const WEAPON_IDS = ['console_log', 'rubber_duck', 'regex', 'ai_agent'] as const;
 export type WeaponId = (typeof WEAPON_IDS)[number];
 
-export const PASSIVE_IDS = ['coffee', 'mech_keyboard', 'stack_overflow', 'npm_install', 'dark_mode'] as const;
+// 순서가 곧 통신에서 쓰는 순서다 (스냅샷에 강화 단계를 이 순서로 싣는다). 새 것은 맨 뒤에 추가할 것
+export const PASSIVE_IDS = ['coffee', 'mech_keyboard', 'stack_overflow', 'npm_install', 'dark_mode', 'dual_monitor'] as const;
 export type PassiveId = (typeof PASSIVE_IDS)[number];
 
 export const UPGRADE_IDS = [...WEAPON_IDS, ...PASSIVE_IDS] as const;
@@ -56,6 +57,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   stack_overflow: { kind: 'passive', name: 'Stack Overflow', icon: '📋', desc: '복붙의 힘. 피해량 +15%' },
   npm_install: { kind: 'passive', name: 'npm install', icon: '📦', desc: '일단 다 끌어온다. 경험치를 끌어당기는 범위 +30%' },
   dark_mode: { kind: 'passive', name: '다크 모드', icon: '🌙', desc: '눈이 편안. 최대 체력 +20, 체력 20 회복' },
+  dual_monitor: { kind: 'passive', name: '듀얼 모니터', icon: '🖥️', desc: '화면이 넓어지니 더 멀리 닿는다. 공격 범위 +12%' },
 };
 
 export function isWeapon(id: UpgradeId): id is WeaponId {

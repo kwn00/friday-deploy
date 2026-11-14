@@ -35,6 +35,7 @@ import {
   PLAYER_BASE_PICKUP,
   PLAYER_BASE_SPEED,
   PLAYER_RADIUS,
+  RANGE_PER_LEVEL,
   SPECTATOR_LEASH,
   SPECTATOR_PULL,
   SPECTATOR_SPEED,
@@ -227,6 +228,12 @@ export const maxHpOf = (p: Player): number => PLAYER_BASE_HP + 20 * lv(p, 'dark_
 const speedOf = (p: Player): number => PLAYER_BASE_SPEED * (1 + 0.08 * lv(p, 'coffee'));
 const cdMultOf = (p: Player): number => Math.pow(0.92, lv(p, 'mech_keyboard'));
 const dmgMultOf = (p: Player): number => 1 + 0.15 * lv(p, 'stack_overflow');
+/**
+ * 공격 범위 배율 (듀얼 모니터 단계 → 배율). 조준 거리, 탄이 날아가는 거리, 러버덕이 도는 반경에 곱한다.
+ * 러버덕은 서버 판정과 클라이언트 그리기가 같은 반경을 써야 하므로 밖에서도 쓸 수 있게 내보낸다.
+ */
+export const rangeMult = (level: number): number => 1 + RANGE_PER_LEVEL * Math.max(0, Math.min(MAX_UPGRADE_LEVEL, Math.floor(level) || 0));
+const rangeMultOf = (p: Player): number => rangeMult(lv(p, 'dual_monitor'));
 const pickupOf = (p: Player): number => PLAYER_BASE_PICKUP * (1 + 0.3 * lv(p, 'npm_install'));
 const xpForLevel = (level: number): number => 3 + level * 3 + Math.floor(level * level * 0.4);
 
@@ -443,17 +450,21 @@ function damage(world: World, e: Enemy, dmg: number, by: Player | undefined): vo
   }
 }
 
-/** 러버덕 i 번째(총 n 마리)의 주인 기준 상대 위치. 서버 판정과 클라이언트 그리기가 함께 쓴다. */
-export function duckOffset(time: number, i: number, n: number): [number, number] {
+/**
+ * 러버덕 i 번째(총 n 마리)의 주인 기준 상대 위치. 서버 판정과 클라이언트 그리기가 함께 쓴다.
+ * radius: 도는 반경. 주인의 공격 범위 강화에 따라 넓어진다 (DUCK_ORBIT_RADIUS * rangeMult(단계)).
+ */
+export function duckOffset(time: number, i: number, n: number, radius: number = DUCK_ORBIT_RADIUS): [number, number] {
   const a = time * DUCK_ORBIT_SPEED + (i * Math.PI * 2) / n;
-  return [Math.cos(a) * DUCK_ORBIT_RADIUS, Math.sin(a) * DUCK_ORBIT_RADIUS];
+  return [Math.cos(a) * radius, Math.sin(a) * radius];
 }
 
 export function duckPositions(world: World, p: Player): [number, number][] {
   const n = lv(p, 'rubber_duck');
+  const radius = DUCK_ORBIT_RADIUS * rangeMultOf(p);
   const out: [number, number][] = [];
   for (let i = 0; i < n; i++) {
-    const [ox, oy] = duckOffset(world.time, i, n);
+    const [ox, oy] = duckOffset(world.time, i, n, radius);
     out.push([p.x + ox, p.y + oy]);
   }
   return out;
@@ -461,6 +472,8 @@ export function duckPositions(world: World, p: Player): [number, number][] {
 
 function runWeapons(world: World, p: Player, dt: number): void {
   const cdm = cdMultOf(p);
+  // 공격 범위: 더 멀리 있는 적을 겨누고, 탄이 더 오래(= 더 멀리) 날아간다
+  const reach = rangeMultOf(p);
   for (const w of WEAPON_IDS) {
     const level = lv(p, w);
     if (level === 0 || w === 'rubber_duck') continue;
@@ -470,22 +483,22 @@ function runWeapons(world: World, p: Player, dt: number): void {
       continue;
     }
     if (w === 'console_log') {
-      const target = nearestEnemy(world, p.x, p.y, 200);
+      const target = nearestEnemy(world, p.x, p.y, 200 * reach);
       if (!target) continue;
       const base = Math.atan2(target.y - p.y, target.x - p.x);
       const n = 1 + (level >= 3 ? 1 : 0) + (level >= 5 ? 1 : 0);
-      for (let i = 0; i < n; i++) fire(world, p, 'log', base + (i - (n - 1) / 2) * 0.18, 220, 8 + 4 * level, level >= 4 ? 1 : 0, 1.2, 4);
+      for (let i = 0; i < n; i++) fire(world, p, 'log', base + (i - (n - 1) / 2) * 0.18, 220, 8 + 4 * level, level >= 4 ? 1 : 0, 1.2 * reach, 4);
       p.cd[w] = 0.9 * cdm;
     } else if (w === 'regex') {
-      fire(world, p, 'regex', Math.atan2(p.fy, p.fx), 300, 12 + 6 * level, 999, 0.7, 7);
+      fire(world, p, 'regex', Math.atan2(p.fy, p.fx), 300, 12 + 6 * level, 999, 0.7 * reach, 7);
       p.cd[w] = Math.max(0.6, 2.4 - 0.25 * level) * cdm;
     } else if (w === 'ai_agent') {
-      const near = world.enemies.filter((e) => (e.x - p.x) ** 2 + (e.y - p.y) ** 2 < 220 * 220);
+      const near = world.enemies.filter((e) => (e.x - p.x) ** 2 + (e.y - p.y) ** 2 < (220 * reach) ** 2);
       if (near.length === 0) continue;
       const target = near[Math.floor(world.rng() * near.length)]!;
       // 15% 확률로 할루시네이션: 자신만만하게 엉뚱한 곳을 쏜다
       const ang = world.rng() < 0.15 ? world.rng() * Math.PI * 2 : Math.atan2(target.y - p.y, target.x - p.x);
-      fire(world, p, 'ai', ang, 260, 16 + 8 * level, 2, 1.1, 5);
+      fire(world, p, 'ai', ang, 260, 16 + 8 * level, 2, 1.1 * reach, 5);
       p.cd[w] = Math.max(0.5, 1.5 - 0.15 * level) * cdm;
     }
   }
@@ -835,7 +848,7 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
   // 몸이 없는 사람(관전으로 합류)은 보내지 않는다: 그릴 것이 없다
   for (const p of world.players.values()) {
     if (!p.body) continue;
-    snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0, p.alive && p.shield > 0 ? 1 : 0]);
+    snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0, p.alive && p.shield > 0 ? 1 : 0, p.alive ? lv(p, 'dual_monitor') : 0]);
   }
   for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0]);
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);

@@ -1,4 +1,4 @@
-import { DT, ENEMY_IDS, FIELD_ITEM_KINDS, duckOffset, type FieldItemKind, type Snapshot } from '@friday-deploy/shared';
+import { DT, DUCK_ORBIT_RADIUS, ENEMY_IDS, FIELD_ITEM_KINDS, duckOffset, rangeMult, type FieldItemKind, type Snapshot } from '@friday-deploy/shared';
 import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
@@ -352,7 +352,8 @@ export class Renderer {
       ctx.fillRect(bx, by, Math.round((14 * S * p[5]) / 100), 2 * S);
       labels.push({ id: p[0], color: p[0] === curr.me.id ? NAME_COLOR.me : NAME_COLOR.mate, px, bottom: by });
       for (let i = 0; i < p[6]; i++) {
-        const [ox, oy] = duckOffset(duckTime, i, p[6]);
+        // 반경은 주인의 공격 범위 강화에 따라 넓어진다 (서버 판정과 같은 식)
+        const [ox, oy] = duckOffset(duckTime, i, p[6], DUCK_ORBIT_RADIUS * rangeMult(p[8]));
         blit(this.spr.duck, x + ox, y + oy);
       }
     }

@@ -57,6 +57,8 @@ export const GEM_PULL_MAX = 360;
 export const GEM_CONTACT = 6;
 
 export const MAX_UPGRADE_LEVEL = 5;
+/** 듀얼 모니터(공격 범위 강화) 한 단계마다 넓어지는 비율. 조준 거리, 탄이 날아가는 거리, 러버덕이 도는 반경에 적용된다 */
+export const RANGE_PER_LEVEL = 0.12;
 export const OFFER_COUNT = 3;
 /** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. */
 export const OFFER_TIMEOUT = 20;

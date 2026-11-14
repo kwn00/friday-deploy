@@ -11,8 +11,12 @@ import {
   FIELD_ITEM_TTL,
   FIELD_ITEMS,
   MAX_FIELD_ITEMS,
+  RANGE_PER_LEVEL,
   REVIVE_BLAST_RADIUS,
   REVIVE_SHIELD_SECONDS,
+  UPGRADES,
+  UPGRADE_IDS,
+  rangeMult,
   GEM_PULL_MAX,
   PLAYER_BASE_PICKUP,
   SPECTATOR_LEASH,
@@ -838,4 +842,96 @@ test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 
   const broken = Uint8Array.from(bytes);
   broken[broken.length - 9] = 0x7f; // 마지막 아이템의 종류 바이트
   assert.throws(() => decodeSnapshot(broken), RangeError);
+});
+
+/* ───────────── 공격 범위 강화 (듀얼 모니터) ───────────── */
+
+test('듀얼 모니터: 강화 목록의 맨 뒤에 추가됐고(통신 순서 유지), 한 단계에 12% 씩 넓어진다', () => {
+  assert.equal(UPGRADE_IDS[UPGRADE_IDS.length - 1], 'dual_monitor');
+  assert.equal(UPGRADES.dual_monitor.kind, 'passive');
+  assert.equal(rangeMult(0), 1);
+  assert.ok(Math.abs(rangeMult(1) - (1 + RANGE_PER_LEVEL)) < 1e-9);
+  assert.ok(Math.abs(rangeMult(5) - 1.6) < 1e-9);
+  // 이상한 값이 와도 범위를 벗어나지 않는다 (화면에서 러버덕 반경을 계산할 때 쓴다)
+  for (const bad of [-3, 99, Number.NaN, 2.7]) assert.ok(rangeMult(bad) >= 1 && rangeMult(bad) <= 1.6001, String(bad));
+});
+
+test('듀얼 모니터: 더 멀리 있는 적을 겨누고, 탄이 더 멀리 날아간다', () => {
+  // 가만히 서서 console.log 만으로, 정해진 거리에 놓은 적을 맞히는지 본다
+  const hits = (level: number, dist: number): boolean => {
+    const w = createWorld(51);
+    const p = addPlayer(w, 'a');
+    p.xpNext = 1e9;
+    w.itemCd = 1e9;
+    if (level > 0) p.up.dual_monitor = level;
+    const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, duckCd: 0, hit: false };
+    for (let i = 0; i < 20 * 4; i++) {
+      p.hp = 1e9;
+      // 스폰된 다른 적은 치우고 표적만 제자리에 둔다
+      target.x = p.x + dist;
+      target.y = p.y;
+      w.enemies.length = 0;
+      w.enemies.push(target);
+      step(w, DT);
+      if (target.hit) return true;
+    }
+    return false;
+  };
+  assert.equal(hits(0, 190), true, '기본 조준 거리(200) 안');
+  assert.equal(hits(0, 215), false, '기본 조준 거리 밖은 겨누지 않는다');
+  assert.equal(hits(1, 215), true, '한 단계면 224 까지');
+  assert.equal(hits(5, 310), true, '다섯 단계면 320 까지 겨누고, 탄도 거기까지 닿는다');
+  assert.equal(hits(5, 330), false);
+
+  // 정규표현식(바라보는 방향으로 관통)도 더 멀리 간다: 기본은 210, 다섯 단계면 336
+  const regexReach = (level: number): number => {
+    const w = createWorld(52);
+    const p = addPlayer(w, 'a');
+    p.xpNext = 1e9;
+    w.itemCd = 1e9;
+    p.up = { regex: 1, ...(level > 0 ? { dual_monitor: level } : {}) };
+    let far = 0;
+    for (let i = 0; i < 20 * 5; i++) {
+      p.hp = 1e9;
+      w.enemies.length = 0;
+      step(w, DT);
+      for (const sh of w.shots) far = Math.max(far, Math.hypot(sh.x - p.x, sh.y - p.y));
+    }
+    return far;
+  };
+  const base = regexReach(0);
+  const wide = regexReach(5);
+  assert.ok(base > 190 && base <= 211, `기본 ${base}`);
+  assert.ok(wide > base * 1.5 && wide <= 337, `다섯 단계 ${wide}`);
+});
+
+test('듀얼 모니터: 러버덕이 도는 반경이 넓어지고, 서버 판정 위치와 화면에 그릴 위치가 같다', () => {
+  const w = createWorld(53);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  w.itemCd = 1e9;
+  p.up.rubber_duck = 3;
+  p.up.dual_monitor = 4;
+  for (let i = 0; i < 37; i++) quietStep(w);
+  const radius = DUCK_ORBIT_RADIUS * rangeMult(4);
+  const server = duckPositions(w, p);
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  const row = snap.p.find((r) => r[0] === p.id)!;
+  assert.deepEqual([row[6], row[8]], [3, 4], '스냅샷에 러버덕 수와 범위 단계가 실린다');
+  for (let i = 0; i < 3; i++) {
+    const [ox, oy] = duckOffset(snap.tick * DT, i, row[6], DUCK_ORBIT_RADIUS * rangeMult(row[8]));
+    assert.ok(Math.abs(row[1] + ox - server[i]![0]) < 0.11 && Math.abs(row[2] + oy - server[i]![1]) < 0.11);
+    assert.ok(Math.abs(Math.hypot(ox, oy) - radius) < 1e-6, `반경 ${Math.hypot(ox, oy)}`);
+  }
+  // 넓어진 반경에 있는 적이 맞는다 (기본 반경 36 에서는 닿지 않던 거리)
+  const [dx, dy] = duckOffset(w.time + DT, 0, 3, radius);
+  const e = { id: 9600, type: 'bug' as const, x: p.x + dx, y: p.y + dy, hp: 1e9, duckCd: 0, hit: false };
+  w.enemies.push(e);
+  p.up.console_log = 0;
+  w.shots.length = 0;
+  step(w, DT);
+  assert.equal(e.hit, true);
+  // 쓰러진 사람의 줄에는 0 으로 실린다 (그릴 러버덕이 없다)
+  fell(p);
+  assert.deepEqual([buildSnapshot(w, p.id)!.p[0]![6], buildSnapshot(w, p.id)!.p[0]![8]], [0, 0]);
 });

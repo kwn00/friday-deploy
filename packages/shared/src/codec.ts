@@ -138,6 +138,7 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     // 방향(1) · 생존(2) · 러버덕 수(4,8,16) · 무적 중(32)
     w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((p[6] & 7) << 2) | (p[7] ? 32 : 0));
     w.u8(Math.max(0, Math.min(100, p[5])));
+    w.u8(Math.max(0, Math.min(255, p[8])));
   }
 
   const rel = (v: number, o: number): number => Math.round((v - o) * Q);
@@ -224,7 +225,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
     const x = r.f32();
     const y = r.f32();
     const bits = r.u8();
-    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, r.u8(), (bits >> 2) & 7, bits & 32 ? 1 : 0]);
+    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, r.u8(), (bits >> 2) & 7, bits & 32 ? 1 : 0, r.u8()]);
   }
   let id = 0;
   for (let i = count(); i > 0; i--) {
