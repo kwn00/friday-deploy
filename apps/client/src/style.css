@@ -5,7 +5,9 @@
  *   md  ≥ 768px  태블릿
  *   lg  ≥ 1024px 데스크톱
  *   xl  ≥ 1440px 와이드
- * 캔버스(게임 월드)는 JS 에서 정수 배율로 적응형 스케일링한다.
+ * 캔버스(게임 월드)는 JS 에서 정수 배율로 적응형 스케일링한다 (view.ts).
+ * HUD 배치: 손가락이 화면 아래쪽에 있는 터치 기기는 정보를 위쪽에 모으고,
+ * 데스크톱은 미니맵을 익숙한 오른쪽 아래에 둔다.
  * ───────────────────────────────────────────── */
 
 :root {
@@ -71,21 +73,71 @@ body {
 
 /* ───────── HUD ───────── */
 .hud {
+  --map: 76px; /* 미니맵 한 변 */
   position: fixed;
   inset: 0;
   padding: calc(var(--safe-t) + 8px) calc(var(--safe-r) + 8px) calc(var(--safe-b) + 8px) calc(var(--safe-l) + 8px);
   pointer-events: none;
   display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    'bars top'
+    '. map'
+    'load load';
   gap: 6px 10px;
   align-items: start;
 }
 
 .hud__bars {
+  grid-area: bars;
   display: grid;
   gap: 4px;
   max-width: 260px;
+}
+
+.hud__top {
+  grid-area: top;
+  justify-self: end;
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+
+/* 일시정지 / 메뉴 버튼. HUD 에서 유일하게 누를 수 있는 요소 */
+.hud__btn {
+  pointer-events: auto;
+  width: 44px;
+  height: 44px; /* 터치 타깃 */
+  padding: 0;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text);
+  background: rgba(24, 24, 37, 0.8);
+  border: var(--px) solid var(--line);
+  border-radius: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.hud__btn:active {
+  background: #45475a;
+}
+.hud__btn:focus-visible {
+  outline: var(--px) solid var(--yellow);
+}
+
+/* 미니맵: 터치를 가로채지 않는다 (화면 어디서든 드래그로 이동할 수 있어야 한다) */
+.hud__map {
+  grid-area: map;
+  justify-self: end;
+  align-self: start;
+  width: var(--map);
+  height: var(--map);
+  border: var(--px) solid var(--line);
+  opacity: 0.85;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .bar {
@@ -132,7 +184,7 @@ body {
 }
 
 .hud__loadout {
-  grid-column: 1 / -1;
+  grid-area: load;
   align-self: end;
   display: flex;
   flex-wrap: wrap;
@@ -241,6 +293,91 @@ body {
   display: grid;
   gap: 8px;
 }
+.buttons + .buttons,
+.players + .hint {
+  margin-top: 8px;
+}
+
+/* 방 코드로 참가: 입력칸 + 버튼 한 줄 */
+.join {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+.join input {
+  min-width: 0;
+  min-height: 48px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 16px; /* iOS 자동 확대 방지 */
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--yellow);
+  background: var(--bg-2);
+  border: var(--px) solid var(--line);
+  border-radius: 0;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.join input::placeholder {
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.join input:focus {
+  border-color: var(--blue);
+}
+
+/* 방 코드 표시 */
+.code {
+  margin: 0 0 10px;
+  padding: 8px 6px;
+  font-size: clamp(26px, 10vw, 44px);
+  line-height: 1.1;
+  letter-spacing: 6px;
+  color: var(--yellow);
+  background: var(--bg-2);
+  border: var(--px) solid var(--line);
+  -webkit-user-select: text;
+  user-select: text;
+}
+.code--small {
+  font-size: 16px;
+  letter-spacing: 3px;
+}
+
+.players {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.players__item {
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: var(--px) solid var(--line);
+}
+.players__item em {
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--blue);
+}
+.players__item em.me {
+  color: var(--green);
+}
+
+/* 메뉴 패널은 작게. 페어 모드에서는 게임이 계속되므로 뒤가 보이게 배경을 옅게 한다 */
+.panel--menu {
+  max-width: 340px;
+}
+.screen--live {
+  background: rgba(17, 17, 27, 0.35);
+}
 
 .btn {
   min-height: 48px; /* 터치 타깃 */
@@ -307,6 +444,7 @@ body {
   margin: 4px 0 12px;
   font-size: 11px;
   color: var(--muted);
+  word-break: keep-all;
 }
 
 .offers {
@@ -383,9 +521,32 @@ body {
 
 /* 가로 모드 폰: 세로 공간이 부족하므로 패널을 압축 */
 @media (orientation: landscape) and (max-height: 480px) {
+  .hud {
+    --map: 68px;
+  }
   .panel {
     max-width: 620px;
     padding: 10px 14px;
+  }
+  .panel--menu {
+    max-width: 520px;
+  }
+  .panel--menu .buttons {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .field {
+    margin-bottom: 6px;
+  }
+  .join {
+    margin-top: 6px;
+  }
+  .code {
+    margin-bottom: 6px;
+    font-size: clamp(22px, 9vh, 32px);
+  }
+  .players {
+    grid-template-columns: 1fr 1fr;
+    margin-top: 6px;
   }
   .logo {
     font-size: clamp(22px, 9vh, 36px);
@@ -419,10 +580,14 @@ body {
     --gap: 14px;
   }
   .hud {
-    padding: 16px;
+    --map: 112px;
+    padding: calc(var(--safe-t) + 16px) calc(var(--safe-r) + 16px) calc(var(--safe-b) + 16px) calc(var(--safe-l) + 16px);
   }
   .hud__bars {
     max-width: 340px;
+  }
+  .panel--menu {
+    max-width: 420px;
   }
   .bar {
     height: 22px;
@@ -457,6 +622,20 @@ body {
 @media (min-width: 1024px) {
   :root {
     --fs: 16px;
+  }
+  /* 데스크톱: 미니맵은 오른쪽 아래 (장비 목록은 왼쪽 아래) */
+  .hud {
+    --map: 152px;
+    grid-template-areas:
+      'bars top'
+      '. .'
+      'load map';
+  }
+  .hud__map {
+    align-self: end;
+  }
+  .hud__btn:hover {
+    filter: brightness(1.3);
   }
   .hud__bars {
     max-width: 420px;
@@ -493,6 +672,9 @@ body {
   :root {
     --fs: 18px;
     --px: 4px;
+  }
+  .hud {
+    --map: 184px;
   }
   .panel {
     max-width: 640px;

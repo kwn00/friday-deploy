@@ -9,8 +9,8 @@
     "dev": "concurrently -n server,client -c magenta,cyan \"npm run dev -w @friday-deploy/server\" \"npm run dev -w @friday-deploy/client\"",
     "build": "npm run build -w @friday-deploy/client",
     "start": "npm run start -w @friday-deploy/server",
-    "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/client",
-    "test": "tsx --test packages/shared/src/*.test.ts apps/server/src/*.test.ts"
+    "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/client && tsc -p apps/client/tsconfig.test.json",
+    "test": "tsx --test packages/shared/src/*.test.ts apps/server/src/*.test.ts apps/client/src/*.test.ts"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

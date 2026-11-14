@@ -49,5 +49,22 @@ test('잘못된 설정값은 무시하고, IPv4-mapped IPv6 는 IPv4 로 합친�
   assert.deepEqual(opts, { headers: [], trustedHops: 0 });
   assert.equal(resolveClientIp(req({}, '::ffff:203.0.113.7'), opts).ip, '203.0.113.7');
   assert.equal(resolveClientIp(req({}, '::FFFF:203.0.113.7'), opts).ip, '203.0.113.7');
-  assert.equal(resolveClientIp(req({}, '2001:DB8::1'), opts).ip, '2001:db8::1');
+});
+
+test('IPv6 는 /64 단위로 묶는다 (한 가입자가 주소를 바꿔 가며 제한을 피하지 못하게)', () => {
+  const opts = parseClientIpOptions({ CLIENT_IP_HEADER: 'cf-connecting-ip' });
+  const key = (ip: string): string => resolveClientIp(req({ 'cf-connecting-ip': ip }), opts).ip;
+  assert.equal(key('2001:DB8::1'), '2001:db8:0:0::/64');
+  // 같은 /64 안의 서로 다른 주소 → 같은 키
+  assert.equal(key('2001:db8:0:0:1111:2222:3333:4444'), key('2001:db8::ffff'));
+  assert.equal(key('2001:db8:aa:bb:1::1'), key('2001:db8:aa:bb:ffff:ffff:ffff:ffff'));
+  // 다른 /64 → 다른 키
+  assert.notEqual(key('2001:db8:aa:bb::1'), key('2001:db8:aa:bc::1'));
+  assert.equal(key('::1'), '0:0:0:0::/64');
+  assert.equal(key('fe80::1%eth0'), 'fe80:0:0:0::/64');
+  assert.equal(key('2001:db8:1:2:3:4:1.2.3.4'), '2001:db8:1:2::/64');
+  assert.equal(key('64:ff9b::1.2.3.4'), '64:ff9b:0:0::/64');
+  // IPv4 는 그대로
+  assert.equal(key('203.0.113.7'), '203.0.113.7');
+  assert.equal(key('::ffff:203.0.113.7'), '203.0.113.7');
 });

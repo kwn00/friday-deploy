@@ -1,4 +1,4 @@
-import { NAME_MAX_LEN } from './constants';
+import { NAME_MAX_LEN, ROOM_CODE_ALPHABET, ROOM_CODE_LEN } from './constants';
 import type { UpgradeId } from './content';
 
 /* ───────────── Client → Server ─────────────
@@ -7,9 +7,14 @@ import type { UpgradeId } from './content';
 export type GameMode = 'solo' | 'coop';
 
 export type ClientMsg =
-  | { t: 'hello'; v: number; token: string; name: string; mode: GameMode }
+  /** mode 가 coop 일 때: room 이 없으면 새 방을 만들고, 있으면 그 코드의 방에 참가한다. */
+  | { t: 'hello'; v: number; token: string; name: string; mode: GameMode; room?: string }
   | { t: 'input'; seq: number; dx: number; dy: number }
   | { t: 'pick'; choice: number }
+  /** 페어 방의 호스트가 대기실에서 게임을 시작한다. */
+  | { t: 'start' }
+  /** 일시정지 요청. 서버는 솔로 방에서만 받아들인다 (페어에서는 다른 사람의 게임을 멈출 수 없다). */
+  | { t: 'pause'; on: boolean }
   | { t: 'ping'; ts: number };
 
 /* ───────────── Server → Client ───────────── */
@@ -22,6 +27,8 @@ export interface Offer {
 
 export interface RunResult {
   sid: string;
+  /** 같은 연결에서 몇 번째 판인지 (페어 방은 방을 유지한 채 여러 판을 한다). (sid, run) 이 결과 하나를 가리킨다. */
+  run: number;
   name: string;
   time: number;
   kills: number;
@@ -31,8 +38,10 @@ export interface RunResult {
 
 export interface Snapshot {
   t: 'snap';
+  /** 시뮬레이션 틱. 월드가 멈춰 있는 동안에는 증가하지 않는다 (클라이언트 보간의 시간축). */
   tick: number;
   time: number;
+  /** 월드 정지 여부 (레벨업 선택 대기 또는 솔로 일시정지) */
   paused: boolean;
   me: {
     id: number;
@@ -45,22 +54,26 @@ export interface Snapshot {
     alive: boolean;
     up: Partial<Record<UpgradeId, number>>;
   };
-  /** [id, x, y, face, alive(0|1), hp 비율(0..100)] */
-  p: [number, number, number, number, number, number][];
+  /** [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다) */
+  p: [number, number, number, number, number, number, number][];
   /** [id, enemyTypeIndex, x, y] */
   e: [number, number, number, number][];
   /** [id, shotKindIndex, x, y] */
   s: [number, number, number, number][];
   /** [id, x, y] */
   g: [number, number, number][];
-  /** 러버덕 [x, y] */
-  d: [number, number][];
+  /** 회복 아이템 [id, x, y] */
+  h: [number, number, number][];
 }
 
 export type ServerMsg =
-  | { t: 'welcome'; id: number; room: string; tickRate: number }
-  | { t: 'roster'; players: { id: number; name: string }[] }
+  /** code: 페어 방 코드 (솔로는 빈 문자열) */
+  | { t: 'welcome'; id: number; mode: GameMode; code: string; tickRate: number }
+  /** host: 방장 플레이어 id, started: 게임이 시작됐는지 (false 면 대기실) */
+  | { t: 'roster'; players: { id: number; name: string }[]; host: number; started: boolean }
   | Snapshot
+  /** 솔로 일시정지 상태가 바뀔 때마다 서버가 알려준다. max: 자동 재개까지 남은 최대 시간(초) */
+  | { t: 'pause'; on: boolean; max: number }
   | { t: 'levelup'; offers: Offer[]; timeout: number }
   | { t: 'over'; result: RunResult; sig: string }
   | { t: 'pong'; ts: number }
@@ -83,6 +96,15 @@ export function sanitizeName(raw: unknown): string {
   return cleaned.length > 0 ? cleaned : 'anonymous';
 }
 
+const ROOM_CODE_RE = new RegExp(`^[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LEN}}$`);
+
+/** 사람이 입력한 방 코드 정리: 공백·하이픈 제거, 대문자화. 형식이 맞지 않으면 null. */
+export function normalizeRoomCode(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 32) return null;
+  const code = raw.replace(/[\s-]/g, '').toUpperCase();
+  return ROOM_CODE_RE.test(code) ? code : null;
+}
+
 /**
  * 클라이언트 메시지를 엄격하게 파싱한다.
  * 알 수 없는 타입, 누락/초과 필드 타입, 범위를 벗어난 값은 전부 null (= 위반) 처리.
@@ -103,7 +125,13 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       if (typeof o.token !== 'string' || o.token.length < 16 || o.token.length > 256) return null;
       if (typeof o.name !== 'string' || o.name.length > 64) return null;
       if (o.mode !== 'solo' && o.mode !== 'coop') return null;
-      return { t: 'hello', v: o.v, token: o.token, name: sanitizeName(o.name), mode: o.mode };
+      const hello: ClientMsg = { t: 'hello', v: o.v, token: o.token, name: sanitizeName(o.name), mode: o.mode };
+      if (o.room !== undefined) {
+        // 방 코드는 페어 모드에서만, 정확한 형식일 때만 받는다 (서버는 정규화하지 않는다: 클라이언트가 정리해서 보낸다)
+        if (o.mode !== 'coop' || typeof o.room !== 'string' || !ROOM_CODE_RE.test(o.room)) return null;
+        hello.room = o.room;
+      }
+      return hello;
     }
     case 'input': {
       if (!isInt(o.seq, 0, 0x7fffffff)) return null;
@@ -114,6 +142,12 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     case 'pick': {
       if (!isInt(o.choice, 0, 7)) return null;
       return { t: 'pick', choice: o.choice };
+    }
+    case 'start':
+      return { t: 'start' };
+    case 'pause': {
+      if (typeof o.on !== 'boolean') return null;
+      return { t: 'pause', on: o.on };
     }
     case 'ping': {
       if (!isFiniteNum(o.ts)) return null;

@@ -3,9 +3,15 @@
  * (shared 에 둔 이유: 추후 클라이언트 예측/리플레이 검증에 동일 코드를 재사용하기 위함)
  */
 import {
+  DUCK_ORBIT_RADIUS,
+  DUCK_ORBIT_SPEED,
+  HEAL_DROP_CHANCE,
+  HEAL_DROP_COOLDOWN,
+  HEAL_FRACTION,
   MAX_ENEMIES_BASE,
   MAX_ENEMIES_PER_EXTRA_PLAYER,
   MAX_GEMS,
+  MAX_HEALS,
   MAX_SHOTS,
   MAX_UPGRADE_LEVEL,
   OFFER_COUNT,
@@ -51,6 +57,8 @@ export interface Player {
   /** 마지막으로 바라본 방향 (정규화) */
   fx: number;
   fy: number;
+  /** 스프라이트 좌우 방향. 좌우 입력이 뚜렷할 때만 바뀐다 (위아래로 움직일 때 미세한 흔들림으로 뒤집히지 않게) */
+  face: 1 | -1;
   hp: number;
   level: number;
   xp: number;
@@ -94,6 +102,12 @@ export interface Gem {
   v: number;
 }
 
+export interface Heal {
+  id: number;
+  x: number;
+  y: number;
+}
+
 export type WorldEvent = { type: 'offers'; pid: number } | { type: 'over' };
 
 export interface World {
@@ -107,6 +121,9 @@ export interface World {
   enemies: Enemy[];
   shots: Shot[];
   gems: Gem[];
+  heals: Heal[];
+  /** 다음 회복 아이템이 떨어질 수 있을 때까지 남은 시간(초) */
+  healCd: number;
   spawnAcc: number;
   nextBossAt: number;
   events: WorldEvent[];
@@ -124,6 +141,8 @@ export function createWorld(seed: number): World {
     enemies: [],
     shots: [],
     gems: [],
+    heals: [],
+    healCd: HEAL_DROP_COOLDOWN,
     spawnAcc: 0,
     nextBossAt: BOSS_INTERVAL,
     events: [],
@@ -152,6 +171,7 @@ export function addPlayer(world: World, name: string): Player {
     dy: 0,
     fx: 1,
     fy: 0,
+    face: 1,
     hp: PLAYER_BASE_HP,
     level: 1,
     xp: 0,
@@ -262,15 +282,28 @@ function damage(world: World, e: Enemy, dmg: number, by: Player | undefined): vo
     if (by) by.kills++;
     if (world.gems.length >= MAX_GEMS) world.gems.shift();
     world.gems.push({ id: world.nextId++, x: e.x, y: e.y, v: ENEMIES[e.type].xp });
+    // 회복 아이템: 보스는 반드시, 그 외에는 쿨다운이 끝났을 때 낮은 확률로
+    const boss = ENEMIES[e.type].boss === true;
+    if (boss || (world.healCd <= 0 && world.rng() < HEAL_DROP_CHANCE)) {
+      if (!boss) world.healCd = HEAL_DROP_COOLDOWN;
+      if (world.heals.length >= MAX_HEALS) world.heals.shift();
+      world.heals.push({ id: world.nextId++, x: e.x + (boss ? 10 : 0), y: e.y });
+    }
   }
+}
+
+/** 러버덕 i 번째(총 n 마리)의 주인 기준 상대 위치. 서버 판정과 클라이언트 그리기가 함께 쓴다. */
+export function duckOffset(time: number, i: number, n: number): [number, number] {
+  const a = time * DUCK_ORBIT_SPEED + (i * Math.PI * 2) / n;
+  return [Math.cos(a) * DUCK_ORBIT_RADIUS, Math.sin(a) * DUCK_ORBIT_RADIUS];
 }
 
 export function duckPositions(world: World, p: Player): [number, number][] {
   const n = lv(p, 'rubber_duck');
   const out: [number, number][] = [];
   for (let i = 0; i < n; i++) {
-    const a = world.time * 2.6 + (i * Math.PI * 2) / n;
-    out.push([p.x + Math.cos(a) * 36, p.y + Math.sin(a) * 36]);
+    const [ox, oy] = duckOffset(world.time, i, n);
+    out.push([p.x + ox, p.y + oy]);
   }
   return out;
 }
@@ -385,7 +418,9 @@ export function step(world: World, dt: number): void {
   if (world.paused) return;
 
   world.tick++;
-  world.time += dt;
+  // 누적 덧셈 대신 틱에서 계산: 오차가 쌓이지 않고, 클라이언트가 tick 만으로 같은 시간을 구할 수 있다 (러버덕 각도)
+  world.time = world.tick * dt;
+  world.healCd -= dt;
 
   // 선택 중인 플레이어는 이동/피격/공격 없음
   const active = alive.filter((p) => p.offers === null);
@@ -398,6 +433,7 @@ export function step(world: World, dt: number): void {
       const len = Math.hypot(p.dx, p.dy);
       p.fx = p.dx / len;
       p.fy = p.dy / len;
+      if (Math.abs(p.fx) >= 0.3) p.face = p.fx < 0 ? -1 : 1;
     }
   }
 
@@ -496,6 +532,15 @@ export function step(world: World, dt: number): void {
       p.xp += gained;
       checkLevelUp(world, p);
     }
+    // 회복 아이템: 체력이 가득이면 줍지 않고 남겨 둔다
+    const maxHp = maxHpOf(p);
+    if (p.hp < maxHp && world.heals.length > 0) {
+      world.heals = world.heals.filter((h) => {
+        if (p.hp >= maxHp || (h.x - p.x) ** 2 + (h.y - p.y) ** 2 > r2) return true;
+        p.hp = Math.min(maxHp, p.hp + Math.ceil(maxHp * HEAL_FRACTION));
+        return false;
+      });
+    }
   }
 }
 
@@ -527,16 +572,16 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
     e: [],
     s: [],
     g: [],
-    d: [],
+    h: [],
   };
+  // 같은 방의 플레이어는 멀리 있어도 보낸다 (아군 위치는 숨길 정보가 아니고, 미니맵에서 서로를 찾을 수 있어야 한다)
   for (const p of world.players.values()) {
-    if (p !== me && !near(p.x, p.y)) continue;
-    snap.p.push([p.id, r1(p.x), r1(p.y), p.fx < 0 ? -1 : 1, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100)]);
-    if (p.alive) for (const [dx, dy] of duckPositions(world, p)) snap.d.push([r1(dx), r1(dy)]);
+    snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0]);
   }
   for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y)]);
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
   for (const g of world.gems) if (near(g.x, g.y)) snap.g.push([g.id, Math.round(g.x), Math.round(g.y)]);
+  for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);
   return snap;
 }
 

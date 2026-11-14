@@ -17,6 +17,8 @@ const MAX_VIOLATIONS = 5;
 
 const rooms = new RoomManager();
 const sessionLimiter = new IpLimiter(10, 0.5);
+/** 정적 파일 요청. 정상 방문은 한 번에 4~5개. 같은 주소에서 반복 요청으로 전송량 한도를 태우는 것을 늦춘다. */
+const staticLimiter = new IpLimiter(120, 4);
 const connsPerIp = new Map<string, number>();
 /** 하나의 세션 토큰은 동시에 한 연결에서만, 그리고 한 번만 사용 가능 */
 const usedSessions = new Map<string, number>();
@@ -79,30 +81,29 @@ const server = http.createServer((req, res) => {
     return json(res, 200, { token: issueSession().token, v: PROTOCOL_VERSION }, cors);
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
+  if (!staticLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': '10' });
   serveStatic(req, res, url.pathname);
 });
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;
+// 프록시(Render 등)는 앱과의 연결을 열어 두고 재사용한다. Node 기본값(5초)이면 프록시가 이미 닫힌 연결로
+// 요청을 보내 가끔 502 가 난다. 프록시의 유휴 시간보다 길게 잡는다.
+server.keepAliveTimeout = 120_000;
 
 /* ───────────── WebSocket ───────────── */
 
 // maxPayload: 정상 클라이언트 메시지는 100바이트 미만. 큰 프레임은 프로토콜 레벨에서 끊는다.
 // ws 는 압축된 프레임도 "압축을 푼 크기"로 maxPayload 를 검사하므로 압축 폭탄은 1009 로 끊긴다.
 //
-// permessage-deflate: 스냅샷 스트림을 약 30% 크기로 줄인다(10분 솔로 41.4MB → 12.5MB, 실측).
-// 호스팅 전송량 한도가 비용을 결정하므로 켠다. 연결당 압축 메모리는 기본값(약 256KB) 대신
-// 창 13비트로 약 160KB 에 묶는다 (압축률 차이는 1.5%p). 서버→클라이언트 방향에는 비밀값과 공격자가
-// 반복해서 넣을 수 있는 값이 같은 컨텍스트에서 섞이지 않아 CRIME 류 압축 오라클은 성립하지 않는다.
-// clientMaxWindowBits 는 숫자로 지정하지 않는다: ws 는 그 파라미터를 제안하지 않는 브라우저(Firefox 등)의
-// 핸드셰이크를 400 으로 거부한다.
+// permessage-deflate 는 기본으로 끈다. 켜면 모든 프레임이 양방향으로 zlib 을 거치는데, CPU 가 약한 서버
+// (Render 무료: 0.1 CPU)에서는 평범한 접속 36개만으로 처리가 밀려 하트비트가 전원을 끊는 것이 실측으로 확인됐다
+// (끄면 72개에서도 지연만 늘어난다). 전송량은 압축 대신 스냅샷 이진 인코딩(shared/codec.ts)으로 줄인다.
+// CPU 여유가 있는 서버에서만 WS_COMPRESS=1 로 켠다. clientMaxWindowBits 는 숫자로 지정하지 않는다:
+// ws 는 그 파라미터를 제안하지 않는 브라우저(Firefox 등)의 핸드셰이크를 400 으로 거부한다.
 const wss = new WebSocketServer({
   noServer: true,
   maxPayload: 512,
-  perMessageDeflate: {
-    serverMaxWindowBits: 13,
-    zlibDeflateOptions: { level: 1, memLevel: 8 },
-    threshold: 256,
-  },
+  perMessageDeflate: process.env.WS_COMPRESS === '1' ? { serverMaxWindowBits: 13, zlibDeflateOptions: { level: 1, memLevel: 8 } } : false,
 });
 
 function reject(socket: import('node:stream').Duplex, status: string): void {
@@ -160,12 +161,25 @@ function onConnection(ws: WebSocket, ip: string): void {
         send({ t: 'error', code: 'bad_session' });
         return ws.close(4003, 'bad_session');
       }
-      const found = rooms.find(msg.mode);
+      // 토큰은 방을 찾기 전에 소모한다. 방 코드를 틀려도 토큰 하나를 쓰게 되므로,
+      // 코드를 마구 대입해 남의 방을 찾으려는 시도는 세션 발급 레이트리밋(IP 당 초당 0.5개)에 묶인다.
+      usedSessions.set(sid, Date.now());
+      let found: Room | null;
+      if (msg.mode === 'coop' && msg.room !== undefined) {
+        const target = rooms.find(msg.room);
+        if (!target || !target.joinable) {
+          const code = target ? 'room_full' : 'room_not_found';
+          send({ t: 'error', code });
+          return ws.close(4005, code);
+        }
+        found = target;
+      } else {
+        found = rooms.create(msg.mode);
+      }
       if (!found) {
         send({ t: 'error', code: 'server_full' });
         return ws.close(4004, 'server_full');
       }
-      usedSessions.set(sid, Date.now());
       clearTimeout(helloTimer);
       room = found;
       conn = room.join(ws, sid, msg.name);
@@ -178,6 +192,12 @@ function onConnection(ws: WebSocket, ip: string): void {
         break;
       case 'pick':
         if (!room.onPick(conn, msg.choice)) violation('bad_pick');
+        break;
+      case 'start':
+        room.onStart(conn);
+        break;
+      case 'pause':
+        room.onPause(conn, msg.on);
         break;
       case 'ping':
         send({ t: 'pong', ts: msg.ts });

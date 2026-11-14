@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, type ClientMsg, type GameMode, type ServerMsg } from '@friday-deploy/shared';
+import { PROTOCOL_VERSION, decodeSnapshot, type ClientMsg, type GameMode, type ServerMsg } from '@friday-deploy/shared';
 
 /**
  * 네트워크 계층. 클라이언트는 "입력 의도"만 보내고, 서버가 보내준 상태를 그리기만 한다.
@@ -24,13 +24,19 @@ export class Net {
     private readonly onClose: (reason: string) => void,
   ) {}
 
-  async connect(name: string, mode: GameMode): Promise<void> {
+  get connected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /** room: 페어 모드에서 참가할 방 코드. 없으면 새 방을 만든다. */
+  async connect(name: string, mode: GameMode, room?: string): Promise<void> {
     this.close();
     const res = await fetch(`${HTTP_BASE}/api/session`, { method: 'POST' });
     if (!res.ok) throw new Error(res.status === 429 ? '요청이 너무 많아요. 잠시 후 다시 시도해주세요.' : '세션 발급 실패');
     const { token } = (await res.json()) as { token: string };
 
     const ws = new WebSocket(WS_URL);
+    ws.binaryType = 'arraybuffer';
     this.ws = ws;
     this.seq = 0;
     await new Promise<void>((resolve, reject) => {
@@ -38,11 +44,11 @@ export class Net {
       ws.onerror = () => reject(new Error('서버에 연결할 수 없어요'));
     });
     ws.onmessage = (ev) => {
-      if (typeof ev.data !== 'string') return;
       try {
-        this.onMessage(JSON.parse(ev.data) as ServerMsg);
+        // 스냅샷은 이진 프레임, 그 밖의 메시지는 JSON 텍스트
+        this.onMessage(typeof ev.data === 'string' ? (JSON.parse(ev.data) as ServerMsg) : decodeSnapshot(ev.data as ArrayBuffer));
       } catch {
-        /* 무시 */
+        /* 형식이 맞지 않는 메시지는 버린다 */
       }
     };
     ws.onclose = (ev) => {
@@ -51,7 +57,7 @@ export class Net {
         this.onClose(ev.reason || `code ${ev.code}`);
       }
     };
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, token, name, mode });
+    this.send(room ? { t: 'hello', v: PROTOCOL_VERSION, token, name, mode, room } : { t: 'hello', v: PROTOCOL_VERSION, token, name, mode });
   }
 
   sendInput(dx: number, dy: number): void {
@@ -60,6 +66,14 @@ export class Net {
 
   sendPick(choice: number): void {
     this.send({ t: 'pick', choice });
+  }
+
+  sendStart(): void {
+    this.send({ t: 'start' });
+  }
+
+  sendPause(on: boolean): void {
+    this.send({ t: 'pause', on });
   }
 
   close(): void {

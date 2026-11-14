@@ -108,12 +108,33 @@ function firstHeader(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
-/** IPv4-mapped IPv6(::ffff:1.2.3.4)를 IPv4 로 정규화해 같은 클라이언트가 두 버킷으로 나뉘지 않게 한다. */
+/**
+ * 제한의 기준이 되는 키로 정리한다.
+ * - IPv4-mapped IPv6(::ffff:1.2.3.4) → IPv4 (같은 클라이언트가 두 버킷으로 나뉘지 않게)
+ * - IPv6 → 앞 64비트 (가입자 한 명이 보통 /64 전체를 받으므로, 주소를 바꿔 가며 제한을 피하지 못하게)
+ */
 function normalizeIp(raw: string | undefined): string | null {
-  const ip = raw?.trim();
-  if (!ip || isIP(ip) === 0) return null;
+  const ip = raw?.trim().split('%')[0]; // fe80::1%eth0 같은 zone id 제거
+  if (!ip) return null;
+  const kind = isIP(ip);
+  if (kind === 0) return null;
+  if (kind === 4) return ip;
   const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
-  return mapped?.[1] ?? ip.toLowerCase();
+  if (mapped) return mapped[1]!;
+  return ipv6Prefix64(ip);
+}
+
+function ipv6Prefix64(ip: string): string {
+  // 끝에 IPv4 가 붙은 표기(::1.2.3.4)는 뒤 64비트에만 영향을 주므로 두 그룹으로 바꿔 자리만 맞춘다
+  const addr = ip.replace(/(\d{1,3}\.){3}\d{1,3}$/, '0:0');
+  const [head = '', tail] = addr.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  return `${groups
+    .slice(0, 4)
+    .map((g) => (Number.parseInt(g, 16) || 0).toString(16))
+    .join(':')}::/64`;
 }
 
 /**

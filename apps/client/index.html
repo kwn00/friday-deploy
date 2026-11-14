@@ -17,10 +17,14 @@
         <div class="bar bar--hp"><i id="hp-fill"></i><span id="hp-text">HP</span></div>
         <div class="bar bar--xp"><i id="xp-fill"></i><span id="lv-text">Lv.1</span></div>
       </div>
-      <div class="hud__stats">
-        <span id="time-text">00:00</span>
-        <span id="kill-text">🐛 0</span>
+      <div class="hud__top">
+        <div class="hud__stats">
+          <span id="time-text">00:00</span>
+          <span id="kill-text">🐛 0</span>
+        </div>
+        <button id="btn-pause" class="hud__btn" type="button" aria-label="일시정지 / 메뉴">Ⅱ</button>
       </div>
+      <canvas id="minimap" class="hud__map" aria-hidden="true"></canvas>
       <div id="loadout" class="hud__loadout"></div>
     </div>
 
@@ -35,11 +39,32 @@
         </label>
         <div class="buttons">
           <button id="btn-solo" class="btn btn--primary" type="button">▶ npm run solo</button>
-          <button id="btn-coop" class="btn" type="button">👥 pair programming <small>co-op β</small></button>
+          <button id="btn-create" class="btn" type="button">👥 pair programming <small>방 만들기</small></button>
+        </div>
+        <div class="join">
+          <input id="code-input" type="text" maxlength="12" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="방 코드" aria-label="참가할 방 코드" />
+          <button id="btn-join" class="btn" type="button">git checkout <small>참가</small></button>
         </div>
         <p class="hint hint--touch">화면을 드래그해서 이동 · 공격은 자동</p>
         <p class="hint hint--keys">WASD / 방향키로 이동 · 공격은 자동</p>
         <p id="status-text" class="status" role="status"></p>
+      </div>
+    </section>
+
+    <section id="screen-lobby" class="screen hidden">
+      <div class="panel">
+        <h2 class="panel__title">👥 pair programming</h2>
+        <p class="panel__sub">같이 할 사람에게 이 코드를 알려주세요 (최대 4명)</p>
+        <p id="lobby-code" class="code" aria-label="방 코드"></p>
+        <div class="buttons">
+          <button id="btn-invite" class="btn" type="button">🔗 초대 링크 복사</button>
+        </div>
+        <ul id="lobby-players" class="players"></ul>
+        <p id="lobby-status" class="hint"></p>
+        <div class="buttons">
+          <button id="btn-start" class="btn btn--primary" type="button">▶ git push --force <small>시작</small></button>
+          <button id="btn-leave" class="btn" type="button">✕ 나가기</button>
+        </div>
       </div>
     </section>
 
@@ -51,6 +76,20 @@
       </div>
     </section>
 
+    <section id="screen-pause" class="screen hidden">
+      <div class="panel panel--menu">
+        <h2 id="pause-title" class="panel__title"></h2>
+        <p id="pause-sub" class="panel__sub"></p>
+        <p id="pause-code" class="code code--small hidden"></p>
+        <div class="buttons">
+          <button id="btn-resume" class="btn btn--primary" type="button">▶ git stash pop <small>계속하기</small></button>
+          <button id="btn-minimap" class="btn" type="button"></button>
+          <button id="btn-quit" class="btn" type="button">✕ 그만두기</button>
+        </div>
+        <p class="hint hint--keys">Esc / P 메뉴 · M 미니맵</p>
+      </div>
+    </section>
+
     <section id="screen-over" class="screen hidden">
       <div class="panel">
         <h2 class="panel__title panel__title--danger">Segmentation fault</h2>
@@ -58,6 +97,7 @@
         <dl id="result" class="result"></dl>
         <div class="buttons">
           <button id="btn-retry" class="btn btn--primary" type="button">↻ git revert &amp;&amp; retry</button>
+          <button id="btn-home" class="btn" type="button">✕ 처음으로</button>
         </div>
       </div>
     </section>

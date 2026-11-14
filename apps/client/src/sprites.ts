@@ -152,6 +152,20 @@ const SPR = {
   regex: ['k..k..k', '.kpkpk.', '..kpk..', 'kpppppk', '..kpk..', '.kpkpk.', 'k..k..k'],
   ai: ['...k...', '..kck..', '.kcwck.', 'kcwwwck', '.kcwck.', '..kck..', '...k...'],
   grave: ['..kkkk..', '.kllllk.', 'kllkkllk', 'klkllklk', 'kllkkllk', 'kllllllk', 'kddddddk', 'kkkkkkkk'],
+  /** 회복 아이템: 야근 피자 한 조각 */
+  pizza: [
+    'kkkkkkkkkkk',
+    'kYYYYYYYYYk',
+    'kyyyryyyyyk',
+    '.kyyyyyryk.',
+    '.kyryyyyyk.',
+    '..kyyyryk..',
+    '..kyyyyyk..',
+    '...kyryk...',
+    '...kyyyk...',
+    '....kyk....',
+    '.....k.....',
+  ],
 } satisfies Record<string, string[]>;
 
 export interface SpriteSet {
@@ -161,6 +175,7 @@ export interface SpriteSet {
   commit: Sprite;
   shots: [Sprite, Sprite, Sprite];
   grave: Sprite;
+  heal: Sprite;
 }
 
 export function loadSprites(): SpriteSet {
@@ -179,5 +194,52 @@ export function loadSprites(): SpriteSet {
     commit: bake(SPR.commit),
     shots: [bake(SPR.log), bake(SPR.regex), bake(SPR.ai)],
     grave: bake(SPR.grave),
+    heal: bake(SPR.pizza),
   };
+}
+
+/** 정수 배율로 키운 복사본 (보간 없이 → 픽셀이 또렷하게 유지된다) */
+export function upscale(src: Sprite, k: number): Sprite {
+  const c = document.createElement('canvas');
+  c.width = src.width * k;
+  c.height = src.height * k;
+  const ctx = c.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+
+/** 스프라이트 세트 전체를 현재 화면 배율로 미리 키워 둔다. 그리는 순간에는 1:1 복사만 하면 된다. */
+export function scaleSprites(set: SpriteSet, k: number): SpriteSet {
+  const up = (s: Sprite): Sprite => upscale(s, k);
+  return {
+    dev: { r: [up(set.dev.r[0]), up(set.dev.r[1])], l: [up(set.dev.l[0]), up(set.dev.l[1])] },
+    enemy: {
+      bug: up(set.enemy.bug),
+      null_ptr: up(set.enemy.null_ptr),
+      merge_conflict: up(set.enemy.merge_conflict),
+      mem_leak: up(set.enemy.mem_leak),
+      legacy_code: up(set.enemy.legacy_code),
+    },
+    duck: up(set.duck),
+    commit: up(set.commit),
+    shots: [up(set.shots[0]), up(set.shots[1]), up(set.shots[2])],
+    grave: up(set.grave),
+    heal: up(set.heal),
+  };
+}
+
+/** 글자를 저해상도로 그린 스프라이트 (키우면 픽셀아트 느낌이 유지된다) */
+export function textSprite(text: string, color: string): Sprite {
+  const c = document.createElement('canvas');
+  const probe = c.getContext('2d')!;
+  probe.font = '8px monospace';
+  c.width = Math.max(1, Math.ceil(probe.measureText(text).width) + 1);
+  c.height = 10;
+  const ctx = c.getContext('2d')!;
+  ctx.font = '8px monospace';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 8);
+  return c;
 }

@@ -1,6 +1,8 @@
-import { ENEMY_IDS, TICK_RATE, type Snapshot } from '@friday-deploy/shared';
+import { DT, ENEMY_IDS, duckOffset, type Snapshot } from '@friday-deploy/shared';
 import type { Input } from './input';
-import { loadSprites, type Sprite, type SpriteSet } from './sprites';
+import { loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
+import { Timeline, type Sample } from './timeline';
+import { cameraPx, computeView, toScreen } from './view';
 
 interface Particle {
   x: number;
@@ -11,9 +13,16 @@ interface Particle {
   color: string;
 }
 
-const SNAP_MS = 1000 / TICK_RATE;
+type Row = number[];
+interface Index {
+  e: Map<number, Row>;
+  p: Map<number, Row>;
+  s: Map<number, Row>;
+}
+
 const TILE = 32;
 const GLYPHS = ['{ }', '</>', '//', ';', '=>', '0x', '[]', '&&', '()', '#!', '::', '!='];
+const GLYPH_COLORS = ['#3b3f5c', '#33354d'];
 
 function hash(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) | 0;
@@ -21,19 +30,28 @@ function hash(x: number, y: number): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
+const byId = (rows: Row[]): Map<number, Row> => new Map(rows.map((r) => [r[0]!, r]));
+
 /**
  * 적응형 캔버스 렌더러.
- * 논리 해상도를 화면 크기에 맞춰 정수 배율로 계산하므로 어떤 기기에서도 픽셀이 뭉개지지 않는다.
+ * 캔버스는 기기 픽셀 해상도, 스프라이트는 정수 배율로 미리 키워 둔 것을 쓴다. 픽셀은 또렷하게 유지되면서
+ * 움직임은 기기 픽셀 단위로 부드럽다. 무엇을 언제 보여줄지는 Timeline(서버 틱 기준 재생 버퍼)이 정한다.
  */
 export class Renderer {
+  readonly timeline = new Timeline();
+  /** 마지막으로 그린 장면 (미니맵 등 다른 UI 가 같은 시점을 쓰도록) */
+  sample: Sample | null = null;
+
   private ctx: CanvasRenderingContext2D;
-  private spr: SpriteSet;
-  private scale = 2;
-  private w = 0;
-  private h = 0;
-  private prev: Snapshot | null = null;
-  private curr: Snapshot | null = null;
-  private currAt = 0;
+  private base: SpriteSet;
+  private spr!: SpriteSet;
+  private glyphs: Sprite[][] = [];
+  private nameSprites = new Map<string, Sprite>();
+  private scale = 0;
+  private pxW = 1;
+  private pxH = 1;
+  private index = new WeakMap<Snapshot, Index>();
+  private shown: Snapshot | null = null;
   private particles: Particle[] = [];
   private names = new Map<number, string>();
   private idleCam = 0;
@@ -43,24 +61,30 @@ export class Renderer {
     private input: Input,
   ) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
-    this.spr = loadSprites();
+    this.base = loadSprites();
     this.resize();
     window.addEventListener('resize', () => this.resize());
     window.visualViewport?.addEventListener('resize', () => this.resize());
   }
 
+  /** 화면에 보이는 영역의 크기 (논리 픽셀 = 월드 단위) */
+  get viewSize(): { w: number; h: number } {
+    return { w: this.pxW / this.scale, h: this.pxH / this.scale };
+  }
+
   resize(): void {
-    const cssW = window.innerWidth;
-    const cssH = window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    // 짧은 변 기준 논리 픽셀 ~200 이 보이도록 정수 배율 선택
-    this.scale = Math.max(1, Math.round((Math.min(cssW, cssH) * dpr) / 200));
-    // 아주 넓은 화면에서 시야가 과도하게 넓어지지 않도록 (서버 관심 영역 안에 머물게)
-    while ((Math.max(cssW, cssH) * dpr) / this.scale > 560) this.scale++;
-    this.w = Math.ceil((cssW * dpr) / this.scale);
-    this.h = Math.ceil((cssH * dpr) / this.scale);
-    this.canvas.width = this.w;
-    this.canvas.height = this.h;
+    const fine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    const v = computeView(window.innerWidth, window.innerHeight, window.devicePixelRatio, fine);
+    if (v.scale !== this.scale) {
+      this.scale = v.scale;
+      this.spr = scaleSprites(this.base, v.scale);
+      this.glyphs = GLYPH_COLORS.map((color) => GLYPHS.map((g) => upscale(textSprite(g, color), v.scale)));
+      this.nameSprites.clear();
+    }
+    if (this.canvas.width !== v.pxW || this.canvas.height !== v.pxH) {
+      this.pxW = this.canvas.width = v.pxW;
+      this.pxH = this.canvas.height = v.pxH;
+    }
     this.ctx.imageSmoothingEnabled = false;
   }
 
@@ -69,144 +93,197 @@ export class Renderer {
   }
 
   reset(): void {
-    this.prev = this.curr = null;
+    this.timeline.reset();
+    this.sample = null;
+    this.shown = null;
     this.particles = [];
   }
 
   push(snap: Snapshot): void {
-    // 시야 안에서 사라진 적 = 처치됨 → 파편 이펙트
-    if (this.curr) {
-      const alive = new Set(snap.e.map((e) => e[0]));
-      const me = snap.p.find((p) => p[0] === snap.me.id);
-      for (const e of this.curr.e) {
-        if (alive.has(e[0]) || !me) continue;
-        if (Math.hypot(e[2] - me[1], e[3] - me[2]) > 280) continue;
-        const boss = ENEMY_IDS[e[1]] === 'legacy_code';
-        for (let i = 0; i < (boss ? 40 : 6); i++) {
-          const a = Math.random() * Math.PI * 2;
-          const s = 20 + Math.random() * (boss ? 90 : 50);
-          this.particles.push({ x: e[2], y: e[3], vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.35 + Math.random() * 0.3, color: i % 2 ? '#f38ba8' : '#f9e2af' });
-        }
-      }
+    this.timeline.push(snap, performance.now());
+  }
+
+  private indexOf(snap: Snapshot): Index {
+    let ix = this.index.get(snap);
+    if (!ix) {
+      ix = { e: byId(snap.e), p: byId(snap.p), s: byId(snap.s) };
+      this.index.set(snap, ix);
     }
-    this.prev = this.curr;
-    this.curr = snap;
-    this.currAt = performance.now();
+    return ix;
+  }
+
+  private nameSprite(name: string): Sprite {
+    let s = this.nameSprites.get(name);
+    if (!s) {
+      if (this.nameSprites.size > 32) this.nameSprites.clear();
+      s = upscale(textSprite(name, '#cdd6f4'), this.scale);
+      this.nameSprites.set(name, s);
+    }
+    return s;
+  }
+
+  private burst(x: number, y: number, n: number, speed: number, colors: [string, string]): void {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 20 + Math.random() * speed;
+      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.35 + Math.random() * 0.3, color: colors[i % 2]! });
+    }
+  }
+
+  /** 화면에 보이는 스냅샷이 바뀌는 순간, 사라진 것들에 이펙트를 붙인다 (보이는 시점과 이펙트 시점을 맞춘다) */
+  private onShown(prev: Snapshot, next: Snapshot): void {
+    const me = next.p.find((p) => p[0] === next.me.id);
+    if (!me) return;
+    const alive = this.indexOf(next).e;
+    for (const e of prev.e) {
+      if (alive.has(e[0]) || Math.hypot(e[2]! - me[1], e[3]! - me[2]) > 280) continue;
+      const boss = ENEMY_IDS[e[1]!] === 'legacy_code';
+      this.burst(e[2]!, e[3]!, boss ? 40 : 6, boss ? 90 : 50, ['#f38ba8', '#f9e2af']);
+    }
+    const heals = new Set(next.h.map((h) => h[0]));
+    for (const h of prev.h) {
+      // 시야 밖으로 나간 것이 아니라 누군가 먹어서 사라진 경우만
+      if (!heals.has(h[0]) && next.p.some((p) => Math.hypot(h[1] - p[1], h[2] - p[2]) < 90)) this.burst(h[1], h[2], 14, 40, ['#a6e3a1', '#eff1f5']);
+    }
   }
 
   draw(now: number, dt: number): void {
-    const { ctx, w, h } = this;
-    const snap = this.curr;
-    const alpha = snap && this.prev && !snap.paused ? Math.min(1, (now - this.currAt) / SNAP_MS) : 1;
+    const { ctx, pxW, pxH } = this;
+    const S = this.scale;
+    const sample = (this.sample = this.timeline.advance(dt * 1000));
+    const hx = pxW >> 1;
+    const hy = pxH >> 1;
 
-    const lerpMap = <T extends number[]>(arr: T[] | undefined): Map<number, T> => new Map((arr ?? []).map((v) => [v[0]!, v]));
-    const pe = lerpMap(this.prev?.e);
-    const pp = lerpMap(this.prev?.p);
-    const ps = lerpMap(this.prev?.s);
+    if (!sample) {
+      this.idleCam += dt * 12;
+      this.drawBackground(this.idleCam, Math.sin(this.idleCam / 40) * 30);
+      return;
+    }
+    const { prev, curr, alpha } = sample;
+    if (this.shown && this.shown !== curr) this.onShown(this.shown, curr);
+    this.shown = curr;
+
+    const was = this.indexOf(prev);
     const mix = (a: number | undefined, b: number): number => (a === undefined ? b : a + (b - a) * alpha);
 
-    // 카메라
-    let cx: number;
-    let cy: number;
-    if (snap) {
-      const me = snap.p.find((p) => p[0] === snap.me.id);
-      const pm = me && pp.get(me[0]);
-      cx = me ? mix(pm?.[1], me[1]) : 0;
-      cy = me ? mix(pm?.[2], me[2]) : 0;
-    } else {
-      this.idleCam += dt * 12;
-      cx = this.idleCam;
-      cy = Math.sin(this.idleCam / 40) * 30;
+    // 카메라 = 보간된 내 위치
+    const me = curr.p.find((p) => p[0] === curr.me.id);
+    const meWas = me && was.p.get(me[0]);
+    const cx = me ? mix(meWas?.[1], me[1]) : 0;
+    const cy = me ? mix(meWas?.[2], me[2]) : 0;
+    const camX = cameraPx(cx, S);
+    const camY = cameraPx(cy, S);
+    const sx = (x: number): number => toScreen(x, camX, hx, S);
+    const sy = (y: number): number => toScreen(y, camY, hy, S);
+    const blit = (s: Sprite, x: number, y: number): void => ctx.drawImage(s, sx(x) - (s.width >> 1), sy(y) - (s.height >> 1));
+
+    this.drawBackground(cx, cy);
+
+    for (const g of curr.g) blit(this.spr.commit, g[1], g[2] + Math.sin(now / 200 + g[0]) * 1.5);
+
+    for (const h of curr.h) {
+      const bob = Math.sin(now / 260 + h[0]) * 2;
+      // 눈에 띄도록 은은하게 깜빡이는 받침
+      ctx.fillStyle = `rgba(166,227,161,${0.25 + 0.2 * Math.sin(now / 180)})`;
+      ctx.fillRect(sx(h[1]) - 7 * S, sy(h[2]) + 5 * S, 14 * S, 2 * S);
+      blit(this.spr.heal, h[1], h[2] + bob);
     }
-    const ox = Math.round(w / 2 - cx);
-    const oy = Math.round(h / 2 - cy);
 
-    this.drawBackground(cx, cy, ox, oy);
-    if (!snap) return;
-
-    const blit = (s: Sprite, x: number, y: number): void => ctx.drawImage(s, Math.round(x + ox - s.width / 2), Math.round(y + oy - s.height / 2));
-
-    for (const g of snap.g) blit(this.spr.commit, g[1], g[2] + Math.sin(now / 200 + g[0]) * 1.5);
-
-    for (const e of snap.e) {
-      const p = pe.get(e[0]);
+    for (const e of curr.e) {
       const id = ENEMY_IDS[e[1]];
       if (!id) continue;
+      const p = was.e.get(e[0]);
       const wob = id === 'null_ptr' ? Math.sin(now / 250 + e[0]) * 2 : 0;
       blit(this.spr.enemy[id], mix(p?.[2], e[2]), mix(p?.[3], e[3]) + wob);
     }
 
-    for (const p of snap.p) {
-      const q = pp.get(p[0]);
+    // 러버덕은 서버가 위치를 보내지 않는다. 보간된 주인 위치와 보간된 서버 시간으로 직접 계산하므로
+    // 다른 것들과 같은 프레임률로 매끄럽게 돈다. (판정은 서버가 같은 식으로 한다)
+    const duckTime = sample.tick * DT;
+
+    for (const p of curr.p) {
+      const q = was.p.get(p[0]);
       const x = mix(q?.[1], p[1]);
       const y = mix(q?.[2], p[2]);
       if (!p[4]) {
         blit(this.spr.grave, x, y);
         continue;
       }
-      const moving = q ? Math.abs(q[1] - p[1]) + Math.abs(q[2] - p[2]) > 0.2 : false;
+      const moving = q ? Math.abs(q[1]! - p[1]) + Math.abs(q[2]! - p[2]) > 0.2 : false;
       const frame = moving && Math.floor(now / 140) % 2 ? 1 : 0;
+      const px = sx(x);
+      const py = sy(y);
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fillRect(Math.round(x + ox - 5), Math.round(y + oy + 6), 10, 2);
+      ctx.fillRect(px - 5 * S, py + 6 * S, 10 * S, 2 * S);
       blit(this.spr.dev[p[3] < 0 ? 'l' : 'r'][frame], x, y);
       // 머리 위 체력바 / 이름
-      const bx = Math.round(x + ox - 7);
-      const by = Math.round(y + oy - 11);
+      const bx = px - 7 * S;
+      const by = py - 11 * S;
       ctx.fillStyle = '#11111b';
-      ctx.fillRect(bx, by, 14, 2);
-      ctx.fillStyle = p[0] === snap.me.id ? '#a6e3a1' : '#89b4fa';
-      ctx.fillRect(bx, by, Math.round((14 * p[5]) / 100), 2);
-      if (p[0] !== snap.me.id) {
-        ctx.font = '8px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#cdd6f4';
-        ctx.fillText(this.names.get(p[0]) ?? '', Math.round(x + ox), by - 2);
+      ctx.fillRect(bx, by, 14 * S, 2 * S);
+      ctx.fillStyle = p[0] === curr.me.id ? '#a6e3a1' : '#89b4fa';
+      ctx.fillRect(bx, by, Math.round((14 * S * p[5]) / 100), 2 * S);
+      if (p[0] !== curr.me.id) {
+        const name = this.names.get(p[0]);
+        if (name) {
+          const ns = this.nameSprite(name);
+          ctx.drawImage(ns, px - (ns.width >> 1), by - ns.height);
+        }
+      }
+      for (let i = 0; i < p[6]; i++) {
+        const [ox, oy] = duckOffset(duckTime, i, p[6]);
+        blit(this.spr.duck, x + ox, y + oy);
       }
     }
 
-    for (const d of snap.d) blit(this.spr.duck, d[0], d[1]);
-
-    for (const s of snap.s) {
-      const p = ps.get(s[0]);
+    for (const s of curr.s) {
       const spr = this.spr.shots[s[1] as 0 | 1 | 2];
-      if (spr) blit(spr, mix(p?.[2], s[2]), mix(p?.[3], s[3]));
+      if (!spr) continue;
+      const p = was.s.get(s[0]);
+      blit(spr, mix(p?.[2], s[2]), mix(p?.[3], s[3]));
     }
 
-    this.particles = this.particles.filter((p) => (p.life -= dt) > 0);
-    for (const p of this.particles) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      ctx.fillStyle = p.color;
-      ctx.fillRect(Math.round(p.x + ox), Math.round(p.y + oy), 2, 2);
+    if (this.particles.length > 0) {
+      this.particles = this.particles.filter((p) => (p.life -= dt) > 0);
+      for (const p of this.particles) {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(sx(p.x), sy(p.y), 2 * S, 2 * S);
+      }
     }
 
     this.drawStick();
   }
 
-  private drawBackground(cx: number, cy: number, ox: number, oy: number): void {
-    const { ctx, w, h } = this;
+  private drawBackground(cx: number, cy: number): void {
+    const { ctx, pxW, pxH } = this;
+    const S = this.scale;
+    const camX = cameraPx(cx, S);
+    const camY = cameraPx(cy, S);
+    const hx = pxW >> 1;
+    const hy = pxH >> 1;
     ctx.fillStyle = '#1e1e2e';
-    ctx.fillRect(0, 0, w, h);
-    const x0 = Math.floor((cx - w / 2) / TILE) - 1;
-    const y0 = Math.floor((cy - h / 2) / TILE) - 1;
-    const nx = Math.ceil(w / TILE) + 2;
-    const ny = Math.ceil(h / TILE) + 2;
-    ctx.font = '8px monospace';
-    ctx.textAlign = 'left';
-    for (let ty = y0; ty <= y0 + ny; ty++) {
-      for (let tx = x0; tx <= x0 + nx; tx++) {
-        const hsh = hash(tx, ty);
-        const sx = tx * TILE + ox;
-        const sy = ty * TILE + oy;
+    ctx.fillRect(0, 0, pxW, pxH);
+    const size = TILE * S;
+    const x0 = Math.floor((camX - hx) / size);
+    const y0 = Math.floor((camY - hy) / size);
+    const x1 = Math.floor((camX - hx + pxW) / size);
+    const y1 = Math.floor((camY - hy + pxH) / size);
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        const px = tx * size - camX + hx;
+        const py = ty * size - camY + hy;
         if ((tx + ty) & 1) {
           ctx.fillStyle = '#212133';
-          ctx.fillRect(sx, sy, TILE, TILE);
+          ctx.fillRect(px, py, size, size);
         }
         ctx.fillStyle = '#2a2a3d';
-        ctx.fillRect(sx, sy, 1, 1);
+        ctx.fillRect(px, py, S, S);
+        const hsh = hash(tx, ty);
         if (hsh % 5 === 0) {
-          ctx.fillStyle = hsh % 3 === 0 ? '#3b3f5c' : '#33354d';
-          ctx.fillText(GLYPHS[(hsh >>> 8) % GLYPHS.length]!, sx + 4 + ((hsh >>> 4) % 10), sy + 12 + ((hsh >>> 12) % 14));
+          const glyph = this.glyphs[hsh % 3 === 0 ? 0 : 1]![(hsh >>> 8) % GLYPHS.length]!;
+          ctx.drawImage(glyph, px + (4 + ((hsh >>> 4) % 10)) * S, py + (4 + ((hsh >>> 12) % 14)) * S);
         }
       }
     }
@@ -216,14 +293,15 @@ export class Renderer {
     const st = this.input.stick;
     if (!st) return;
     const { ctx } = this;
-    const k = this.w / window.innerWidth;
+    const k = this.pxW / window.innerWidth;
+    const dot = Math.max(2, Math.round(this.scale * 0.6));
     const ring = (x: number, y: number, r: number, color: string): void => {
       ctx.fillStyle = color;
       const px = Math.round(x * k);
       const py = Math.round(y * k);
       for (let a = 0; a < 24; a++) {
         const t = (a / 24) * Math.PI * 2;
-        ctx.fillRect(px + Math.round(Math.cos(t) * r), py + Math.round(Math.sin(t) * r), 2, 2);
+        ctx.fillRect(px + Math.round(Math.cos(t) * r), py + Math.round(Math.sin(t) * r), dot, dot);
       }
     };
     ring(st.ox, st.oy, 48 * k, 'rgba(205,214,244,0.35)');
