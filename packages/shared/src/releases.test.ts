@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { APP_VERSION, RELEASES, compareVersions, unseenReleases } from './index';
 
@@ -38,6 +38,18 @@ test('게임 안 릴리즈노트: 짧고 쉽게 (한 버전에 1~5줄, 한 줄 7
     assert.ok(r.items.length >= 1 && r.items.length <= 5, `${r.version}: ${r.items.length}줄`);
     for (const item of r.items) assert.ok(item.trim().length > 0 && item.length <= 70, `${r.version}: "${item}" (${item.length}자)`);
   }
+});
+
+test('릴리즈노트에는 "확인하지 못한 것"을 적지 않는다 (승인받고 나가는 글이다. PR 본문에만 적는다)', () => {
+  const banned = /확인하지\s*못|확인\s*못\s*[한했함]|미확인|검증하지\s*못/;
+  const files = readdirSync(new URL('docs/releases/', ROOT)).filter((name) => name.endsWith('.md'));
+  assert.ok(files.length >= RELEASES.length);
+  for (const name of files) {
+    for (const [i, line] of read(`docs/releases/${name}`).split('\n').entries()) {
+      assert.ok(!banned.test(line), `docs/releases/${name} ${i + 1}번째 줄: "${line.trim()}"`);
+    }
+  }
+  for (const r of RELEASES) for (const text of [r.title, ...r.items]) assert.ok(!banned.test(text), `${r.version} 새 소식: "${text}"`);
 });
 
 test('버전 비교', () => {
