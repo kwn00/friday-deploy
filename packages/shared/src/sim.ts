@@ -35,17 +35,7 @@ import {
   type UpgradeId,
 } from './content';
 import type { Offer, Snapshot } from './protocol';
-
-export function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { derivedSecret, sfc32, type Rand, type Seed } from './rng';
 
 export interface Player {
   id: number;
@@ -118,7 +108,17 @@ export interface World {
   paused: boolean;
   over: boolean;
   nextId: number;
-  rng: () => number;
+  /**
+   * 보이는 난수: 결과가 스냅샷에 그대로 드러나는 것(스폰 위치/종류, 재배치, 합류 위치, AI 에이전트 조준)에만 쓴다.
+   * 128비트 시드라 시드 대입은 불가능하지만 암호학적이지는 않다.
+   */
+  rng: Rand;
+  /**
+   * 비밀 난수: 미리 알면 이득인 것(레벨업 선택지, 회복 아이템 드롭)에만 쓴다. 서버는 CSPRNG 를 넘긴다.
+   * 규칙: 두 난수가 몇 번 소비되는지는 서로의 결과에 따라 달라지면 안 된다.
+   * (예: 비밀 난수 결과에 따라 보이는 난수를 한 번 더 뽑으면, 보이는 스폰이 어긋나는 것으로 비밀 결과가 새어 나간다)
+   */
+  secret: Rand;
   players: Map<number, Player>;
   enemies: Enemy[];
   shots: Shot[];
@@ -131,14 +131,19 @@ export interface World {
   events: WorldEvent[];
 }
 
-export function createWorld(seed: number): World {
+/**
+ * 새 월드. seed 는 숫자(테스트용, splitmix32 로 128비트로 펼침) 또는 32비트 단어 4개.
+ * secret 을 주지 않으면 시드에서 유도한 별도의 결정론적 난수를 쓴다 (테스트가 재현 가능하도록).
+ */
+export function createWorld(seed: Seed, secret?: Rand): World {
   return {
     tick: 0,
     time: 0,
     paused: false,
     over: false,
     nextId: 1,
-    rng: mulberry32(seed),
+    rng: sfc32(seed),
+    secret: secret ?? derivedSecret(seed),
     players: new Map(),
     enemies: [],
     shots: [],
@@ -234,8 +239,9 @@ function checkLevelUp(world: World, p: Player): void {
       p.hp = Math.min(maxHpOf(p), p.hp + 20);
       continue;
     }
+    // 선택지는 비밀 난수로 섞는다: 보이는 스폰을 관찰해도 다음 선택지를 알 수 없게
     for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(world.rng() * (i + 1));
+      const j = Math.floor(world.secret() * (i + 1));
       const tmp = pool[i]!;
       pool[i] = pool[j]!;
       pool[j] = tmp;
@@ -286,8 +292,9 @@ function damage(world: World, e: Enemy, dmg: number, by: Player | undefined): vo
     if (world.gems.length >= MAX_GEMS) world.gems.shift();
     world.gems.push({ id: world.nextId++, x: e.x, y: e.y, v: ENEMIES[e.type].xp });
     // 회복 아이템: 보스는 반드시, 그 외에는 쿨다운이 끝났을 때 낮은 확률로
+    // 드롭 여부는 비밀 난수로 정한다 (보이는 난수를 쓰면 시드를 아는 사람이 드롭을 미리 알고 처치 순서로 조종할 수 있다)
     const boss = ENEMIES[e.type].boss === true;
-    if (boss || (world.healCd <= 0 && world.rng() < HEAL_DROP_CHANCE)) {
+    if (boss || (world.healCd <= 0 && world.secret() < HEAL_DROP_CHANCE)) {
       if (!boss) world.healCd = HEAL_DROP_COOLDOWN;
       if (world.heals.length >= MAX_HEALS) world.heals.shift();
       world.heals.push({ id: world.nextId++, x: e.x + (boss ? 10 : 0), y: e.y });
