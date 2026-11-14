@@ -50,6 +50,8 @@
         <p class="hint hint--touch">화면을 드래그해서 이동 · 공격은 자동</p>
         <p class="hint hint--keys">WASD / 방향키로 이동 · 공격은 자동</p>
         <p id="status-text" class="status" role="status"></p>
+        <!-- 버전 표기: 화면 오른쪽 아래 구석 (화면이 낮아 패널이 구석까지 차지할 때는 패널 안쪽 구석). 누르면 새 소식이 열린다 -->
+        <button id="btn-version" class="version" type="button" aria-haspopup="dialog"></button>
       </div>
     </section>
 
@@ -121,6 +123,20 @@
         </div>
         <p id="board-note" class="board__note hidden"></p>
         <div id="board-body" class="board__body" role="tabpanel" aria-live="polite" tabindex="0"></div>
+      </div>
+    </section>
+
+    <!-- 새 소식(릴리즈노트): 그 버전을 처음 본 브라우저에 한 번 자동으로 뜨고, 버전 표기를 누르면 다시 볼 수 있다 -->
+    <section id="screen-notes" class="screen screen--board hidden" role="dialog" aria-modal="true" aria-labelledby="notes-title">
+      <div class="panel panel--board panel--notes">
+        <div class="board__head">
+          <h2 id="notes-title" class="panel__title board__title">📦 release notes <small>새 소식</small></h2>
+          <button id="btn-notes-close" class="board__close" type="button" aria-label="새 소식 닫기">✕</button>
+        </div>
+        <div id="notes-body" class="board__body notes__body" tabindex="0"></div>
+        <div class="notes__foot">
+          <button id="btn-notes-ok" class="btn btn--primary" type="button">확인</button>
+        </div>
       </div>
     </section>
 
