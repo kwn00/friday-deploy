@@ -215,3 +215,28 @@ test('close: DB 가 죽어 있으면 정해진 시간 안에 포기하고 끝난
   assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0}ms`);
   assert.ok(errors.mock.callCount() >= 1);
 });
+
+test('함께 한 판: 이름은 기여도(개인 처치 수)가 큰 사람부터 적고, 기여도를 함께 돌려준다', () => {
+  const lb = new Leaderboard(new MemoryStore());
+  lb.record(run({ board: 'coop', names: ['host', 'mate', 'third'], killsBy: [12, 30, 12], kills: 54, time: 200 }));
+  const [entry] = lb.top('coop');
+  assert.deepEqual(entry!.names, ['mate', 'host', 'third'], '많이 잡은 사람부터, 같으면 들어온 순서');
+  assert.deepEqual(entry!.killsBy, [30, 12, 12]);
+  assert.equal(entry!.kills, 54);
+
+  // 값은 서버 쪽에서도 다듬는다: 음수·소수·숫자가 아닌 값
+  lb.record(run({ board: 'coop', names: ['a', 'b'], killsBy: [-5, Number.NaN] as number[], time: 190 }));
+  assert.deepEqual(lb.top('coop')[1]!.killsBy, [0, 0]);
+  lb.record(run({ board: 'coop', names: ['a', 'b'], killsBy: [2.9, 7.2], time: 180 }));
+  assert.deepEqual([lb.top('coop')[2]!.names, lb.top('coop')[2]!.killsBy], [['b', 'a'], [7, 2]]);
+
+  // 개수가 이름과 맞지 않거나 없으면 기여도 없이 넘겨받은 순서 그대로 (예전 방식의 기록)
+  lb.record(run({ board: 'coop', names: ['x', 'y'], killsBy: [9], time: 170 }));
+  lb.record(run({ board: 'coop', names: ['p', 'q'], time: 160 }));
+  for (const e of lb.top('coop').slice(3)) assert.equal(e.killsBy, undefined);
+  assert.deepEqual(lb.top('coop').slice(3).map((e) => e.names), [['x', 'y'], ['p', 'q']]);
+
+  // 혼자 한 판에도 값은 남는다 (화면에서는 보여주지 않는다)
+  lb.record(run({ names: ['solo'], killsBy: [41], kills: 41, time: 150 }));
+  assert.deepEqual(lb.top('solo')[0]!.killsBy, [41]);
+});

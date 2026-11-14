@@ -272,6 +272,47 @@ describe('PostgreSQL 저장소', { skip: skipAll }, () => {
   });
 });
 
+describe('PostgreSQL 저장소: 개인별 기여도', { skip: skipAll }, () => {
+  it('개인별 처치 수가 이름과 같은 순서로 저장되고 돌아온다. 없는 기록은 없는 대로 돌아온다', async () => {
+    const store = await createPostgresStore(URL!);
+    try {
+      const season = newSeason();
+      await store.save(run(season, { board: 'coop', names: ['많이', '적게', '중간'], killsBy: [40, 0, 7], kills: 47, time: 300 }));
+      await store.save(run(season, { board: 'coop', names: ['예전', '기록'], time: 200 }));
+      const rows = await store.load('coop', season, 5);
+      assert.deepEqual(rows.map((r) => [r.names, r.killsBy]), [[['많이', '적게', '중간'], [40, 0, 7]], [['예전', '기록'], undefined]]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('열이 없던 예전 테이블에도 열이 더해지고, 그 전에 있던 기록은 그대로 읽힌다', async () => {
+    const season = newSeason();
+    const admin = new pg.Client({ connectionString: URL! });
+    await admin.connect();
+    try {
+      // 예전 서버가 만든 테이블 모양으로 되돌리고, 예전 방식으로 한 줄 넣어 둔다
+      await admin.query('CREATE TABLE IF NOT EXISTS leaderboard_runs (id text PRIMARY KEY, board text NOT NULL, season integer NOT NULL, names text[] NOT NULL, time integer NOT NULL, kills integer NOT NULL, level integer NOT NULL, paused_seconds integer NOT NULL, ended_at bigint NOT NULL)');
+      await admin.query('ALTER TABLE leaderboard_runs DROP COLUMN IF EXISTS member_kills');
+      await admin.query('INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at) VALUES ($1, $2, $3, $4, 120, 9, 2, 0, 1700000000000)', [`old-${season}`, 'coop', season, ['옛날', '사람']]);
+      const store = await createPostgresStore(URL!);
+      try {
+        const before = await store.load('coop', season, 5);
+        assert.deepEqual(before.map((r) => [r.id, r.names, r.killsBy]), [[`old-${season}`, ['옛날', '사람'], undefined]]);
+        await store.save(run(season, { id: `new-${season}`, board: 'coop', names: ['새', '기록'], killsBy: [3, 1], kills: 4, time: 130 }));
+        const after = await store.load('coop', season, 5);
+        assert.deepEqual(after.map((r) => [r.id, r.killsBy]), [[`new-${season}`, [3, 1]], [`old-${season}`, undefined]]);
+      } finally {
+        await store.close();
+      }
+      const cols = await admin.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'leaderboard_runs' AND column_name = 'member_kills'");
+      assert.equal(cols.rowCount, 1);
+    } finally {
+      await admin.end().catch(() => {});
+    }
+  });
+});
+
 describe('PostgreSQL 저장소: 연결 풀러와 시간 제한', { skip: skipAll }, () => {
   it('가짜 풀러는 statement_timeout 을 접속 매개변수로 보내는 연결을 거부한다 (아래 테스트가 헛돌지 않는다는 확인)', async () => {
     const pooler = await startPooler(targetOf());

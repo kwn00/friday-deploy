@@ -130,7 +130,11 @@ function parseEntries(raw: unknown): LeaderboardEntry[] | null {
     const o = e as Record<string, unknown>;
     if (!isNum(o.rank) || !isNum(o.time) || !isNum(o.kills) || !isNum(o.level) || !isNum(o.at)) return null;
     if (!Array.isArray(o.names) || !o.names.every((n) => typeof n === 'string')) return null;
-    out.push({ rank: o.rank, names: (o.names as string[]).slice(0, 8), time: o.time, kills: o.kills, level: o.level, at: o.at });
+    const names = (o.names as string[]).slice(0, 8);
+    // 개인별 처치 수: 이름과 개수가 맞고 전부 0 이상의 수일 때만 쓴다 (예전 기록에는 없다)
+    const by = o.killsBy;
+    const killsBy = Array.isArray(by) && by.length === names.length && by.every((k) => isNum(k) && k >= 0) ? (by as number[]) : undefined;
+    out.push({ rank: o.rank, names, ...(killsBy ? { killsBy } : {}), time: o.time, kills: o.kills, level: o.level, at: o.at });
   }
   return out;
 }

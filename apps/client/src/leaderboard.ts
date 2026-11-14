@@ -1,5 +1,6 @@
 import { LEADERBOARD_SIZE, type BoardId, type LeaderboardResponse } from '@friday-deploy/shared';
 import { LeaderboardError, fetchLeaderboard } from './net';
+import { sharesOf } from './shares';
 
 /**
  * 순위표 오버레이. 게임 상태와는 무관한 읽기 전용 화면이라 연결(WebSocket)이나 단계(phase)를 건드리지 않는다.
@@ -188,10 +189,19 @@ export class Leaderboard {
       if (same[0]) mineRank = same[0].rank;
     }
     let mineRow: HTMLElement | null = null;
+    let hasShares = false;
     for (const e of data.entries.slice(0, LEADERBOARD_SIZE)) {
       const li = node('li', 'row');
       const rank = node('span', `row__rank${e.rank <= 3 ? ` row__rank--${e.rank}` : ''}`, String(e.rank));
-      const names = node('span', 'row__names', e.names.join(', '));
+      // 이름은 서버가 기여도 순으로 보낸다. 기여도가 있으면 이름 옆에 함께 적는다 (문자열은 전부 텍스트 노드로만 넣는다)
+      const names = node('span', 'row__names');
+      const shares = sharesOf(e.killsBy, e.names.length);
+      if (shares) hasShares = true;
+      e.names.forEach((name, i) => {
+        if (i > 0) names.append(shares ? ' · ' : ', ');
+        names.append(name);
+        if (shares) names.append(node('small', 'row__share', ` ${shares[i]}%`));
+      });
       const meta = node('span', 'row__meta');
       for (const t of [`⏱ ${mmss(e.time)}`, `🐛 ${e.kills}`, `Lv.${e.level}`, shortDate(e.at)]) if (t) meta.append(node('span', '', t));
       li.append(rank, names, meta);
@@ -203,6 +213,7 @@ export class Leaderboard {
       list.append(li);
     }
     this.body.replaceChildren(list);
+    if (hasShares) this.body.append(node('p', 'board__legend', '이름 옆 % 는 처치 기여도예요 (기여도가 큰 사람부터)'));
     this.body.scrollTop = 0;
     // 내 기록이 아래쪽 순위라면 보이는 곳으로 가져온다 (스크롤은 목록 안에서만)
     mineRow?.scrollIntoView({ block: 'nearest' });

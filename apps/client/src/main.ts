@@ -333,6 +333,7 @@ function showPlace(r: RunResult, place?: { board: BoardId; rank: number }, unran
 }
 
 const UNRANKED_HINT: Record<UnrankedReason, string> = {
+  watched: '이번 판은 관전만 했어요. 다음 판부터 함께 해요.',
   short: `순위표에는 ${LEADERBOARD_MIN_SECONDS}초 이상 버틴 판부터 기록돼요.`,
   late: '도중에 합류한 판이라 순위표에는 이름이 오르지 않아요.',
   outside: `아쉽게도 순위표 ${LEADERBOARD_SIZE}위 안에는 들지 못했어요.`,

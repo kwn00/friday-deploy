@@ -268,6 +268,8 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   advance(100);
   assert.equal(reports.length, 1, '판 하나에 기록 하나');
   assert.deepEqual([reports[0]!.board, reports[0]!.names, reports[0]!.kills], ['coop', ['host', 'mate'], 42]);
+  assert.deepEqual(reports[0]!.killsBy, [30, 12], '이름이 오르는 사람의 개인별 처치 수 (도중에 들어온 사람의 99 는 없다)');
+  assert.deepEqual([lb.top('coop')[0]!.names, lb.top('coop')[0]!.killsBy], [['host', 'mate'], [30, 12]]);
   assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.deepEqual(last(b.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.equal(last(late.ws, 'over')!.place, undefined, '도중에 들어온 사람에게는 순위를 주지 않는다');
@@ -280,11 +282,16 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   survive(room, [a.conn, b.conn, late.conn], 10);
   room.leave(b.conn);
   survive(room, [a.conn, late.conn], 30);
+  // 이번에는 나중 이름(late)이 더 많이 잡았다: 순위표에는 기여도가 큰 사람이 앞에 온다
+  room.world.players.get(a.conn.pid)!.kills = 5;
+  room.world.players.get(late.conn.pid)!.kills = 20;
   down(room, a.conn);
   down(room, late.conn);
   advance(100);
   assert.equal(reports.length, 2);
-  assert.deepEqual([reports[1]!.board, reports[1]!.names], ['coop', ['host', 'late']]);
+  assert.deepEqual([reports[1]!.board, reports[1]!.names, reports[1]!.killsBy], ['coop', ['host', 'late'], [5, 20]]);
+  const second = lb.top('coop').find((e) => e.names.includes('late'))!;
+  assert.deepEqual([second.names, second.killsBy, second.kills], [['late', 'host'], [20, 5], 25]);
   assert.notEqual(reports[0]!.id, reports[1]!.id);
 });
 
@@ -455,4 +462,46 @@ test('페어: 쓰러진 사람은 관전하며 시점을 움직일 수 있고, �
   assert.equal(mine.me.alive, false);
   const seen = a.ws.snaps.at(-1)!.p.find((row) => row[0] === b.conn.pid)!;
   assert.ok(Math.abs(seen[1] - grave[0]!) < 0.11 && Math.abs(seen[2] - grave[1]!) < 0.11 && seen[4] === 0, '동료에게는 쓰러진 자리의 묘비로 보인다');
+});
+
+test('리더보드: 관전으로 들어온 사람은 판이 시작된 직후에 들어왔어도 이름이 오르지 않는다 (플레이하지 않은 사람이 순위표에 오르지 않는다)', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), 1));
+  const room = rooms.create('coop')!;
+  const a = join(room, 'host');
+  const b = join(room, 'reloader');
+  room.onStart(a.conn);
+  advance(1000);
+  // 시작 1초 만에 한 사람이 새로고침한다: 나간 순간부터 이 판에 들어오는 사람은 관전이다
+  room.leave(b.conn);
+  const again = join(room, 'reloader');
+  const stranger = join(room, 'stranger');
+  for (const c of [again, stranger]) assert.equal(room.world.players.get(c.conn.pid)!.body, false);
+  assert.ok(again.conn.joinedAt <= 5 && stranger.conn.joinedAt <= 5, '둘 다 "처음부터 있던 사람"으로 치는 5초 안에 들어왔다');
+
+  survive(room, [a.conn], 35);
+  room.world.players.get(a.conn.pid)!.kills = 40;
+  down(room, a.conn);
+  advance(100);
+  assert.equal(reports.length, 1);
+  assert.deepEqual([reports[0]!.board, reports[0]!.names, reports[0]!.killsBy], ['coop', ['host'], [40]], '플레이한 사람만');
+  assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
+  for (const c of [again, stranger]) {
+    const over = last(c.ws, 'over')!;
+    assert.equal(over.place, undefined);
+    assert.equal(over.unranked, 'watched', '관전만 했다고 알려준다 (짧은 판이나 순위표 밖이라고 하지 않는다)');
+  }
+
+  // 플레이하던 사람이 나가 버리고 관전자만 남으면 판은 끝나고, 아무 기록도 남지 않는다
+  room.onStart(a.conn);
+  advance(1000);
+  room.leave(again.conn);
+  const watcher = join(room, 'watcher');
+  survive(room, [a.conn, stranger.conn], 40);
+  room.leave(a.conn);
+  room.leave(stranger.conn);
+  advance(200);
+  assert.equal(reports.length, 1, '관전자만 남은 판은 기록되지 않는다');
+  const over = last(watcher.ws, 'over')!;
+  assert.deepEqual([over.place, over.unranked], [undefined, 'watched']);
 });

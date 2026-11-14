@@ -728,6 +728,18 @@ body {
   overflow-wrap: anywhere; /* 12자 닉네임 4명이어도 줄바꿈으로 처리 */
   color: var(--text);
 }
+.row__share {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.board__legend {
+  margin: 8px 4px 0;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+  word-break: keep-all; /* 좁은 화면에서 한글 단어 중간이 끊기지 않게 */
+}
 .row__names em {
   margin-left: 8px;
   font-style: normal;

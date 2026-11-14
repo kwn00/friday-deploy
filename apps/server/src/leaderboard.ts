@@ -13,9 +13,13 @@ export interface RunRecord {
   id: string;
   board: BoardId;
   season: number;
+  /** 기여도(개인 처치 수)가 큰 사람부터 */
   names: string[];
+  /** names 와 같은 순서의 개인별 처치 수. 이 값을 남기기 전의 기록에는 없다 */
+  killsBy?: number[];
   /** 생존 시간(초) */
   time: number;
+  /** 이름이 오른 사람들의 처치 수 합 */
   kills: number;
   level: number;
   /** 일시정지로 멈춰 있던 시간(초). 순위에는 쓰지 않지만 기록으로 남긴다 */
@@ -122,13 +126,19 @@ export class Leaderboard {
    * 동기 함수다: 순위는 메모리에서 바로 계산하고, 저장은 뒤에서 한다.
    */
   record(report: RunReport): RunPlacement {
-    const names = report.names.map((n) => sanitizeName(n)).slice(0, 8);
-    if (names.length === 0 || !BOARDS.includes(report.board)) return null;
+    if (!Array.isArray(report.names) || !BOARDS.includes(report.board)) return null;
+    // 기여도(개인 처치 수)가 큰 사람부터 적는다. 같으면 넘겨받은 순서(들어온 순서)를 지킨다.
+    const hasKills = Array.isArray(report.killsBy) && report.killsBy.length === report.names.length;
+    const members = report.names.slice(0, 8).map((n, i) => ({ name: sanitizeName(n), kills: hasKills ? int(report.killsBy![i]!, 0, 10_000_000) : 0 }));
+    if (hasKills) members.sort((a, b) => b.kills - a.kills);
+    const names = members.map((m) => m.name);
+    if (names.length === 0) return null;
     const record: RunRecord = {
       id: String(report.id).slice(0, 80),
       board: report.board,
       season: this.season,
       names,
+      ...(hasKills ? { killsBy: members.map((m) => m.kills) } : {}),
       time: int(report.time, 0, 24 * 3600),
       kills: int(report.kills, 0, 10_000_000),
       level: int(report.level, 1, 10_000),
@@ -146,7 +156,15 @@ export class Leaderboard {
   top(board: BoardId): LeaderboardEntry[] {
     let view = this.views[board];
     if (!view) {
-      view = this.boards[board].slice(0, LEADERBOARD_SIZE).map((r, i) => ({ rank: i + 1, names: r.names, time: r.time, kills: r.kills, level: r.level, at: r.endedAt }));
+      view = this.boards[board].slice(0, LEADERBOARD_SIZE).map((r, i) => ({
+        rank: i + 1,
+        names: r.names,
+        ...(r.killsBy && r.killsBy.length === r.names.length ? { killsBy: r.killsBy } : {}),
+        time: r.time,
+        kills: r.kills,
+        level: r.level,
+        at: r.endedAt,
+      }));
       this.views[board] = view;
     }
     return view;

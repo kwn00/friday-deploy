@@ -250,10 +250,12 @@ export class Room {
   /**
    * 끝난 판을 리더보드에 올린다. 기록은 서버가 직접 만든다 (클라이언트가 내는 값은 없다).
    * 이름이 오르는 것은 처음부터 함께 해서 끝까지 남은 사람뿐이다: 도중에 들어온 사람이나 관전자는 빠진다.
+   * 관전으로 들어온 사람(몸이 없다)은 판이 시작된 직후에 들어왔더라도 빠진다: 한 번도 플레이하지 않았다.
+   * 쓰러진 뒤 관전한 사람은 몸(묘비)이 있으므로 그대로 오른다.
    */
   private report(endedAt: number): { board: BoardId; rank: RunPlacement; crew: Set<Conn> } | null {
     if (!this.onRun) return null;
-    const crew = [...this.conns.values()].filter((c) => c.joinedAt <= CREW_GRACE_SECONDS && this.world.players.has(c.pid));
+    const crew = [...this.conns.values()].filter((c) => c.joinedAt <= CREW_GRACE_SECONDS && this.world.players.get(c.pid)?.body === true);
     const board: BoardId = this.peak >= 2 ? 'coop' : 'solo';
     // 처음부터 있던 사람이 아무도 남지 않았으면 기록하지 않는다 (남은 사람은 모두 도중 합류)
     if (crew.length === 0) return { board, rank: null, crew: new Set() };
@@ -263,6 +265,8 @@ export class Room {
         id: randomUUID(),
         board,
         names: players.map((p) => p.name),
+        // 개인별 처치 수 = 기여도. 리더보드가 이 값이 큰 순서로 이름을 적는다
+        killsBy: players.map((p) => p.kills),
         time: Math.floor(this.world.time),
         kills: players.reduce((sum, p) => sum + p.kills, 0),
         level: Math.max(...players.map((p) => p.level)),
@@ -299,6 +303,7 @@ export class Room {
         const named = ranked.crew.has(conn);
         // 순위가 없으면 이유를 알려준다 (화면이 "순위표 밖"이라고 잘못 말하지 않게)
         if (named && typeof ranked.rank === 'number') over.place = { board: ranked.board, rank: ranked.rank };
+        else if (!p.body) over.unranked = 'watched';
         else if (this.world.time < LEADERBOARD_MIN_SECONDS) over.unranked = 'short';
         else if (!named) over.unranked = 'late';
         else over.unranked = ranked.rank === 'pending' ? 'pending' : 'outside';

@@ -42,8 +42,10 @@ export type BoardId = 'solo' | 'coop';
 /** 순위표의 한 줄. 서버가 판이 끝날 때 직접 기록한 것만 있다 (클라이언트가 점수를 올리는 통로는 없다). */
 export interface LeaderboardEntry {
   rank: number;
-  /** 함께 한 사람들의 닉네임 (솔로는 1명) */
+  /** 함께 한 사람들의 닉네임 (솔로는 1명). 기여도(개인 처치 수)가 큰 사람부터 */
   names: string[];
+  /** names 와 같은 순서의 개인별 처치 수 (기여도). 이 값을 남기기 전의 기록에는 없다 */
+  killsBy?: number[];
   /** 생존 시간(초) */
   time: number;
   kills: number;
@@ -65,10 +67,10 @@ export interface LeaderboardResponse {
 
 /**
  * 끝난 판에 순위가 없는 이유.
- * short: 너무 짧은 판 / late: 도중에 합류했거나 관전한 사람 / outside: 순위표 밖 /
+ * watched: 캐릭터 없이 관전만 한 사람 / short: 너무 짧은 판 / late: 도중에 합류한 사람 / outside: 순위표 밖 /
  * pending: 저장된 기록을 아직 불러오지 못해 순위를 말할 수 없다 (기록 자체는 남는다)
  */
-export type UnrankedReason = 'short' | 'late' | 'outside' | 'pending';
+export type UnrankedReason = 'watched' | 'short' | 'late' | 'outside' | 'pending';
 
 export interface Snapshot {
   t: 'snap';

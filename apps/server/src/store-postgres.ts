@@ -51,6 +51,9 @@ const SCHEMA = [
     paused_seconds integer NOT NULL,
     ended_at       bigint  NOT NULL
   )`,
+  // 개인별 처치 수(기여도). names 와 같은 순서. 나중에 추가한 열이라 예전 기록에는 NULL 이다.
+  // 이미 있는 테이블에도 한 번만 더해지고(IF NOT EXISTS), 기존 행은 건드리지 않는다.
+  `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_kills integer[]`,
   // 상위 N 조회와 정리 쿼리가 그대로 이 인덱스를 따라 읽는다
   `CREATE INDEX IF NOT EXISTS leaderboard_runs_top
     ON leaderboard_runs (board, season, time DESC, kills DESC, level DESC, ended_at ASC, (id COLLATE "C") ASC)`,
@@ -61,6 +64,7 @@ interface Row {
   board: string;
   season: number;
   names: string[];
+  member_kills: number[] | null;
   time: number;
   kills: number;
   level: number;
@@ -114,7 +118,7 @@ class PostgresStore implements LeaderboardStore {
       const n = Math.max(0, Math.floor(limit));
       const res = await this.tx((client) =>
         client.query<Row>(
-          `SELECT id, board, season, names, time, kills, level, paused_seconds, ended_at
+          `SELECT id, board, season, names, member_kills, time, kills, level, paused_seconds, ended_at
              FROM leaderboard_runs WHERE board = $1 AND season = $2
             ORDER BY ${ORDER} LIMIT $3`,
           [board, season, n],
@@ -125,6 +129,8 @@ class PostgresStore implements LeaderboardStore {
         board: r.board as BoardId,
         season: r.season,
         names: r.names,
+        // 이름과 개수가 맞을 때만 쓴다 (예전 기록은 NULL)
+        ...(Array.isArray(r.member_kills) && r.member_kills.length === r.names.length ? { killsBy: r.member_kills } : {}),
         time: r.time,
         kills: r.kills,
         level: r.level,
@@ -139,10 +145,10 @@ class PostgresStore implements LeaderboardStore {
       await this.ensureSchema();
       await this.tx((client) =>
         client.query(
-          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at, member_kills)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (id) DO NOTHING`,
-          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt],
+          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt, r.killsBy ?? null],
         ),
       );
     });
