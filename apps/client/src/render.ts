@@ -80,6 +80,8 @@ export class Renderer {
   private calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   private names = new Map<number, string>();
   private idleCam = 0;
+  /** 관전 중일 때 유령이 바라보는 방향 (마지막으로 움직인 좌우) */
+  private ghostFace: 'l' | 'r' = 'r';
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -168,8 +170,8 @@ export class Renderer {
 
   /** 화면에 보이는 스냅샷이 바뀌는 순간, 사라진 것들에 이펙트를 붙인다 (보이는 시점과 이펙트 시점을 맞춘다) */
   private onShown(prev: Snapshot, next: Snapshot, now: number): void {
-    const me = next.p.find((p) => p[0] === next.me.id);
-    if (!me) return;
+    // 화면의 중심 (내 캐릭터 또는 관전 시점)
+    const [vx, vy] = next.view;
     // 방금 맞은 적: 번쩍임 + 밀려남 + 작은 불꽃. 월드가 멈춰 같은 틱이 다시 올 때는 되풀이하지 않는다.
     if (next.tick !== prev.tick) {
       for (const e of next.e) {
@@ -181,7 +183,7 @@ export class Renderer {
     }
     const alive = this.indexOf(next).e;
     for (const e of prev.e) {
-      if (alive.has(e[0]) || Math.hypot(e[2]! - me[1], e[3]! - me[2]) > 280) continue;
+      if (alive.has(e[0]) || Math.hypot(e[2]! - vx, e[3]! - vy) > 280) continue;
       const boss = ENEMY_IDS[e[1]!] === 'legacy_code';
       this.burst(e[2]!, e[3]!, boss ? 40 : 6, boss ? 90 : 50, ['#f38ba8', '#f9e2af']);
     }
@@ -219,11 +221,9 @@ export class Renderer {
     const was = this.indexOf(prev);
     const mix = (a: number | undefined, b: number): number => (a === undefined ? b : a + (b - a) * alpha);
 
-    // 카메라 = 보간된 내 위치
-    const me = curr.p.find((p) => p[0] === curr.me.id);
-    const meWas = me && was.p.get(me[0]);
-    const cx = me ? mix(meWas?.[1], me[1]) : 0;
-    const cy = me ? mix(meWas?.[2], me[2]) : 0;
+    // 카메라 = 보간된 시점 (살아 있으면 내 캐릭터 위치, 관전 중이면 서버가 계산한 관전 시점)
+    const cx = mix(prev.view[0], curr.view[0]);
+    const cy = mix(prev.view[1], curr.view[1]);
     const camX = cameraPx(cx, S);
     const camY = cameraPx(cy, S);
     const sx = (x: number): number => toScreen(x, camX, hx, S);
@@ -325,6 +325,16 @@ export class Renderer {
       if (!spr) continue;
       const p = was.s.get(s[0]);
       blit(spr, mix(p?.[2], s[2]), mix(p?.[3], s[3]));
+    }
+
+    // 관전 중인 나: 시점 자리에 반투명한 유령으로 그린다 (내 화면에만 보인다. 다른 사람에게는 보내지 않는다)
+    if (!curr.me.alive) {
+      const drift = curr.view[0] - prev.view[0];
+      if (Math.abs(drift) > 0.05) this.ghostFace = drift < 0 ? 'l' : 'r';
+      const moving = Math.abs(drift) + Math.abs(curr.view[1] - prev.view[1]) > 0.2;
+      ctx.globalAlpha = 0.45;
+      blit(this.spr.dev[this.ghostFace][moving && Math.floor(now / 140) % 2 ? 1 : 0], cx, cy + (this.calm ? 0 : Math.sin(now / 320) * 1.5));
+      ctx.globalAlpha = 1;
     }
 
     // 내 이름을 맨 위에 (동료와 겹칠 때 내 이름이 읽히도록 마지막에 그린다)

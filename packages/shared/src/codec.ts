@@ -111,9 +111,8 @@ const MAX_LIST = 4096;
 
 export function encodeSnapshot(s: Snapshot): Uint8Array {
   const w = new Writer();
-  const me = s.p.find((p) => p[0] === s.me.id);
-  const ox = me ? me[1] : 0;
-  const oy = me ? me[2] : 0;
+  // 기준점 = 보고 있는 영역의 중심. 주변 엔티티는 이 점에서의 상대 좌표로 보낸다 (관전 시점이 묘비에서 멀어져도 범위를 넘지 않는다)
+  const [ox, oy] = s.view;
   w.u8(VERSION);
   w.u8((s.paused ? 1 : 0) | (s.me.alive ? 2 : 0));
   w.varuint(s.tick);
@@ -204,7 +203,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   };
   const abs = (o: number): number => o + r.i16() / Q;
 
-  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, me, p: [], e: [], s: [], g: [], h: [] };
+  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], me, p: [], e: [], s: [], g: [], h: [] };
   const players = r.u8();
   for (let i = 0; i < players; i++) {
     const id = r.varuint();

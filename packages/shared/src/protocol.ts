@@ -77,6 +77,11 @@ export interface Snapshot {
   time: number;
   /** 월드 정지 여부 (레벨업 선택 대기 또는 솔로 일시정지) */
   paused: boolean;
+  /**
+   * 이 스냅샷이 보여주는 영역의 중심 [x, y]: 살아 있으면 내 캐릭터 위치, 관전 중이면 서버가 계산한 관전 시점.
+   * 화면(카메라)과 미니맵은 이 값을 중심으로 그린다.
+   */
+  view: [number, number];
   me: {
     id: number;
     hp: number;
@@ -88,7 +93,10 @@ export interface Snapshot {
     alive: boolean;
     up: Partial<Record<UpgradeId, number>>;
   };
-  /** [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다) */
+  /**
+   * [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다).
+   * alive 가 0 이면 그 자리에 묘비가 있다. 관전으로 합류해 몸이 없는 사람은 들어 있지 않다 (나 자신이라도).
+   */
   p: [number, number, number, number, number, number, number][];
   /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1)] */
   e: [number, number, number, number, number][];

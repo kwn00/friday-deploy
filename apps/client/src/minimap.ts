@@ -29,10 +29,10 @@ export class Minimap {
     const c = px / 2;
     const k = px / (VIEW_RADIUS * 2);
     const u = Math.max(2, Math.round(px / 46)); // 점 하나의 기본 크기
-    const me = snap.p.find((p) => p[0] === snap.me.id);
-    if (!me) return;
-    const mx = (x: number): number => Math.round(c + (x - me[1]) * k);
-    const my = (y: number): number => Math.round(c + (y - me[2]) * k);
+    // 중심 = 화면의 중심 (내 캐릭터 또는 관전 시점)
+    const [vx, vy] = snap.view;
+    const mx = (x: number): number => Math.round(c + (x - vx) * k);
+    const my = (y: number): number => Math.round(c + (y - vy) * k);
     const dot = (x: number, y: number, size: number, color: string): void => {
       ctx.fillStyle = color;
       ctx.fillRect(x - (size >> 1), y - (size >> 1), size, size);
@@ -75,7 +75,8 @@ export class Minimap {
     // 동료: 범위를 벗어나면 가장자리에 붙여서 방향을 알려준다
     const edge = u * 2;
     for (const p of snap.p) {
-      if (p[0] === snap.me.id) continue;
+      // 살아 있는 나는 가운데 점으로 그린다. 쓰러진 뒤에는 내 묘비도 다른 묘비처럼 표시한다 (관전 시점이 묘비를 떠나므로)
+      if (p[0] === snap.me.id && p[4]) continue;
       const x = Math.min(px - edge, Math.max(edge, mx(p[1])));
       const y = Math.min(px - edge, Math.max(edge, my(p[2])));
       dot(x, y, u * 2 + 2, '#11111b');

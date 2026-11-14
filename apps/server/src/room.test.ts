@@ -387,3 +387,72 @@ test('리더보드: 일시정지한 시간은 기록에 남고, 기록 함수가
   assert.equal(over.place, undefined);
   assert.deepEqual(a.ws.closed, [1000, 'over']);
 });
+
+test('페어: 진행 중인 판에서 나갔다 다시 들어오면 살아 있었더라도 관전으로 들어온다 (나갔다 들어와 체력을 채울 수 없다)', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  room.onStart(a.conn);
+  advance(1000);
+  // 아무도 쓰러지지 않은 동안 처음 들어온 사람은 살아서 합류한다
+  const fresh = join(room, 'fresh');
+  assert.equal(room.world.players.get(fresh.conn.pid)!.alive, true);
+
+  // b 가 체력이 줄어든 채로 나갔다 들어온다
+  room.world.players.get(b.conn.pid)!.hp = 7;
+  room.leave(b.conn);
+  const again = join(room, 'b');
+  const pb = room.world.players.get(again.conn.pid)!;
+  assert.deepEqual([pb.alive, pb.body, pb.hp], [false, false, 0]);
+  // 그 뒤에 들어오는 사람은 누구든 이번 판을 관전한다 (서버는 "아까 그 사람"인지 알 수 없다)
+  const other = join(room, 'someone-else');
+  assert.equal(room.world.players.get(other.conn.pid)!.alive, false);
+
+  advance(500);
+  const snap = again.ws.snaps.at(-1)!;
+  assert.equal(snap.me.alive, false);
+  assert.deepEqual(snap.p.map((row) => row[0]).sort(), [a.conn.pid, fresh.conn.pid].sort(), '관전자는 그려지지 않는다');
+  const pa = room.world.players.get(a.conn.pid)!;
+  assert.ok(Math.hypot(snap.view[0] - pa.x, snap.view[1] - pa.y) < 400, '살아 있는 사람 근처를 본다');
+
+  // 관전자의 입력은 시점만 움직인다
+  const x0 = snap.view[0];
+  room.onInput(again.conn, 1, 1, 0);
+  advance(500);
+  assert.ok(again.ws.snaps.at(-1)!.view[0] > x0 + 40, `${x0} → ${again.ws.snaps.at(-1)!.view[0]}`);
+  assert.deepEqual([pa.alive, room.world.players.get(fresh.conn.pid)!.alive], [true, true]);
+
+  // 판이 끝나면 같은 방에서 모두 살아서 다시 시작한다
+  for (const c of [a.conn, fresh.conn]) down(room, c);
+  advance(100);
+  assert.ok(last(again.ws, 'over'), '관전자도 결과를 받는다');
+  room.onStart(a.conn);
+  advance(200);
+  for (const p of room.world.players.values()) assert.deepEqual([p.alive, p.body], [true, true]);
+});
+
+test('페어: 쓰러진 사람은 관전하며 시점을 움직일 수 있고, 다른 사람에게는 묘비만 보인다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  room.onStart(a.conn);
+  advance(500);
+  const pb = room.world.players.get(b.conn.pid)!;
+  const grave = [pb.x, pb.y];
+  down(room, b.conn);
+  advance(100);
+  const x0 = b.ws.snaps.at(-1)!.view[0];
+  let seq = 1;
+  for (let i = 0; i < 20; i++) {
+    room.world.players.get(a.conn.pid)!.hp = 1e9;
+    room.onInput(b.conn, seq++, 1, 0);
+    advance(50);
+  }
+  const mine = b.ws.snaps.at(-1)!;
+  assert.ok(mine.view[0] > x0 + 100, `시점이 움직였다: ${x0} → ${mine.view[0]}`);
+  assert.equal(mine.me.alive, false);
+  const seen = a.ws.snaps.at(-1)!.p.find((row) => row[0] === b.conn.pid)!;
+  assert.ok(Math.abs(seen[1] - grave[0]!) < 0.11 && Math.abs(seen[2] - grave[1]!) < 0.11 && seen[4] === 0, '동료에게는 쓰러진 자리의 묘비로 보인다');
+});

@@ -24,6 +24,9 @@ import {
   PLAYER_BASE_PICKUP,
   PLAYER_BASE_SPEED,
   PLAYER_RADIUS,
+  SPECTATOR_LEASH,
+  SPECTATOR_PULL,
+  SPECTATOR_SPEED,
   VIEW_RADIUS,
 } from './constants';
 import {
@@ -59,6 +62,17 @@ export interface Player {
   xpNext: number;
   kills: number;
   alive: boolean;
+  /**
+   * 월드에 몸이 있는지: 살아 있는 캐릭터이거나, 이번 판에서 쓰러져 묘비가 남아 있다.
+   * 관전으로 합류한 사람은 false 이고 누구의 화면에도 그려지지 않는다.
+   */
+  body: boolean;
+  /**
+   * 이 플레이어가 보고 있는 곳(스냅샷의 관심 영역 중심). 살아 있는 동안에는 캐릭터 위치와 같고,
+   * 쓰러진 뒤(또는 관전 중)에는 입력으로 움직이는 관전 시점이다. 서버가 계산한다.
+   */
+  camX: number;
+  camY: number;
   up: Partial<Record<UpgradeId, number>>;
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
@@ -183,27 +197,36 @@ const dmgMultOf = (p: Player): number => 1 + 0.15 * lv(p, 'stack_overflow');
 const pickupOf = (p: Player): number => PLAYER_BASE_PICKUP * (1 + 0.3 * lv(p, 'npm_install'));
 const xpForLevel = (level: number): number => 3 + level * 3 + Math.floor(level * level * 0.4);
 
-export function addPlayer(world: World, name: string): Player {
+/**
+ * 플레이어를 추가한다.
+ * spectator 가 true 면 캐릭터 없이 관전으로만 들어온다 (이번 판이 끝날 때까지 시점만 움직일 수 있다).
+ */
+export function addPlayer(world: World, name: string, spectator = false): Player {
   const id = world.nextId++;
   // 합류 시 기존 플레이어 근처에 스폰
   const anchor = [...world.players.values()].find((p) => p.alive);
   const a = world.rng() * Math.PI * 2;
+  const x = (anchor?.x ?? 0) + Math.cos(a) * 24;
+  const y = (anchor?.y ?? 0) + Math.sin(a) * 24;
   const p: Player = {
     id,
     name,
-    x: (anchor?.x ?? 0) + Math.cos(a) * 24,
-    y: (anchor?.y ?? 0) + Math.sin(a) * 24,
+    x,
+    y,
     dx: 0,
     dy: 0,
     fx: 1,
     fy: 0,
     face: 1,
-    hp: PLAYER_BASE_HP,
+    hp: spectator ? 0 : PLAYER_BASE_HP,
     level: 1,
     xp: 0,
     xpNext: xpForLevel(1),
     kills: 0,
-    alive: true,
+    alive: !spectator,
+    body: !spectator,
+    camX: x,
+    camY: y,
     up: { console_log: 1 },
     cd: {},
     offers: null,
@@ -467,6 +490,35 @@ export function step(world: World, dt: number): void {
     }
   }
 
+  // 관전 시점: 쓰러졌거나 관전으로 들어온 사람은 입력으로 시점만 움직인다 (몸·묘비는 그대로, 월드에는 영향 없음).
+  // 가장 가까운 살아 있는 동료에게서 SPECTATOR_LEASH 보다 멀어질 수 없다.
+  for (const p of players) {
+    if (p.alive) {
+      p.camX = p.x;
+      p.camY = p.y;
+      continue;
+    }
+    p.camX += p.dx * SPECTATOR_SPEED * dt;
+    p.camY += p.dy * SPECTATOR_SPEED * dt;
+    let best = Infinity;
+    let tx = p.camX;
+    let ty = p.camY;
+    for (const q of alive) {
+      const d2 = (q.x - p.camX) ** 2 + (q.y - p.camY) ** 2;
+      if (d2 < best) {
+        best = d2;
+        tx = q.x;
+        ty = q.y;
+      }
+    }
+    const dist = Math.sqrt(best);
+    if (dist > SPECTATOR_LEASH && Number.isFinite(dist)) {
+      const pull = Math.min(dist - SPECTATOR_LEASH, SPECTATOR_PULL * dt);
+      p.camX += ((tx - p.camX) / dist) * pull;
+      p.camY += ((ty - p.camY) / dist) * pull;
+    }
+  }
+
   spawnEnemies(world, alive, dt);
 
   // 적 이동 + 접촉 피해
@@ -614,12 +666,16 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
   const me = world.players.get(pid);
   if (!me) return null;
   const v2 = VIEW_RADIUS * VIEW_RADIUS;
-  const near = (x: number, y: number): boolean => (x - me.x) ** 2 + (y - me.y) ** 2 <= v2;
+  // 관심 영역의 중심: 살아 있으면 캐릭터, 관전 중이면 관전 시점
+  const cx = me.alive ? me.x : me.camX;
+  const cy = me.alive ? me.y : me.camY;
+  const near = (x: number, y: number): boolean => (x - cx) ** 2 + (y - cy) ** 2 <= v2;
   const snap: Snapshot = {
     t: 'snap',
     tick: world.tick,
     time: r1(world.time),
     paused: world.paused,
+    view: [r1(cx), r1(cy)],
     me: {
       id: me.id,
       hp: Math.ceil(me.hp),
@@ -638,7 +694,9 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
     h: [],
   };
   // 같은 방의 플레이어는 멀리 있어도 보낸다 (아군 위치는 숨길 정보가 아니고, 미니맵에서 서로를 찾을 수 있어야 한다)
+  // 몸이 없는 사람(관전으로 합류)은 보내지 않는다: 그릴 것이 없다
   for (const p of world.players.values()) {
+    if (!p.body) continue;
     snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0]);
   }
   for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0]);

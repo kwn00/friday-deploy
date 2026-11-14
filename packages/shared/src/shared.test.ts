@@ -5,6 +5,8 @@ import {
   DUCK_ORBIT_RADIUS,
   GEM_PULL_MAX,
   PLAYER_BASE_PICKUP,
+  SPECTATOR_LEASH,
+  SPECTATOR_SPEED,
   HEAL_DROP_COOLDOWN,
   HEAL_FRACTION,
   PLAYER_BASE_SPEED,
@@ -451,4 +453,145 @@ test('sim: 끌려오는 경험치의 위치가 스냅샷에 실린다 (화면에
   }
   assert.ok(xs.length >= 3, `${xs.length}`);
   for (let i = 1; i < xs.length; i++) assert.ok(xs[i]! < xs[i - 1]! - 5, `매 틱 눈에 띄게 다가온다: ${xs.join(', ')}`);
+});
+
+/** 플레이어를 쓰러뜨린다 (접촉 피해로 쓰러질 때와 같은 상태) */
+function fell(p: ReturnType<typeof addPlayer>): void {
+  p.alive = false;
+  p.hp = 0;
+  p.dx = 0;
+  p.dy = 0;
+}
+
+test('관전: 쓰러진 사람은 입력으로 시점만 움직인다. 묘비는 제자리에 남고, 보이는 범위는 시점을 따라간다', () => {
+  const w = createWorld(31);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  a.xpNext = b.xpNext = 1e9;
+  a.x = a.y = 0;
+  b.x = 30;
+  b.y = 0;
+  quietStep(w);
+  fell(b);
+  setInput(w, b.id, 1, 0);
+  for (let i = 0; i < 20; i++) quietStep(w); // 1초
+  assert.deepEqual([b.x, b.y], [30, 0], '묘비는 움직이지 않는다');
+  assert.ok(Math.abs(b.camX - (30 + SPECTATOR_SPEED)) < 0.001, `1초에 ${SPECTATOR_SPEED}px (${b.camX})`);
+  assert.equal(b.camY, 0);
+
+  // 시점 근처의 적은 보이고, 묘비 근처지만 시점에서 먼 적은 보이지 않는다
+  w.enemies.push({ id: 7001, type: 'bug', x: b.camX + VIEW_RADIUS - 20, y: 0, hp: 1e9, duckCd: 0, hit: false });
+  w.enemies.push({ id: 7002, type: 'bug', x: b.x - VIEW_RADIUS + 20, y: 0, hp: 1e9, duckCd: 0, hit: false });
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, b.id)!));
+  assert.ok(Math.abs(snap.view[0] - b.camX) < 0.11 && snap.view[1] === 0, `시점이 스냅샷에 실린다 (${snap.view})`);
+  assert.equal(snap.me.alive, false);
+  assert.deepEqual(snap.e.map((e) => e[0]), [7001]);
+  const grave = snap.p.find((row) => row[0] === b.id)!;
+  assert.deepEqual([grave[1], grave[2], grave[4]], [30, 0, 0], '내 묘비는 쓰러진 자리에 그대로 실린다');
+  // 살아 있는 사람의 스냅샷은 전과 같다: 중심은 자기 캐릭터
+  const mine = buildSnapshot(w, a.id)!;
+  assert.deepEqual(mine.view, [a.x, a.y]);
+  assert.deepEqual(mine.e.map((e) => e[0]).sort(), [7002]);
+});
+
+test('관전: 시점은 살아 있는 동료에게서 정해진 거리보다 멀어질 수 없고, 동료가 움직이면 따라 끌려간다', () => {
+  const w = createWorld(32);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  a.xpNext = b.xpNext = 1e9;
+  a.x = a.y = b.y = 0;
+  b.x = 10;
+  fell(b);
+  setInput(w, b.id, 1, 0);
+  let far = 0;
+  for (let i = 0; i < 20 * 8; i++) {
+    quietStep(w);
+    far = Math.max(far, Math.hypot(b.camX - a.x, b.camY - a.y));
+  }
+  assert.ok(far <= SPECTATOR_LEASH + 0.001, `${far}`);
+  assert.ok(far > SPECTATOR_LEASH - 1, '끝까지는 갈 수 있다');
+  // 동료가 반대쪽으로 달아나도 (관전자는 계속 반대로 가려고 해도) 거리는 유지된다
+  setInput(w, a.id, -1, 0);
+  for (let i = 0; i < 20 * 5; i++) {
+    quietStep(w);
+    assert.ok(Math.hypot(b.camX - a.x, b.camY - a.y) <= SPECTATOR_LEASH + 0.001);
+  }
+  // 동료가 둘이면 더 가까운 쪽 기준
+  const c = addPlayer(w, 'c');
+  c.xpNext = 1e9;
+  c.x = b.camX + 50;
+  c.y = 0;
+  setInput(w, a.id, -1, 0);
+  setInput(w, b.id, 0, 0);
+  const at = b.camX;
+  for (let i = 0; i < 20 * 3; i++) quietStep(w);
+  assert.equal(b.camX, at, '가까운 동료(c)가 곁에 있으면 멀어지는 동료(a)에게 끌려가지 않는다');
+});
+
+test('관전: 동료와 멀리 떨어져 쓰러지면 시점이 한 번에 튀지 않고 빠르게 미끄러져 동료 쪽으로 온다', () => {
+  const w = createWorld(33);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  a.xpNext = b.xpNext = 1e9;
+  a.x = a.y = b.y = 0;
+  b.x = 1500;
+  quietStep(w);
+  fell(b);
+  let prev = b.camX;
+  let ticks = 0;
+  while (Math.hypot(b.camX - a.x, b.camY - a.y) > SPECTATOR_LEASH + 0.001 && ticks < 200) {
+    quietStep(w);
+    assert.ok(Math.abs(b.camX - prev) <= 45.001, `한 틱에 ${Math.abs(b.camX - prev)}px`);
+    prev = b.camX;
+    ticks++;
+  }
+  assert.ok(ticks > 5 && ticks <= 30, `${ticks}틱`);
+  assert.equal(b.x, 1500, '묘비는 쓰러진 자리에');
+  // 그동안의 스냅샷도 문제없이 만들어진다 (묘비가 시점에서 1000px 넘게 떨어져 있어도)
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, b.id)!));
+  assert.ok(Math.abs(snap.p.find((row) => row[0] === b.id)![1] - 1500) < 0.01);
+});
+
+test('관전으로 합류한 사람은 몸이 없다: 화면에 그려지지 않고, 적의 표적도 아니고, 아무것도 줍지 못한다', () => {
+  const w = createWorld(34);
+  const a = addPlayer(w, 'a');
+  a.xpNext = 1e9;
+  a.x = a.y = 0;
+  const s = addPlayer(w, 'watcher', true);
+  assert.deepEqual([s.alive, s.body, s.hp], [false, false, 0]);
+  assert.ok(Math.hypot(s.camX - a.x, s.camY - a.y) < 30, '살아 있는 사람 곁에서 보기 시작한다');
+
+  // 관전자 바로 옆에 경험치·회복 아이템·적을 둔다 (살아 있는 a 에게서는 멀리)
+  setInput(w, s.id, 1, 0);
+  for (let i = 0; i < 20 * 2; i++) quietStep(w);
+  const gem: Gem = { id: 8001, x: s.camX + 3, y: s.camY, v: 5 };
+  w.gems.push(gem);
+  w.heals.push({ id: 8002, x: s.camX, y: s.camY + 3 });
+  // 적은 관전자와 a 사이에 둔다: a 에게 가면 관전자에게서는 멀어진다
+  w.enemies.push({ id: 8003, type: 'bug', x: s.camX - 60, y: s.camY, hp: 1e9, duckCd: 0, hit: false });
+  const gemAt = gem.x;
+  const toWatcher = 60;
+  const toPlayer = Math.hypot(s.camX - 60 - a.x, s.camY - a.y);
+  setInput(w, s.id, 0, 0);
+  for (let i = 0; i < 10; i++) {
+    w.shots.length = 0;
+    step(w, DT);
+  }
+  assert.deepEqual([gem.x, gem.to, s.xp], [gemAt, undefined, 0], '관전자 곁의 경험치는 끌려가지 않는다');
+  assert.equal(w.gems.length, 1);
+  assert.equal(w.heals.length, 1, '회복 아이템도 줍지 못한다');
+  const bug = w.enemies.find((e) => e.id === 8003)!;
+  assert.ok(Math.hypot(bug.x - a.x, bug.y - a.y) < toPlayer - 3, '적은 살아 있는 사람에게 간다');
+  assert.ok(Math.hypot(bug.x - s.camX, bug.y - s.camY) > toWatcher, '관전자를 쫓지 않는다');
+
+  // 누구의 스냅샷에도 관전자의 줄이 없다 (본인 것에도). 관전자의 스냅샷은 시점 주변을 보여준다.
+  for (const viewer of [a, s]) assert.deepEqual(buildSnapshot(w, viewer.id)!.p.map((row) => row[0]), [a.id]);
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, s.id)!));
+  assert.equal(snap.me.alive, false);
+  assert.ok(snap.e.some((e) => e[0] === 8003));
+
+  // 살아 있는 사람이 모두 쓰러지면 관전자가 남아 있어도 판이 끝난다
+  fell(a);
+  step(w, DT);
+  assert.equal(w.over, true);
 });

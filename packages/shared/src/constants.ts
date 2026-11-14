@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -34,6 +34,16 @@ export const PLAYER_RADIUS = 6;
 export const PLAYER_BASE_SPEED = 70;
 export const PLAYER_BASE_HP = 100;
 export const PLAYER_BASE_PICKUP = 36;
+
+/**
+ * 관전(페어 방에서 쓰러졌거나, 관전으로 합류한 경우): 입력으로 시점만 움직인다. 월드에는 아무 영향이 없다.
+ * 살아 있는 캐릭터(최고 98px/s)보다 빨라서 동료를 따라다닐 수 있다.
+ */
+export const SPECTATOR_SPEED = 160;
+/** 관전 시점은 가장 가까운 살아 있는 동료에게서 이 거리보다 멀어질 수 없다 (길을 잃지 않게, 먼 곳을 정찰하는 용도로 쓰지 못하게) */
+export const SPECTATOR_LEASH = 360;
+/** 그 거리를 넘었을 때(동료가 멀리서 쓰러진 경우 등) 시점을 끌어오는 속도 (px/s). 한 번에 튀지 않고 빠르게 미끄러져 온다 */
+export const SPECTATOR_PULL = 900;
 
 /**
  * 경험치(커밋)는 획득 범위 안에 들어오면 그 플레이어에게 끌려가고, 닿으면 획득된다.

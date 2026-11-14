@@ -68,8 +68,12 @@ export class Room {
   private pauseLimit = 0;
   /** 이번 판에서 이미 쓴 일시정지 시간 (ms) */
   private pauseUsed = 0;
-  /** 이번 판에서 누군가 쓰러진 적이 있는지. 있으면 이후에 들어오는 사람은 다음 판까지 관전한다. */
-  private casualty = false;
+  /**
+   * 이번 판에서 누군가 쓰러졌거나 나간 적이 있는지. 있으면 이후에 들어오는 사람은 다음 판까지 관전한다.
+   * 계정이 없어서 "아까 그 사람"인지 서버가 확인할 방법이 없다. 그래서 사람을 가리지 않고 막는다:
+   * 쓰러진 사람이 나갔다 들어와 새 캐릭터로 살아나거나, 체력이 줄었을 때 나갔다 들어와 가득 채우는 것을 할 수 없다.
+   */
+  private sealed = false;
   /**
    * 이번 판이 진행되는 동안 동시에 있었던 최대 인원. 2 이상이면 함께 한 판(coop 순위표)으로 기록한다.
    * 대기실에만 있다가 나간 사람은 세지 않는다 (판이 시작될 때부터 센다).
@@ -104,13 +108,8 @@ export class Room {
   }
 
   join(ws: WebSocket, sid: string, name: string): Conn {
-    const p = addPlayer(this.world, name);
-    // 누군가 쓰러진 뒤에 들어오면 이번 판은 관전만 한다. 그렇지 않으면 쓰러진 사람이 나갔다 다시 들어와
-    // 새 캐릭터로 살아나는 것을 반복해 판을 끝없이 이어갈 수 있다.
-    if (this.started && this.casualty) {
-      p.alive = false;
-      p.hp = 0;
-    }
+    // 누군가 쓰러졌거나 나간 뒤에 들어오면 이번 판은 관전만 한다 (캐릭터 없이 시점만 움직인다).
+    const p = addPlayer(this.world, name, this.started && this.sealed);
     const conn: Conn = { ws, sid, name: p.name, pid: p.id, lastSeq: -1, joinedAt: this.world.time };
     this.conns.set(p.id, conn);
     if (this.started) this.peak = Math.max(this.peak, this.conns.size);
@@ -123,6 +122,8 @@ export class Room {
 
   leave(conn: Conn): void {
     if (!this.conns.delete(conn.pid)) return;
+    // 진행 중인 판에서 나가면, 그 뒤로 들어오는 사람은(나갔던 본인 포함) 이번 판을 관전한다
+    if (this.started) this.sealed = true;
     removePlayer(this.world, conn.pid);
     if (this.conns.size === 0) return this.close();
     // 방장이 나가면 가장 먼저 들어온 사람이 이어받는다 (대기실이 영영 시작되지 않는 일을 막는다)
@@ -212,7 +213,7 @@ export class Room {
     if (now - this.lastActivity > ROOM_IDLE_MS) return this.kick('idle');
 
     step(this.world, DT);
-    if (!this.casualty) for (const p of this.world.players.values()) if (!p.alive) this.casualty = true;
+    if (!this.sealed) for (const p of this.world.players.values()) if (!p.alive) this.sealed = true;
     if (this.flushEvents()) return;
     for (const conn of this.conns.values()) this.sendSnapshot(conn);
   }
@@ -315,7 +316,7 @@ export class Room {
     const host = this.conns.get(this.hostPid) ?? members[0];
     this.world = newWorld();
     this.started = false;
-    this.casualty = false;
+    this.sealed = false;
     this.pauseUsed = 0;
     this.peak = 0;
     this.lastActivity = Date.now();
