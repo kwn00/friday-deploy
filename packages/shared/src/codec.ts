@@ -12,7 +12,7 @@ import { DT } from './constants';
 import { UPGRADE_IDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 1;
+const VERSION = 2;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 
@@ -145,7 +145,8 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
   for (const e of s.e) {
     w.varint(e[0] - prev);
     prev = e[0];
-    w.u8(e[1]);
+    // 종류(하위 7비트) + 피격 표시(최상위 비트): 피격 이펙트를 위해 바이트를 더 쓰지 않는다
+    w.u8((e[1] & 0x7f) | (e[4] ? 0x80 : 0));
     w.i16(rel(e[2], ox));
     w.i16(rel(e[3], oy));
   }
@@ -216,7 +217,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   for (let i = count(); i > 0; i--) {
     id += r.varint();
     const type = r.u8();
-    snap.e.push([id, type, abs(ox), abs(oy)]);
+    snap.e.push([id, type & 0x7f, abs(ox), abs(oy), type >> 7]);
   }
   id = 0;
   for (let i = count(); i > 0; i--) {

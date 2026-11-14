@@ -125,7 +125,7 @@ test('normalizeRoomCode: 사람이 친 코드를 정리하고, 형식이 다르�
 test('sim: 회복 아이템은 보스에게서 반드시 나오고, 체력이 가득이면 줍지 않는다', () => {
   const w = createWorld(7);
   const p = addPlayer(w, 'a');
-  w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, duckCd: 0 });
+  w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, duckCd: 0, hit: false });
   w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set() });
   step(w, DT);
   assert.equal(w.heals.length, 1, '보스 처치 → 회복 아이템');
@@ -216,7 +216,7 @@ test('sim: 같은 방 동료는 멀리 있어도 스냅샷에 있고, 멀리 있
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
   b.x = a.x + VIEW_RADIUS * 3;
-  w.enemies.push({ id: 7001, type: 'bug', x: b.x + 10, y: b.y, hp: 1e9, duckCd: 0 });
+  w.enemies.push({ id: 7001, type: 'bug', x: b.x + 10, y: b.y, hp: 1e9, duckCd: 0, hit: false });
   w.heals.push({ id: 7002, x: b.x + 10, y: b.y });
   const snap = buildSnapshot(w, a.id)!;
   assert.deepEqual(snap.p.map((r) => r[0]).sort(), [a.id, b.id].sort());
@@ -256,7 +256,7 @@ test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (
         assert.equal(got.length, list.length, k);
         list.forEach((row: number[], n: number) => {
           row.forEach((v, c) => {
-            const isCoord = k === 'p' ? c === 1 || c === 2 : c >= row.length - 2;
+            const isCoord = k === 'e' || k === 's' ? c === 2 || c === 3 : c === 1 || c === 2;
             if (isCoord) assert.ok(Math.abs(got[n]![c]! - v) <= 1 / 16 + 0.02, `${k}[${n}][${c}] ${got[n]![c]} vs ${v}`);
             else assert.equal(got[n]![c], v, `${k}[${n}][${c}]`);
           });
@@ -292,4 +292,28 @@ test('codec: 손상된 데이터는 예외로 끝난다 (멈추거나 거대한 
       assert.ok(err instanceof RangeError, String(err));
     }
   }
+});
+
+test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시가 붙는다 (체력은 여전히 보내지 않는다)', () => {
+  const w = createWorld(31);
+  const p = addPlayer(w, 'a');
+  p.cd.console_log = 1e9; // 자동 공격이 끼어들지 않게
+  w.enemies.push({ id: 5001, type: 'merge_conflict', x: p.x + 150, y: p.y, hp: 80, duckCd: 0, hit: false });
+  w.enemies.push({ id: 5002, type: 'bug', x: p.x - 150, y: p.y, hp: 10, duckCd: 0, hit: false });
+  const row = (id: number): number[] | undefined => buildSnapshot(w, p.id)!.e.find((e) => e[0] === id);
+  step(w, DT);
+  assert.equal(row(5001)![4], 0);
+  assert.equal(row(5001)!.length, 5, '[id, 종류, x, y, 피격] 뿐: 체력은 없다');
+
+  const tank = w.enemies.find((e) => e.id === 5001)!;
+  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set() });
+  step(w, DT);
+  assert.equal(row(5001)![4], 1, '맞은 틱');
+  assert.equal(row(5002)![4], 0, '안 맞은 적');
+  // 이진 인코딩을 거쳐도 표시와 종류가 그대로다
+  const back = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  assert.deepEqual(back.e.find((e) => e[0] === 5001)!.slice(0, 2).concat(back.e.find((e) => e[0] === 5001)![4]), [5001, 2, 1]);
+  assert.deepEqual(back.e.find((e) => e[0] === 5002)!.slice(0, 2).concat(back.e.find((e) => e[0] === 5002)![4]), [5002, 0, 0]);
+  step(w, DT);
+  assert.equal(row(5001)![4], 0, '다음 틱에는 사라진다');
 });

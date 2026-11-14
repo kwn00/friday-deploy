@@ -78,6 +78,8 @@ export interface Enemy {
   y: number;
   hp: number;
   duckCd: number;
+  /** 이번 틱에 피해를 입고 살아남았는지. 클라이언트가 피격 이펙트를 그리는 데만 쓴다 (체력은 보내지 않는다) */
+  hit: boolean;
 }
 
 export interface Shot {
@@ -278,6 +280,7 @@ function fire(world: World, p: Player, kind: ShotKind, ang: number, speed: numbe
 function damage(world: World, e: Enemy, dmg: number, by: Player | undefined): void {
   if (e.hp <= 0) return;
   e.hp -= dmg;
+  e.hit = true;
   if (e.hp <= 0) {
     if (by) by.kills++;
     if (world.gems.length >= MAX_GEMS) world.gems.shift();
@@ -368,6 +371,7 @@ function spawnEnemies(world: World, alive: Player[], dt: number): void {
       y: anchor.y + Math.sin(a) * d,
       hp: ENEMIES[type].hp * hpScale,
       duckCd: 0,
+      hit: false,
     });
   };
   if (world.time >= world.nextBossAt) {
@@ -443,6 +447,7 @@ export function step(world: World, dt: number): void {
   for (const e of world.enemies) {
     const def = ENEMIES[e.type];
     e.duckCd -= dt;
+    e.hit = false;
     let target: Player | null = null;
     let best = Infinity;
     for (const p of active) {
@@ -578,7 +583,7 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
   for (const p of world.players.values()) {
     snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0]);
   }
-  for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y)]);
+  for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0]);
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
   for (const g of world.gems) if (near(g.x, g.y)) snap.g.push([g.id, Math.round(g.x), Math.round(g.y)]);
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);

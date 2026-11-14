@@ -168,9 +168,24 @@ const SPR = {
   ],
 } satisfies Record<string, string[]>;
 
+/** 같은 모양을 흰색 한 가지로 칠한 복사본 (피격 순간에 번쩍이는 용도) */
+function whiten(src: Sprite): Sprite {
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(src, 0, 0);
+  ctx.globalCompositeOperation = 'source-in';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
 export interface SpriteSet {
   dev: { r: [Sprite, Sprite]; l: [Sprite, Sprite] };
   enemy: Record<EnemyId, Sprite>;
+  /** 피격 순간의 흰색 실루엣 */
+  enemyHit: Record<EnemyId, Sprite>;
   duck: Sprite;
   commit: Sprite;
   shots: [Sprite, Sprite, Sprite];
@@ -181,14 +196,22 @@ export interface SpriteSet {
 export function loadSprites(): SpriteSet {
   const a = bake(DEV_A);
   const b = bake(DEV_B);
+  const enemy: Record<EnemyId, Sprite> = {
+    bug: bake(SPR.bug),
+    null_ptr: bake(SPR.null_ptr),
+    merge_conflict: bake(SPR.merge_conflict),
+    mem_leak: bake(SPR.mem_leak),
+    legacy_code: bake(SPR.legacy_code),
+  };
   return {
     dev: { r: [a, b], l: [flip(a), flip(b)] },
-    enemy: {
-      bug: bake(SPR.bug),
-      null_ptr: bake(SPR.null_ptr),
-      merge_conflict: bake(SPR.merge_conflict),
-      mem_leak: bake(SPR.mem_leak),
-      legacy_code: bake(SPR.legacy_code),
+    enemy,
+    enemyHit: {
+      bug: whiten(enemy.bug),
+      null_ptr: whiten(enemy.null_ptr),
+      merge_conflict: whiten(enemy.merge_conflict),
+      mem_leak: whiten(enemy.mem_leak),
+      legacy_code: whiten(enemy.legacy_code),
     },
     duck: bake(SPR.duck),
     commit: bake(SPR.commit),
@@ -212,15 +235,17 @@ export function upscale(src: Sprite, k: number): Sprite {
 /** 스프라이트 세트 전체를 현재 화면 배율로 미리 키워 둔다. 그리는 순간에는 1:1 복사만 하면 된다. */
 export function scaleSprites(set: SpriteSet, k: number): SpriteSet {
   const up = (s: Sprite): Sprite => upscale(s, k);
+  const each = (m: Record<EnemyId, Sprite>): Record<EnemyId, Sprite> => ({
+    bug: up(m.bug),
+    null_ptr: up(m.null_ptr),
+    merge_conflict: up(m.merge_conflict),
+    mem_leak: up(m.mem_leak),
+    legacy_code: up(m.legacy_code),
+  });
   return {
     dev: { r: [up(set.dev.r[0]), up(set.dev.r[1])], l: [up(set.dev.l[0]), up(set.dev.l[1])] },
-    enemy: {
-      bug: up(set.enemy.bug),
-      null_ptr: up(set.enemy.null_ptr),
-      merge_conflict: up(set.enemy.merge_conflict),
-      mem_leak: up(set.enemy.mem_leak),
-      legacy_code: up(set.enemy.legacy_code),
-    },
+    enemy: each(set.enemy),
+    enemyHit: each(set.enemyHit),
     duck: up(set.duck),
     commit: up(set.commit),
     shots: [up(set.shots[0]), up(set.shots[1]), up(set.shots[2])],

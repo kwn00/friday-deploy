@@ -11,7 +11,16 @@ interface Particle {
   vy: number;
   life: number;
   color: string;
+  /** 한 변의 크기 (논리 픽셀) */
+  size: number;
 }
+
+/** 피격 이펙트 길이(ms): 앞부분은 흰색으로 번쩍이고, 전체 동안 살짝 밀려났다 돌아온다 */
+const HIT_MS = 150;
+const HIT_FLASH_MS = 70;
+/** 밀려나는 거리 (논리 픽셀). 화면 표현일 뿐이고 서버의 적 위치는 바뀌지 않는다 */
+const HIT_RECOIL = 4;
+const MAX_PARTICLES = 500;
 
 type Row = number[];
 interface Index {
@@ -53,6 +62,9 @@ export class Renderer {
   private index = new WeakMap<Snapshot, Index>();
   private shown: Snapshot | null = null;
   private particles: Particle[] = [];
+  /** 적 id → 맞은 시각(ms). 피격 이펙트 진행 중인 적들 */
+  private hits = new Map<number, number>();
+  private calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   private names = new Map<number, string>();
   private idleCam = 0;
 
@@ -97,6 +109,7 @@ export class Renderer {
     this.sample = null;
     this.shown = null;
     this.particles = [];
+    this.hits.clear();
   }
 
   push(snap: Snapshot): void {
@@ -122,18 +135,28 @@ export class Renderer {
     return s;
   }
 
-  private burst(x: number, y: number, n: number, speed: number, colors: [string, string]): void {
+  private burst(x: number, y: number, n: number, speed: number, colors: [string, string], size = 2, life = 0.35): void {
+    if (this.particles.length > MAX_PARTICLES) return;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const s = 20 + Math.random() * speed;
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.35 + Math.random() * 0.3, color: colors[i % 2]! });
+      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: life + Math.random() * life, color: colors[i % 2]!, size });
     }
   }
 
   /** 화면에 보이는 스냅샷이 바뀌는 순간, 사라진 것들에 이펙트를 붙인다 (보이는 시점과 이펙트 시점을 맞춘다) */
-  private onShown(prev: Snapshot, next: Snapshot): void {
+  private onShown(prev: Snapshot, next: Snapshot, now: number): void {
     const me = next.p.find((p) => p[0] === next.me.id);
     if (!me) return;
+    // 방금 맞은 적: 번쩍임 + 밀려남 + 작은 불꽃. 월드가 멈춰 같은 틱이 다시 올 때는 되풀이하지 않는다.
+    if (next.tick !== prev.tick) {
+      for (const e of next.e) {
+        if (!e[4]) continue;
+        this.hits.set(e[0], now);
+        if (!this.calm) this.burst(e[2], e[3], 3, 45, ['#ffffff', '#f9e2af'], 1, 0.1);
+      }
+      if (this.hits.size > 256) for (const [id, at] of this.hits) if (now - at > HIT_MS) this.hits.delete(id);
+    }
     const alive = this.indexOf(next).e;
     for (const e of prev.e) {
       if (alive.has(e[0]) || Math.hypot(e[2]! - me[1], e[3]! - me[2]) > 280) continue;
@@ -160,7 +183,7 @@ export class Renderer {
       return;
     }
     const { prev, curr, alpha } = sample;
-    if (this.shown && this.shown !== curr) this.onShown(this.shown, curr);
+    if (this.shown && this.shown !== curr) this.onShown(this.shown, curr, now);
     this.shown = curr;
 
     const was = this.indexOf(prev);
@@ -194,7 +217,37 @@ export class Renderer {
       if (!id) continue;
       const p = was.e.get(e[0]);
       const wob = id === 'null_ptr' ? Math.sin(now / 250 + e[0]) * 2 : 0;
-      blit(this.spr.enemy[id], mix(p?.[2], e[2]), mix(p?.[3], e[3]) + wob);
+      let ex = mix(p?.[2], e[2]);
+      let ey = mix(p?.[3], e[3]) + wob;
+      let sprite = this.spr.enemy[id];
+      const hitAt = this.hits.get(e[0]);
+      if (hitAt !== undefined) {
+        const age = now - hitAt;
+        if (age >= HIT_MS) {
+          this.hits.delete(e[0]);
+        } else {
+          if (age < HIT_FLASH_MS) sprite = this.spr.enemyHit[id];
+          if (!this.calm) {
+            // 가장 가까운 플레이어의 반대쪽으로 튕겼다가 돌아온다 (공격은 모두 플레이어에게서 나온다)
+            let ax = cx;
+            let ay = cy;
+            let best = Infinity;
+            for (const q of curr.p) {
+              const d = (q[1] - ex) ** 2 + (q[2] - ey) ** 2;
+              if (q[4] && d < best) {
+                best = d;
+                ax = q[1];
+                ay = q[2];
+              }
+            }
+            const len = Math.hypot(ex - ax, ey - ay) || 1;
+            const k = HIT_RECOIL * (1 - age / HIT_MS) ** 2;
+            ex += ((ex - ax) / len) * k;
+            ey += ((ey - ay) / len) * k;
+          }
+        }
+      }
+      blit(sprite, ex, ey);
     }
 
     // 러버덕은 서버가 위치를 보내지 않는다. 보간된 주인 위치와 보간된 서버 시간으로 직접 계산하므로
@@ -249,7 +302,7 @@ export class Renderer {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         ctx.fillStyle = p.color;
-        ctx.fillRect(sx(p.x), sy(p.y), 2 * S, 2 * S);
+        ctx.fillRect(sx(p.x), sy(p.y), p.size * S, p.size * S);
       }
     }
 

@@ -56,8 +56,8 @@ export interface Snapshot {
   };
   /** [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다) */
   p: [number, number, number, number, number, number, number][];
-  /** [id, enemyTypeIndex, x, y] */
-  e: [number, number, number, number][];
+  /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1)] */
+  e: [number, number, number, number, number][];
   /** [id, shotKindIndex, x, y] */
   s: [number, number, number, number][];
   /** [id, x, y] */
