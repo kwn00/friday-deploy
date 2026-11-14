@@ -14,6 +14,14 @@ import type { LeaderboardStore, RunRecord } from './leaderboard';
  * (rejectUnauthorized 기본값 true, 호스트 이름 검사 포함 — pg-connection-string 의 기본 분기).
  * 검증을 끄는 건 sslmode=no-verify 나 uselibpqcompat=true 를 직접 쓸 때뿐이라 여기서는 건드리지 않는다.
  * sslmode 가 없는 주소(로컬 테스트 DB, 호스팅의 내부 주소)는 TLS 없이 접속한다.
+ *
+ * 연결 풀러: 호스팅 DB 가 기본으로 보여주는 "풀링" 주소(Neon 의 -pooler 호스트 등)는 PgBouncer 를 거친다.
+ * PgBouncer 는 접속할 때 보내는 매개변수 중 자기가 추적하는 것만 받고, statement_timeout 같은 것이 있으면
+ * 접속 자체를 거부한다 ("unsupported startup parameter"). 또 트랜잭션 단위로 연결을 나눠 쓰므로
+ * 세션에 걸어 둔 설정은 다음 쿼리에 이어지지 않는다. 그래서 여기서는
+ *  - 접속 매개변수로 시간 제한을 보내지 않고,
+ *  - 모든 작업을 트랜잭션으로 감싸 그 안에서만 SET LOCAL 로 시간 제한을 건다 (직접 주소·풀링 주소 모두에서 동작),
+ *  - 세션 단위 기능(세션 잠금, SET, LISTEN 등)을 쓰지 않는다.
  */
 
 /** 순위표·시즌마다 이 개수까지만 남긴다. Leaderboard 가 메모리에 들고 있는 수(보여주는 수의 4배)보다 훨씬 넉넉하게 */
@@ -64,8 +72,13 @@ interface Row {
 /** PostgreSQL 의 text 는 NUL 문자를 담지 못한다. 이름은 위에서 정리되지만 저장 실패로 재시도만 반복하지 않게 방어한다 */
 const clean = (s: string): string => s.replaceAll('\u0000', '');
 
-export async function createPostgresStore(url: string): Promise<LeaderboardStore> {
-  return new PostgresStore(url);
+export interface PostgresStoreOptions {
+  /** DB 쪽 문장 시간 제한(ms). 기본 10초. 테스트에서 짧게 잡을 때만 바꾼다 */
+  statementTimeoutMs?: number;
+}
+
+export async function createPostgresStore(url: string, options: PostgresStoreOptions = {}): Promise<LeaderboardStore> {
+  return new PostgresStore(url, options);
 }
 
 class PostgresStore implements LeaderboardStore {
@@ -75,15 +88,18 @@ class PostgresStore implements LeaderboardStore {
   private saves = 0;
   private closed = false;
   private inflight = new Set<Promise<unknown>>();
+  /** 트랜잭션을 열면서 그 트랜잭션에만 시간 제한을 거는 문장 (숫자는 코드의 상수라 문자열에 넣어도 안전하다) */
+  private readonly begin: string;
 
-  constructor(url: string) {
+  constructor(url: string, options: PostgresStoreOptions) {
+    const limit = Math.max(1, Math.floor(Number(options.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS)) || STATEMENT_TIMEOUT_MS);
+    this.begin = `BEGIN; SET LOCAL statement_timeout = ${limit}; SET LOCAL idle_in_transaction_session_timeout = ${limit}`;
     this.pool = new pg.Pool({
       connectionString: url,
       max: POOL_MAX,
       connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-      statement_timeout: STATEMENT_TIMEOUT_MS,
+      // statement_timeout 등을 여기(접속 매개변수)에 두면 연결 풀러가 접속을 거부한다. 시간 제한은 tx() 가 건다.
       query_timeout: QUERY_TIMEOUT_MS,
-      idle_in_transaction_session_timeout: STATEMENT_TIMEOUT_MS,
       idleTimeoutMillis: IDLE_TIMEOUT_MS,
       keepAlive: true,
     });
@@ -96,11 +112,13 @@ class PostgresStore implements LeaderboardStore {
     return this.track(async () => {
       await this.ensureSchema();
       const n = Math.max(0, Math.floor(limit));
-      const res = await this.pool.query<Row>(
-        `SELECT id, board, season, names, time, kills, level, paused_seconds, ended_at
-           FROM leaderboard_runs WHERE board = $1 AND season = $2
-          ORDER BY ${ORDER} LIMIT $3`,
-        [board, season, n],
+      const res = await this.tx((client) =>
+        client.query<Row>(
+          `SELECT id, board, season, names, time, kills, level, paused_seconds, ended_at
+             FROM leaderboard_runs WHERE board = $1 AND season = $2
+            ORDER BY ${ORDER} LIMIT $3`,
+          [board, season, n],
+        ),
       );
       return res.rows.map((r) => ({
         id: r.id,
@@ -119,11 +137,13 @@ class PostgresStore implements LeaderboardStore {
   async save(r: RunRecord): Promise<void> {
     await this.track(async () => {
       await this.ensureSchema();
-      await this.pool.query(
-        `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (id) DO NOTHING`,
-        [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt],
+      await this.tx((client) =>
+        client.query(
+          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO NOTHING`,
+          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt],
+        ),
       );
     });
     if (++this.saves % PRUNE_EVERY === 0) void this.prune(r.board, r.season);
@@ -145,11 +165,13 @@ class PostgresStore implements LeaderboardStore {
     try {
       await this.track(async () => {
         await this.ensureSchema();
-        await this.pool.query(
-          `DELETE FROM leaderboard_runs WHERE id IN (
-             SELECT id FROM leaderboard_runs WHERE board = $1 AND season = $2
-              ORDER BY ${ORDER} OFFSET $3)`,
-          [board, season, KEEP_PER_BOARD],
+        await this.tx((client) =>
+          client.query(
+            `DELETE FROM leaderboard_runs WHERE id IN (
+               SELECT id FROM leaderboard_runs WHERE board = $1 AND season = $2
+                ORDER BY ${ORDER} OFFSET $3)`,
+            [board, season, KEEP_PER_BOARD],
+          ),
         );
       });
     } catch (err) {
@@ -170,16 +192,28 @@ class PostgresStore implements LeaderboardStore {
   }
 
   private async createSchema(): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      // 서버 두 개가 동시에 처음 뜰 때 CREATE ... IF NOT EXISTS 끼리 부딪히지 않게 잠시 줄을 세운다
+    await this.tx(async (client) => {
+      // 서버 두 개가 동시에 처음 뜰 때 CREATE ... IF NOT EXISTS 끼리 부딪히지 않게 잠시 줄을 세운다.
+      // 트랜잭션이 끝나면 풀리는 잠금이라 연결 풀러 뒤에서도 안전하다 (세션 잠금은 풀러에서 쓸 수 없다).
       await client.query('SELECT pg_advisory_xact_lock(7419003)');
       for (const sql of SCHEMA) await client.query(sql);
+    });
+  }
+
+  /**
+   * 작업 하나를 트랜잭션 하나로 실행한다. 시간 제한은 이 트랜잭션에만 건다 (SET LOCAL):
+   * 직접 주소에서도, 트랜잭션 단위로 연결을 나눠 쓰는 풀러 뒤에서도 똑같이 적용된다.
+   */
+  private async tx<T>(work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(this.begin);
+      const out = await work(client);
       await client.query('COMMIT');
       client.release();
+      return out;
     } catch (err) {
-      // 연결 자체가 망가졌을 수 있으니 풀에 돌려주지 않고 버린다
+      // 트랜잭션이 열린 채이거나 연결 자체가 망가졌을 수 있으니 풀에 돌려주지 않고 버린다 (끊기면 DB 가 알아서 되돌린다)
       client.release(err instanceof Error ? err : new Error(String(err)));
       throw err;
     }

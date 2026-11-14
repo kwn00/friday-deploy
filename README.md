@@ -126,10 +126,16 @@ SESSION_SECRET="$(openssl rand -base64 48)" npm start
 Render 무료 플랜에는 계속 유지되는 저장소가 없으므로(무료 Postgres 는 약 44일 뒤 삭제), 무료로 하려면 외부의
 무료 PostgreSQL 을 씁니다. [Neon](https://neon.tech) 은 한동안 안 쓰면 잠들었다가 요청이 오면 알아서 깨어나서 이 용도에 맞습니다.
 
-1. Neon 에 가입하고 프로젝트를 만든다 (리전은 Render 서버와 같은 **Singapore**)
-2. 대시보드의 **Connection string** 을 복사한다 (`postgresql://...?sslmode=require` 형태)
-3. Render 대시보드 → 서비스 → **Environment** → `DATABASE_URL` 로 추가하고 저장한다 (자동으로 다시 배포됨)
-4. 게임의 리더보드 화면에서 "기록이 서버 메모리에만 있어요" 안내가 사라졌으면 된 것이다
+1. [Neon](https://neon.com) 에 가입한다 (Google / GitHub 계정 또는 이메일)
+2. **New Project** → 이름을 적고, Region 은 Render 서버와 같은 **AWS Asia Pacific (Singapore)** 를 고른 뒤 **Create project**
+   (리전은 나중에 바꿀 수 없다. Postgres 버전은 기본값 그대로)
+3. 프로젝트 화면의 **Connect** 를 눌러 나오는 연결 문자열을 **비밀번호가 포함된 채로** 복사한다
+   (`postgresql://neondb_owner:...@ep-...ap-southeast-1.aws.neon.tech/neondb?sslmode=require...` 형태)
+4. Render 대시보드 → 서비스 → **Environment** → 환경 변수 추가: Key `DATABASE_URL`, Value 에 복사한 문자열 →
+   **Save, rebuild, and deploy**
+5. 배포가 끝나면 게임의 리더보드 화면을 연다. "기록은 서버 메모리에 있어서 … 사라져요" 안내가 없으면 된 것이다
+
+연결 문자열은 기본으로 나오는 풀링 주소(호스트 이름에 `-pooler`)와 **Connection pooling** 을 끈 직접 주소 모두 쓸 수 있습니다.
 
 연결은 TLS 로 하고 인증서 검증도 켜 둡니다 (`sslmode=require` 그대로 두면 됩니다. 로그에 pg 의 안내 문구가 한 번 찍히는데,
 `sslmode=verify-full` 로 바꾸면 사라지고 동작은 같습니다). 테이블은 서버가 처음 쓸 때 알아서 만듭니다. DB 가 느리거나 잠깐 죽어도 게임과 순위 조회는 계속되고(순위는 메모리에서 계산),

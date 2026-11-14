@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import net from 'node:net';
 import { describe, it } from 'node:test';
+import pg from 'pg';
 import { Leaderboard, compareRuns, type RunRecord } from './leaderboard';
 import { createPostgresStore } from './store-postgres';
 
@@ -50,6 +52,71 @@ function watchCrashes(): { events: unknown[]; stop: () => void } {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 연결 풀러(PgBouncer) 흉내. 호스팅 DB 가 기본으로 주는 "풀링" 주소(Neon 의 -pooler 호스트 등)는 PgBouncer 를 거치는데,
+ * PgBouncer 는 자기가 추적하는 접속 매개변수만 받고 나머지(statement_timeout, options 등)가 있으면 접속을 거부한다.
+ * 여기서는 그 검사만 똑같이 하고, 통과하면 진짜 DB 로 그대로 중계한다.
+ */
+const POOLER_ALLOWS = new Set(['user', 'database', 'client_encoding', 'datestyle', 'timezone', 'standard_conforming_strings', 'application_name']);
+async function startPooler(target: { host: string; port: number }): Promise<{ port: number; refused: string[]; close: () => Promise<void> }> {
+  const refused: string[] = [];
+  const sockets = new Set<net.Socket>();
+  const cstr = (text: string) => Buffer.concat([Buffer.from(text, 'utf8'), Buffer.from([0])]);
+  const server = net.createServer((client) => {
+    sockets.add(client);
+    client.on('close', () => sockets.delete(client));
+    client.on('error', () => {});
+    let buf = Buffer.alloc(0);
+    const onData = (chunk: Buffer): void => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length < 8 || buf.length < buf.readInt32BE(0)) return;
+      client.off('data', onData);
+      // StartupMessage: 길이, 프로토콜 버전, 그 뒤로 "이름\0값\0" 이 이어지고 \0 으로 끝난다
+      const parts = buf.subarray(8, buf.readInt32BE(0) - 1).toString('utf8').split('\0');
+      const bad = parts.filter((_, i) => i % 2 === 0).filter((name) => name && !POOLER_ALLOWS.has(name));
+      if (bad.length > 0) {
+        refused.push(...bad);
+        const fields = Buffer.concat([cstr('SFATAL'), cstr('VFATAL'), cstr('C08P01'), cstr(`Munsupported startup parameter: ${bad[0]}`), Buffer.from([0])]);
+        const head = Buffer.alloc(5);
+        head.write('E');
+        head.writeInt32BE(fields.length + 4, 1);
+        client.end(Buffer.concat([head, fields]));
+        return;
+      }
+      const upstream = net.connect(target.port, target.host);
+      sockets.add(upstream);
+      upstream.on('close', () => (sockets.delete(upstream), client.destroy()));
+      upstream.on('error', () => client.destroy());
+      client.on('close', () => upstream.destroy());
+      upstream.write(buf);
+      client.pipe(upstream);
+      upstream.pipe(client);
+    };
+    client.on('data', onData);
+  });
+  await new Promise<void>((res) => server.listen(0, '127.0.0.1', res));
+  return {
+    port: (server.address() as net.AddressInfo).port,
+    refused,
+    close: () =>
+      new Promise<void>((res) => {
+        for (const s of sockets) s.destroy();
+        server.close(() => res());
+      }),
+  };
+}
+/** 테스트 DB 주소에서 호스트·포트만 바꾼 주소 */
+function through(port: number): string {
+  const u = new globalThis.URL(URL!);
+  u.hostname = '127.0.0.1';
+  u.port = String(port);
+  return u.toString();
+}
+const targetOf = (): { host: string; port: number } => {
+  const u = new globalThis.URL(URL!);
+  return { host: u.hostname, port: Number(u.port || 5432) };
+};
 
 describe('PostgreSQL 저장소', { skip: skipAll }, () => {
   it('순서가 compareRuns 와 같다 (동점 포함 수백 건)', async () => {
@@ -200,6 +267,58 @@ describe('PostgreSQL 저장소', { skip: skipAll }, () => {
       assert.ok(got.length < 1100, '정리가 아무것도 지우지 않았다');
       assert.deepEqual(got, [...runs].sort(compareRuns).slice(0, got.length));
     } finally {
+      await store.close();
+    }
+  });
+});
+
+describe('PostgreSQL 저장소: 연결 풀러와 시간 제한', { skip: skipAll }, () => {
+  it('가짜 풀러는 statement_timeout 을 접속 매개변수로 보내는 연결을 거부한다 (아래 테스트가 헛돌지 않는다는 확인)', async () => {
+    const pooler = await startPooler(targetOf());
+    const client = new pg.Client({ connectionString: through(pooler.port), statement_timeout: 1000 });
+    client.on('error', () => {});
+    try {
+      await assert.rejects(client.connect(), /unsupported startup parameter: statement_timeout/);
+      assert.deepEqual(pooler.refused, ['statement_timeout']);
+    } finally {
+      await client.end().catch(() => {});
+      await pooler.close();
+    }
+  });
+
+  it('풀링 주소(PgBouncer) 뒤에서도 접속해서 테이블을 만들고 저장·조회·정리한다', async () => {
+    const pooler = await startPooler(targetOf());
+    const store = await createPostgresStore(through(pooler.port));
+    try {
+      const season = newSeason();
+      await store.save(run(season, { id: `pooled-${season}`, time: 77 }));
+      await store.save(run(season, { id: `pooled-${season}`, time: 99 }));
+      const rows = await store.load('solo', season, 5);
+      assert.deepEqual(rows.map((r) => [r.id, r.time]), [[`pooled-${season}`, 77]]);
+      assert.deepEqual(pooler.refused, [], '풀러가 거부하는 접속 매개변수를 보내지 않는다');
+    } finally {
+      await store.close();
+      await pooler.close();
+    }
+  });
+
+  it('DB 쪽 시간 제한은 그대로 걸린다: 잠긴 테이블에 막힌 저장은 제한 시간 뒤에 오류로 끝나고, 풀린 뒤에는 다시 된다', async () => {
+    const store = await createPostgresStore(URL!, { statementTimeoutMs: 400 });
+    const blocker = new pg.Client({ connectionString: URL! });
+    await blocker.connect();
+    try {
+      const season = newSeason();
+      await store.save(run(season, { time: 50 })); // 테이블을 만들어 둔다
+      await blocker.query('BEGIN');
+      await blocker.query('LOCK TABLE leaderboard_runs IN ACCESS EXCLUSIVE MODE');
+      const t0 = Date.now();
+      await assert.rejects(store.save(run(season, { time: 60 })), (err: Error & { code?: string }) => err.code === '57014');
+      assert.ok(Date.now() - t0 < 5000, `${Date.now() - t0}ms`);
+      await blocker.query('ROLLBACK');
+      await store.save(run(season, { time: 70 }));
+      assert.deepEqual((await store.load('solo', season, 5)).map((r) => r.time), [70, 50]);
+    } finally {
+      await blocker.end().catch(() => {});
       await store.close();
     }
   });
