@@ -7,6 +7,10 @@ import {
   DUCK_ORBIT_SPEED,
   HEAL_DROP_CHANCE,
   HEAL_DROP_COOLDOWN,
+  GEM_CONTACT,
+  GEM_PULL_ACCEL,
+  GEM_PULL_MAX,
+  GEM_PULL_SPEED,
   HEAL_FRACTION,
   MAX_ENEMIES_BASE,
   MAX_ENEMIES_PER_EXTRA_PLAYER,
@@ -92,6 +96,10 @@ export interface Gem {
   x: number;
   y: number;
   v: number;
+  /** 지금 이 경험치를 끌어당기고 있는 플레이어 id (없으면 제자리에 있다) */
+  to?: number;
+  /** 끌려가는 현재 속도 (px/s) */
+  sp?: number;
 }
 
 export interface Heal {
@@ -541,20 +549,51 @@ export function step(world: World, dt: number): void {
   world.shots = world.shots.filter((s) => s.ttl > 0);
   world.enemies = world.enemies.filter((e) => e.hp > 0);
 
-  // 경험치(커밋) 획득
+  // 경험치(커밋): 획득 범위에 들어오면 그 플레이어에게 끌려가고, 닿으면 획득한다.
+  // 범위는 예전의 "즉시 획득" 범위와 같다. 한번 끌리기 시작한 것은 범위를 벗어나도 계속 따라온다.
+  const pullers = active.filter((p) => p.alive);
+  const gains = new Map<Player, number>();
+  world.gems = world.gems.filter((g) => {
+    let p = g.to === undefined ? undefined : world.players.get(g.to);
+    // 끌던 사람이 쓰러졌거나, 나갔거나, 레벨업 선택 중이면 놓는다 (선택 중에는 예전에도 줍지 못했다)
+    if (p && (!p.alive || p.offers !== null)) p = undefined;
+    if (!p) {
+      g.to = undefined;
+      g.sp = undefined;
+      let best = Infinity;
+      for (const q of pullers) {
+        const d2 = (g.x - q.x) ** 2 + (g.y - q.y) ** 2;
+        if (d2 <= pickupOf(q) ** 2 && d2 < best) {
+          best = d2;
+          p = q;
+        }
+      }
+      if (!p) return true;
+      g.to = p.id;
+      g.sp = GEM_PULL_SPEED;
+    }
+    const dx = p.x - g.x;
+    const dy = p.y - g.y;
+    const dist = Math.hypot(dx, dy);
+    const sp = g.sp ?? GEM_PULL_SPEED;
+    const move = sp * dt;
+    if (dist <= move + GEM_CONTACT) {
+      gains.set(p, (gains.get(p) ?? 0) + g.v);
+      return false;
+    }
+    g.x += (dx / dist) * move;
+    g.y += (dy / dist) * move;
+    g.sp = Math.min(GEM_PULL_MAX, sp + GEM_PULL_ACCEL * dt);
+    return true;
+  });
+  for (const [p, gained] of gains) {
+    p.xp += gained;
+    checkLevelUp(world, p);
+  }
+
   for (const p of active) {
     if (!p.alive) continue;
     const r2 = pickupOf(p) ** 2;
-    let gained = 0;
-    world.gems = world.gems.filter((g) => {
-      if ((g.x - p.x) ** 2 + (g.y - p.y) ** 2 > r2) return true;
-      gained += g.v;
-      return false;
-    });
-    if (gained > 0) {
-      p.xp += gained;
-      checkLevelUp(world, p);
-    }
     // 회복 아이템: 체력이 가득이면 줍지 않고 남겨 둔다
     // 화면에 보이는 체력(올림) 기준: 99.6 처럼 화면에는 가득으로 보일 때 아이템을 써 버리지 않는다
     const maxHp = maxHpOf(p);
@@ -604,7 +643,8 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
   }
   for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0]);
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
-  for (const g of world.gems) if (near(g.x, g.y)) snap.g.push([g.id, Math.round(g.x), Math.round(g.y)]);
+  // 끌려오는 경험치는 움직이므로 소수 좌표로 보낸다 (전송 크기는 같다: 어차피 1/16 픽셀 정수로 부호화한다)
+  for (const g of world.gems) if (near(g.x, g.y)) snap.g.push([g.id, r1(g.x), r1(g.y)]);
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);
   return snap;
 }

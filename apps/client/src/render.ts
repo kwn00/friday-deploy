@@ -1,6 +1,6 @@
 import { DT, ENEMY_IDS, duckOffset, type Snapshot } from '@friday-deploy/shared';
 import type { Input } from './input';
-import { loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
+import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
 import { cameraPx, computeView, toScreen } from './view';
 
@@ -22,11 +22,24 @@ const HIT_FLASH_MS = 70;
 const HIT_RECOIL = 4;
 const MAX_PARTICLES = 500;
 
+/** 머리 위 닉네임 색: 나 / 동료 / 쓰러진 사람 */
+const NAME_COLOR = { me: '#a6e3a1', mate: '#cdd6f4', down: '#7f849c' } as const;
+
+/** 이번 프레임에 그릴 닉네임 하나 (캐릭터를 모두 그린 뒤에 한꺼번에 그린다) */
+interface NameLabel {
+  id: number;
+  color: string;
+  /** 가운데 x, 글자 아래쪽 y (기기 픽셀) */
+  px: number;
+  bottom: number;
+}
+
 type Row = number[];
 interface Index {
   e: Map<number, Row>;
   p: Map<number, Row>;
   s: Map<number, Row>;
+  g: Map<number, Row>;
 }
 
 const TILE = 32;
@@ -119,20 +132,29 @@ export class Renderer {
   private indexOf(snap: Snapshot): Index {
     let ix = this.index.get(snap);
     if (!ix) {
-      ix = { e: byId(snap.e), p: byId(snap.p), s: byId(snap.s) };
+      ix = { e: byId(snap.e), p: byId(snap.p), s: byId(snap.s), g: byId(snap.g) };
       this.index.set(snap, ix);
     }
     return ix;
   }
 
-  private nameSprite(name: string): Sprite {
-    let s = this.nameSprites.get(name);
+  private nameSprite(name: string, color: string): Sprite {
+    const key = `${color} ${name}`;
+    let s = this.nameSprites.get(key);
     if (!s) {
       if (this.nameSprites.size > 32) this.nameSprites.clear();
-      s = upscale(textSprite(name, '#cdd6f4'), this.scale);
-      this.nameSprites.set(name, s);
+      s = labelSprite(name, color, this.scale);
+      this.nameSprites.set(key, s);
     }
     return s;
+  }
+
+  /** 머리 위 닉네임: 가운데 정렬, bottom(기기 픽셀) 바로 위에 그린다 */
+  private drawName(label: NameLabel): void {
+    const name = this.names.get(label.id);
+    if (!name) return;
+    const ns = this.nameSprite(name, label.color);
+    this.ctx.drawImage(ns, label.px - (ns.width >> 1), label.bottom - ns.height);
   }
 
   private burst(x: number, y: number, n: number, speed: number, colors: [string, string], size = 2, life = 0.35): void {
@@ -162,6 +184,14 @@ export class Renderer {
       if (alive.has(e[0]) || Math.hypot(e[2]! - me[1], e[3]! - me[2]) > 280) continue;
       const boss = ENEMY_IDS[e[1]!] === 'legacy_code';
       this.burst(e[2]!, e[3]!, boss ? 40 : 6, boss ? 90 : 50, ['#f38ba8', '#f9e2af']);
+    }
+    // 경험치가 플레이어에게 빨려 들어가 사라진 자리에 작은 반짝임 (시야 밖으로 나간 것은 제외: 닿을 만큼 가까웠던 것만)
+    if (!this.calm) {
+      const gems = this.indexOf(next).g;
+      for (const g of prev.g) {
+        if (gems.has(g[0])) continue;
+        if (next.p.some((p) => p[4] && Math.hypot(g[1] - p[1], g[2] - p[2]) < 40)) this.burst(g[1], g[2], 2, 30, ['#a6e3a1', '#eff1f5'], 1, 0.12);
+      }
     }
     const heals = new Set(next.h.map((h) => h[0]));
     for (const h of prev.h) {
@@ -202,7 +232,11 @@ export class Renderer {
 
     this.drawBackground(cx, cy);
 
-    for (const g of curr.g) blit(this.spr.commit, g[1], g[2] + Math.sin(now / 200 + g[0]) * 1.5);
+    // 경험치: 끌려오는 동안 서버가 위치를 옮기므로 다른 것들처럼 두 스냅샷 사이를 보간한다
+    for (const g of curr.g) {
+      const q = was.g.get(g[0]);
+      blit(this.spr.commit, mix(q?.[1], g[1]), mix(q?.[2], g[2]) + Math.sin(now / 200 + g[0]) * 1.5);
+    }
 
     for (const h of curr.h) {
       const bob = Math.sin(now / 260 + h[0]) * 2;
@@ -254,18 +288,21 @@ export class Renderer {
     // 다른 것들과 같은 프레임률로 매끄럽게 돈다. (판정은 서버가 같은 식으로 한다)
     const duckTime = sample.tick * DT;
 
+    // 닉네임은 캐릭터를 다 그린 뒤에 그린다 (가까이 붙어 있을 때 옆 사람 캐릭터에 이름이 가려지지 않게)
+    const labels: NameLabel[] = [];
     for (const p of curr.p) {
       const q = was.p.get(p[0]);
       const x = mix(q?.[1], p[1]);
       const y = mix(q?.[2], p[2]);
+      const px = sx(x);
+      const py = sy(y);
       if (!p[4]) {
         blit(this.spr.grave, x, y);
+        labels.push({ id: p[0], color: NAME_COLOR.down, px, bottom: py - 5 * S });
         continue;
       }
       const moving = q ? Math.abs(q[1]! - p[1]) + Math.abs(q[2]! - p[2]) > 0.2 : false;
       const frame = moving && Math.floor(now / 140) % 2 ? 1 : 0;
-      const px = sx(x);
-      const py = sy(y);
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.fillRect(px - 5 * S, py + 6 * S, 10 * S, 2 * S);
       blit(this.spr.dev[p[3] < 0 ? 'l' : 'r'][frame], x, y);
@@ -276,13 +313,7 @@ export class Renderer {
       ctx.fillRect(bx, by, 14 * S, 2 * S);
       ctx.fillStyle = p[0] === curr.me.id ? '#a6e3a1' : '#89b4fa';
       ctx.fillRect(bx, by, Math.round((14 * S * p[5]) / 100), 2 * S);
-      if (p[0] !== curr.me.id) {
-        const name = this.names.get(p[0]);
-        if (name) {
-          const ns = this.nameSprite(name);
-          ctx.drawImage(ns, px - (ns.width >> 1), by - ns.height);
-        }
-      }
+      labels.push({ id: p[0], color: p[0] === curr.me.id ? NAME_COLOR.me : NAME_COLOR.mate, px, bottom: by });
       for (let i = 0; i < p[6]; i++) {
         const [ox, oy] = duckOffset(duckTime, i, p[6]);
         blit(this.spr.duck, x + ox, y + oy);
@@ -295,6 +326,10 @@ export class Renderer {
       const p = was.s.get(s[0]);
       blit(spr, mix(p?.[2], s[2]), mix(p?.[3], s[3]));
     }
+
+    // 내 이름을 맨 위에 (동료와 겹칠 때 내 이름이 읽히도록 마지막에 그린다)
+    for (const label of labels) if (label.id !== curr.me.id) this.drawName(label);
+    for (const label of labels) if (label.id === curr.me.id) this.drawName(label);
 
     if (this.particles.length > 0) {
       this.particles = this.particles.filter((p) => (p.life -= dt) > 0);

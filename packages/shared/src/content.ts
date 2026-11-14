@@ -54,7 +54,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   coffee: { kind: 'passive', name: '아이스 아메리카노', icon: '☕', desc: '이동 속도 +8%' },
   mech_keyboard: { kind: 'passive', name: '기계식 키보드', icon: '⌨️', desc: '공격 쿨다운 -8%' },
   stack_overflow: { kind: 'passive', name: 'Stack Overflow', icon: '📋', desc: '복붙의 힘. 피해량 +15%' },
-  npm_install: { kind: 'passive', name: 'npm install', icon: '📦', desc: '일단 다 끌어온다. 획득 범위 +30%' },
+  npm_install: { kind: 'passive', name: 'npm install', icon: '📦', desc: '일단 다 끌어온다. 경험치를 끌어당기는 범위 +30%' },
   dark_mode: { kind: 'passive', name: '다크 모드', icon: '🌙', desc: '눈이 편안. 최대 체력 +20, 체력 20 회복' },
 };
 

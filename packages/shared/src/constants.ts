@@ -35,6 +35,17 @@ export const PLAYER_BASE_SPEED = 70;
 export const PLAYER_BASE_HP = 100;
 export const PLAYER_BASE_PICKUP = 36;
 
+/**
+ * 경험치(커밋)는 획득 범위 안에 들어오면 그 플레이어에게 끌려가고, 닿으면 획득된다.
+ * 처음 속도는 가장 빠른 플레이어(커피 5단계 = 98px/s)보다 빨라서, 한번 끌리기 시작하면 달아나도 반드시 따라잡는다.
+ */
+export const GEM_PULL_SPEED = 120;
+/** 끌려오는 동안의 가속 (px/s²): 처음엔 천천히, 가까워질수록 빨려 들어오는 느낌 */
+export const GEM_PULL_ACCEL = 900;
+export const GEM_PULL_MAX = 360;
+/** 이 거리 안에 들어오면 닿은 것으로 본다 (px) */
+export const GEM_CONTACT = 6;
+
 export const MAX_UPGRADE_LEVEL = 5;
 export const OFFER_COUNT = 3;
 /** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. */

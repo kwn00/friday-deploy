@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import {
   DT,
   DUCK_ORBIT_RADIUS,
+  GEM_PULL_MAX,
+  PLAYER_BASE_PICKUP,
   HEAL_DROP_COOLDOWN,
   HEAL_FRACTION,
   PLAYER_BASE_SPEED,
@@ -21,6 +23,7 @@ import {
   sanitizeName,
   setInput,
   step,
+  type Gem,
 } from './index';
 
 test('parseClientMsg: 조작된 메시지는 전부 거부', () => {
@@ -321,4 +324,131 @@ test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시�
   assert.deepEqual(back.e.find((e) => e[0] === 5002)!.slice(0, 2).concat(back.e.find((e) => e[0] === 5002)![4]), [5002, 0, 0]);
   step(w, DT);
   assert.equal(row(5001)![4], 0, '다음 틱에는 사라진다');
+});
+
+/** 적이 끼어들지 않게 치우면서 한 틱 진행한다 (경험치 움직임만 보려는 테스트용) */
+function quietStep(w: ReturnType<typeof createWorld>): void {
+  w.enemies.length = 0;
+  w.shots.length = 0;
+  step(w, DT);
+  w.enemies.length = 0;
+}
+
+test('sim: 경험치는 획득 범위에 들어오면 그 자리에서 사라지지 않고 플레이어에게 끌려와서 닿을 때 획득된다', () => {
+  const w = createWorld(21);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9; // 레벨업으로 월드가 멈추지 않게
+  const far: Gem = { id: 9001, x: p.x + PLAYER_BASE_PICKUP + 4, y: p.y, v: 3 };
+  const near: Gem = { id: 9002, x: p.x + PLAYER_BASE_PICKUP - 2, y: p.y, v: 5 };
+  w.gems.push(far, near);
+  const dist = (): number => Math.hypot(near.x - p.x, near.y - p.y);
+
+  quietStep(w);
+  assert.equal(p.xp, 0, '첫 틱에는 아직 닿지 않았다 (예전에는 여기서 바로 획득됐다)');
+  assert.ok(w.gems.includes(near));
+  const d1 = dist();
+  assert.ok(d1 < PLAYER_BASE_PICKUP - 2, `끌려오기 시작했다 (${d1})`);
+  quietStep(w);
+  const d2 = dist();
+  assert.ok(d1 - d2 > PLAYER_BASE_PICKUP - 2 - d1, '가까워질수록 빨라진다');
+  let ticks = 2;
+  while (w.gems.includes(near) && ticks < 40) {
+    quietStep(w);
+    ticks++;
+  }
+  assert.equal(p.xp, 5, '닿으면 그 경험치만큼만 오른다');
+  assert.ok(ticks <= 6, `0.3초 안에 도착한다 (${ticks}틱)`);
+  // 범위 밖의 경험치는 그대로 제자리에 있다
+  assert.ok(w.gems.includes(far));
+  assert.deepEqual([far.x, far.y, far.to], [p.x + PLAYER_BASE_PICKUP + 4, p.y, undefined]);
+});
+
+test('sim: npm install 은 경험치를 끌어당기는 범위를 넓힌다', () => {
+  const w = createWorld(22);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  const gem: Gem = { id: 9001, x: p.x + PLAYER_BASE_PICKUP * 1.2, y: p.y, v: 1 };
+  w.gems.push(gem);
+  for (let i = 0; i < 10; i++) quietStep(w);
+  assert.equal(gem.x, p.x + PLAYER_BASE_PICKUP * 1.2, '기본 범위(36)에서는 닿지 않는다');
+  p.up.npm_install = 1; // 범위 +30% → 46.8
+  for (let i = 0; i < 10; i++) quietStep(w);
+  assert.equal(p.xp, 1);
+  assert.equal(w.gems.length, 0);
+});
+
+test('sim: 한번 끌리기 시작한 경험치는 가장 빠른 플레이어가 달아나도 따라잡는다 (끌어놓고 버릴 수 없다)', () => {
+  const w = createWorld(23);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  p.up.coffee = 5; // 최고 이동 속도
+  p.up.npm_install = 5; // 가장 넓은 범위의 끝에서 끌리기 시작
+  const reach = PLAYER_BASE_PICKUP * 2.5;
+  // 범위 끝에서 살짝 안쪽 (플레이어가 먼저 한 걸음 달아난 뒤에도 범위 안이도록)
+  const gem: Gem = { id: 9001, x: p.x - (reach - 6), y: p.y, v: 7 };
+  w.gems.push(gem);
+  setInput(w, p.id, 1, 0); // 경험치 반대쪽으로 계속 달린다
+  let ticks = 0;
+  let top = 0;
+  while (w.gems.length > 0 && ticks < 200) {
+    quietStep(w);
+    top = Math.max(top, gem.sp ?? 0);
+    ticks++;
+  }
+  assert.equal(p.xp, 7);
+  assert.ok(ticks <= 20, `1초 안에 따라잡는다 (${ticks}틱)`);
+  assert.ok(top <= GEM_PULL_MAX, `속도 상한 (${top})`);
+});
+
+test('sim: 경험치는 더 가까운 사람에게 가고, 레벨업 선택 중이거나 쓰러진 사람은 끌어당기지 못한다', () => {
+  const w = createWorld(24);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  a.xpNext = b.xpNext = 1e9;
+  a.x = 0;
+  a.y = 0;
+  b.x = 40;
+  b.y = 0;
+  // a 에게서 25, b 에게서 15 떨어진 곳: 둘 다 범위 안이지만 b 가 더 가깝다
+  const gem: Gem = { id: 9001, x: 25, y: 0, v: 4 };
+  w.gems.push(gem);
+  quietStep(w);
+  assert.equal(gem.to, b.id);
+  for (let i = 0; i < 10; i++) quietStep(w);
+  assert.deepEqual([a.xp, b.xp], [0, 4]);
+
+  // 끌려오는 도중에 그 사람이 레벨업 선택에 들어가면 놓는다. 다른 사람의 범위 안이면 그 사람에게 간다.
+  const second: Gem = { id: 9002, x: 22, y: 0, v: 6 };
+  w.gems.push(second);
+  quietStep(w);
+  assert.equal(second.to, b.id);
+  b.offers = ['coffee'];
+  quietStep(w);
+  assert.equal(second.to, a.id, '선택 중인 사람 대신 범위 안의 다른 사람에게');
+  for (let i = 0; i < 10; i++) quietStep(w);
+  assert.deepEqual([a.xp, b.xp], [6, 4]);
+
+  // 범위 안에 선택 중인 사람과 쓰러진 사람뿐이면 제자리에 남는다
+  a.alive = false;
+  const third: Gem = { id: 9003, x: 38, y: 0, v: 9 };
+  w.gems.push(third);
+  for (let i = 0; i < 5; i++) quietStep(w);
+  assert.deepEqual([third.x, third.y, third.to], [38, 0, undefined]);
+  assert.deepEqual([a.xp, b.xp], [6, 4]);
+});
+
+test('sim: 끌려오는 경험치의 위치가 스냅샷에 실린다 (화면에서 움직이는 것이 보인다)', () => {
+  const w = createWorld(25);
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  p.up.npm_install = 5;
+  w.gems.push({ id: 9001, x: p.x + 80, y: p.y, v: 1 });
+  const xs: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    quietStep(w);
+    const g = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!)).g.find((row) => row[0] === 9001);
+    if (g) xs.push(g[1] - p.x);
+  }
+  assert.ok(xs.length >= 3, `${xs.length}`);
+  for (let i = 1; i < xs.length; i++) assert.ok(xs[i]! < xs[i - 1]! - 5, `매 틱 눈에 띄게 다가온다: ${xs.join(', ')}`);
 });

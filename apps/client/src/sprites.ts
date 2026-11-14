@@ -254,6 +254,40 @@ export function scaleSprites(set: SpriteSet, k: number): SpriteSet {
   };
 }
 
+/** 화면(HUD, 메뉴)과 같은 글꼴 순서 (style.css 의 --font) */
+const UI_FONT = "'Galmuri11', 'DungGeunMo', 'NeoDunggeunmo', ui-monospace, 'SF Mono', Menlo, Consolas, 'D2Coding', monospace";
+/** 닉네임 글자 크기 (논리 픽셀) */
+const LABEL_SIZE = 7;
+
+/**
+ * 머리 위 닉네임용 글자 스프라이트.
+ * 다른 스프라이트처럼 저해상도로 그려서 키우지 않고, 화면 해상도로 바로 그린다 (HUD 글자와 같은 방식).
+ * 한글처럼 획이 많은 글자는 8~10픽셀 격자에서 뭉개져 읽기 어렵고, 기기마다 글꼴이 달라 결과도 들쭉날쭉하기 때문이다.
+ * 어두운 테두리를 둘러 적이나 배경 글자 위에서도 읽힌다.
+ * 닉네임은 서버가 정리한 문자열이고 캔버스에 그리기만 하므로 마크업으로 해석될 일이 없다.
+ * @param scale 논리 픽셀 하나가 차지하는 기기 픽셀 수 (돌려주는 스프라이트는 이미 그 크기다. 더 키우지 않는다)
+ */
+export function labelSprite(text: string, color: string, scale: number): Sprite {
+  const size = LABEL_SIZE * scale;
+  const edge = Math.max(2, Math.round(scale * 0.75));
+  const font = `bold ${size}px ${UI_FONT}`;
+  const c = document.createElement('canvas');
+  const probe = c.getContext('2d')!;
+  probe.font = font;
+  c.width = Math.max(1, Math.ceil(probe.measureText(text).width) + edge * 2);
+  c.height = Math.ceil(size * 1.25) + edge * 2;
+  const ctx = c.getContext('2d')!;
+  ctx.font = font;
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = edge * 2;
+  ctx.strokeStyle = '#11111b';
+  ctx.strokeText(text, edge, edge + size);
+  ctx.fillStyle = color;
+  ctx.fillText(text, edge, edge + size);
+  return c;
+}
+
 /** 글자를 저해상도로 그린 스프라이트 (키우면 픽셀아트 느낌이 유지된다) */
 export function textSprite(text: string, color: string): Sprite {
   const c = document.createElement('canvas');
