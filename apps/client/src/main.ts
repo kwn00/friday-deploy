@@ -1,11 +1,14 @@
 import {
   GAME_TAGLINE,
   GAME_TITLE,
+  LEADERBOARD_MIN_SECONDS,
+  LEADERBOARD_SIZE,
   MAX_PAUSE_SECONDS,
   ROOM_CODE_LEN,
   UPGRADES,
   normalizeRoomCode,
   sanitizeName,
+  type BoardId,
   type GameMode,
   type Offer,
   type RunResult,
@@ -14,6 +17,7 @@ import {
   type UpgradeId,
 } from '@friday-deploy/shared';
 import { Input } from './input';
+import { Leaderboard } from './leaderboard';
 import { Minimap } from './minimap';
 import { Net } from './net';
 import { Renderer } from './render';
@@ -54,6 +58,10 @@ const el = {
   offers: $('offers'),
   offerTimer: $('offer-timer'),
   result: $('result'),
+  place: $('result-place'),
+  resultHint: $('result-hint'),
+  resultBoard: $<HTMLButtonElement>('btn-result-board'),
+  boardBtn: $<HTMLButtonElement>('btn-board'),
   hpFill: $('hp-fill'),
   hpText: $('hp-text'),
   xpFill: $('xp-fill'),
@@ -70,6 +78,8 @@ $('tagline-text').textContent = GAME_TAGLINE;
 const input = new Input(el.canvas);
 const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
+// 순위표가 열려 있는 동안 뒤 화면은 포커스를 받지 않는다
+const board = new Leaderboard([el.title, el.over, el.lobby]);
 
 type Phase = 'title' | 'connecting' | 'lobby' | 'playing' | 'over';
 let phase: Phase = 'title';
@@ -85,6 +95,8 @@ let menuOpen = false;
 let pausedSince = 0;
 let offerDeadline = 0;
 let loadoutKey = '';
+/** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
+let resultBoard: BoardId | null = null;
 
 const store = {
   get(key: string): string | null {
@@ -132,6 +144,8 @@ function setStatus(text: string, info = false): void {
 
 function setPhase(next: Phase): void {
   phase = next;
+  // 순위표는 타이틀과 결과 화면에서만 연다. 판이 시작되거나 대기실로 넘어가면(페어에서 방장이 시작한 경우 등) 닫는다.
+  if (next !== 'title' && next !== 'over') board.close();
   el.title.classList.toggle('hidden', next !== 'title' && next !== 'connecting');
   el.lobby.classList.toggle('hidden', next !== 'lobby');
   el.over.classList.toggle('hidden', next !== 'over');
@@ -286,7 +300,7 @@ async function invite(): Promise<void> {
 
 /* ───────────── 결과 ───────────── */
 
-function showResult(r: RunResult): void {
+function showResult(r: RunResult, place?: { board: BoardId; rank: number }): void {
   gotResult = true;
   const rows: [string, string][] = [
     ['uptime', mmss(r.time)],
@@ -295,7 +309,27 @@ function showResult(r: RunResult): void {
   ];
   el.result.replaceChildren(...rows.flatMap(([k, v]) => [node('dt', '', k), node('dd', '', v)]));
   el.retry.textContent = mode === 'coop' ? '↻ 한 판 더 (대기실로)' : '↻ git revert && retry';
+  showPlace(r, place);
   setPhase('over');
+}
+
+/** 결과 화면의 순위 안내. 서버가 준 값이라도 모양을 확인하고 textContent 로만 넣는다. */
+function showPlace(r: RunResult, place?: { board: BoardId; rank: number }): void {
+  const ok = place && (place.board === 'solo' || place.board === 'coop') && Number.isInteger(place.rank) && place.rank >= 1 && place.rank <= LEADERBOARD_SIZE;
+  resultBoard = ok ? place.board : null;
+  el.place.classList.toggle('hidden', !ok);
+  el.resultBoard.classList.toggle('hidden', !ok);
+  el.resultHint.classList.toggle('hidden', !!ok);
+  if (ok) {
+    el.place.textContent = `🏆 ${place.board === 'solo' ? '솔로' : '함께'} 순위표 ${place.rank}위`;
+    board.setMine({ board: place.board, rank: place.rank, time: r.time, kills: r.kills, level: r.level });
+  } else {
+    board.setMine(null);
+    el.resultHint.textContent =
+      r.time < LEADERBOARD_MIN_SECONDS
+        ? `순위표에는 ${LEADERBOARD_MIN_SECONDS}초 이상 버틴 판부터 기록돼요.`
+        : `아쉽게도 순위표 ${LEADERBOARD_SIZE}위 안에는 들지 못했어요.`;
+  }
 }
 
 /* ───────────── 서버 메시지 ───────────── */
@@ -353,7 +387,7 @@ function onMessage(msg: ServerMsg): void {
       }
       break;
     case 'over':
-      showResult(msg.result);
+      showResult(msg.result, msg.place);
       break;
     case 'error':
       lastError = msg.code;
@@ -435,6 +469,8 @@ el.retry.addEventListener('click', () => {
   }
 });
 el.home.addEventListener('click', quitToTitle);
+el.boardBtn.addEventListener('click', () => board.open('solo'));
+el.resultBoard.addEventListener('click', () => board.open(resultBoard ?? 'solo', true));
 el.invite.addEventListener('click', () => void invite());
 el.start.addEventListener('click', () => net.sendStart());
 el.leave.addEventListener('click', quitToTitle);
@@ -447,6 +483,14 @@ el.quit.addEventListener('click', quitToTitle);
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.repeat) return;
+  // 순위표가 열려 있으면 Esc 는 순위표만 닫는다 (메뉴/게임 단축키는 건드리지 않는다)
+  if (board.isOpen) {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      board.close();
+    }
+    return;
+  }
   if (e.code === 'Escape' || e.code === 'KeyP') {
     if (phase !== 'playing') return;
     e.preventDefault();
