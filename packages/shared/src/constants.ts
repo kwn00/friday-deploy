@@ -14,6 +14,16 @@ export const NAME_MAX_LEN = 12;
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const ROOM_CODE_LEN = 6;
 
+/**
+ * 리더보드 시즌. 난이도가 달라지는 변경(무기·적·아이템 수치 등)을 하면 올린다.
+ * 서로 다른 규칙에서 나온 기록이 한 순위표에 섞이지 않게 하기 위한 것이다.
+ */
+export const LEADERBOARD_SEASON = 1;
+/** 순위표에 보여주는 기록 수 */
+export const LEADERBOARD_SIZE = 50;
+/** 이보다 짧게 끝난 판은 기록하지 않는다 (시작하자마자 끝난 판으로 순위표가 채워지지 않게) */
+export const LEADERBOARD_MIN_SECONDS = 30;
+
 /** 솔로 일시정지 한 번의 최대 길이(초). 넘으면 서버가 자동으로 재개한다. */
 export const MAX_PAUSE_SECONDS = 600;
 

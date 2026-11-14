@@ -36,6 +36,31 @@ export interface RunResult {
   endedAt: number;
 }
 
+/** 순위표 종류: 혼자 한 판 / 둘 이상이 함께 한 판 */
+export type BoardId = 'solo' | 'coop';
+
+/** 순위표의 한 줄. 서버가 판이 끝날 때 직접 기록한 것만 있다 (클라이언트가 점수를 올리는 통로는 없다). */
+export interface LeaderboardEntry {
+  rank: number;
+  /** 함께 한 사람들의 닉네임 (솔로는 1명) */
+  names: string[];
+  /** 생존 시간(초) */
+  time: number;
+  kills: number;
+  level: number;
+  /** 판이 끝난 시각 (epoch ms) */
+  at: number;
+}
+
+/** GET /api/leaderboard?board=solo|coop 의 응답 */
+export interface LeaderboardResponse {
+  board: BoardId;
+  season: number;
+  /** false 면 기록이 서버 메모리에만 있어서 서버가 다시 시작되면 사라진다 */
+  persistent: boolean;
+  entries: LeaderboardEntry[];
+}
+
 export interface Snapshot {
   t: 'snap';
   /** 시뮬레이션 틱. 월드가 멈춰 있는 동안에는 증가하지 않는다 (클라이언트 보간의 시간축). */
@@ -75,7 +100,8 @@ export type ServerMsg =
   /** 솔로 일시정지 상태가 바뀔 때마다 서버가 알려준다. max: 자동 재개까지 남은 최대 시간(초) */
   | { t: 'pause'; on: boolean; max: number }
   | { t: 'levelup'; offers: Offer[]; timeout: number }
-  | { t: 'over'; result: RunResult; sig: string }
+  /** place: 이번 판이 순위표에 올랐을 때의 순위 (오르지 못했으면 없음) */
+  | { t: 'over'; result: RunResult; sig: string; place?: { board: BoardId; rank: number } }
   | { t: 'pong'; ts: number }
   | { t: 'error'; code: string };
 

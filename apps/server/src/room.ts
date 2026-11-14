@@ -1,4 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import type { RunReport } from './leaderboard';
+import { newWorld } from './world';
 import type { WebSocket } from 'ws';
 import {
   DT,
@@ -10,7 +12,6 @@ import {
   TICK_RATE,
   addPlayer,
   buildSnapshot,
-  createWorld,
   encodeSnapshot,
   offersOf,
   pickOffer,
@@ -42,6 +43,8 @@ const LOBBY_IDLE_MS = 10 * 60 * 1000;
 const MAX_PAUSE_MS = MAX_PAUSE_SECONDS * 1000;
 /** 한 판에서 일시정지로 쓸 수 있는 시간의 합. 껐다 켜기를 반복해 방을 끝없이 붙잡아 두지 못하게 한다. */
 const PAUSE_BUDGET_MS = 30 * 60 * 1000;
+/** 판이 시작되고 이 시간(게임 시간, 초) 안에 들어온 사람까지를 "처음부터 함께 한 사람"으로 본다 */
+const CREW_GRACE_SECONDS = 5;
 /** 느린 클라이언트 보호: 송신 버퍼가 이 이상 쌓이면 스냅샷을 건너뛴다 (스냅샷 약 30개 분량) */
 const MAX_BUFFERED = 64 * 1024;
 
@@ -65,6 +68,8 @@ export class Room {
   private pauseUsed = 0;
   /** 이번 판에서 누군가 쓰러진 적이 있는지. 있으면 이후에 들어오는 사람은 다음 판까지 관전한다. */
   private casualty = false;
+  /** 이번 판에서 동시에 있었던 최대 인원. 2 이상이면 함께 한 판(coop 순위표)으로 기록한다 */
+  private peak = 0;
   closed = false;
 
   constructor(
@@ -72,9 +77,10 @@ export class Room {
     /** 페어 방 코드. 솔로는 빈 문자열 */
     readonly code: string,
     private readonly onClose: (room: Room) => void,
+    /** 끝난 판을 리더보드에 기록한다. 순위표에 들면 순위를 돌려준다. 없으면 기록하지 않는다 */
+    private readonly onRun?: (report: RunReport) => number | null,
   ) {
-    // 시드는 서버의 CSPRNG 에서 뽑고 클라이언트에 공개하지 않는다 (스폰/드롭/선택지 예측 방지)
-    this.world = createWorld(randomInt(0, 2 ** 31));
+    this.world = newWorld();
     this.started = mode === 'solo';
     this.timer = setInterval(() => {
       try {
@@ -102,6 +108,7 @@ export class Room {
     }
     const conn: Conn = { ws, sid, name: p.name, pid: p.id, lastSeq: -1, joinedAt: this.world.time };
     this.conns.set(p.id, conn);
+    this.peak = Math.max(this.peak, this.conns.size);
     if (this.hostPid < 0) this.hostPid = p.id;
     this.lastActivity = Date.now();
     this.send(conn, { t: 'welcome', id: p.id, mode: this.mode, code: this.code, tickRate: TICK_RATE });
@@ -233,9 +240,38 @@ export class Room {
     this.close();
   }
 
+  /**
+   * 끝난 판을 리더보드에 올린다. 기록은 서버가 직접 만든다 (클라이언트가 내는 값은 없다).
+   * 이름이 오르는 것은 처음부터 함께 해서 끝까지 남은 사람뿐이다: 도중에 들어온 사람이나 관전자는 빠진다.
+   */
+  private report(endedAt: number): { place: { board: 'solo' | 'coop'; rank: number }; crew: Set<Conn> } | null {
+    if (!this.onRun) return null;
+    const crew = [...this.conns.values()].filter((c) => c.joinedAt <= CREW_GRACE_SECONDS && this.world.players.has(c.pid));
+    if (crew.length === 0) return null;
+    const players = crew.map((c) => this.world.players.get(c.pid)!);
+    const board = this.peak >= 2 ? 'coop' : 'solo';
+    try {
+      const rank = this.onRun({
+        id: randomUUID(),
+        board,
+        names: players.map((p) => p.name),
+        time: Math.floor(this.world.time),
+        kills: players.reduce((sum, p) => sum + p.kills, 0),
+        level: Math.max(...players.map((p) => p.level)),
+        pausedSeconds: Math.round(this.pauseUsed / 1000),
+        endedAt,
+      });
+      return rank === null ? null : { place: { board, rank }, crew: new Set(crew) };
+    } catch (err) {
+      console.error('[error] leaderboard record', err);
+      return null;
+    }
+  }
+
   private finish(): void {
     const endedAt = Date.now();
     this.runs++;
+    const ranked = this.report(endedAt);
     for (const conn of this.conns.values()) {
       const p = this.world.players.get(conn.pid);
       if (!p) continue;
@@ -250,7 +286,9 @@ export class Room {
         level: p.level,
         endedAt,
       };
-      this.send(conn, { t: 'over', result, sig: sign(JSON.stringify(result)) });
+      const over: ServerMsg = { t: 'over', result, sig: sign(JSON.stringify(result)) };
+      if (ranked?.crew.has(conn)) over.place = ranked.place;
+      this.send(conn, over);
       if (this.mode === 'solo') conn.ws.close(1000, 'over');
     }
     if (this.mode === 'solo') return this.close();
@@ -261,10 +299,11 @@ export class Room {
   private resetToLobby(): void {
     const members = [...this.conns.values()];
     const host = this.conns.get(this.hostPid) ?? members[0];
-    this.world = createWorld(randomInt(0, 2 ** 31));
+    this.world = newWorld();
     this.started = false;
     this.casualty = false;
     this.pauseUsed = 0;
+    this.peak = members.length;
     this.lastActivity = Date.now();
     this.conns.clear();
     for (const conn of members) {
@@ -306,6 +345,9 @@ export class RoomManager {
   private rooms = new Set<Room>();
   private byCode = new Map<string, Room>();
 
+  /** onRun: 끝난 판을 리더보드에 기록하는 함수 (없으면 기록하지 않는다) */
+  constructor(private readonly onRun?: (report: RunReport) => number | null) {}
+
   get count(): number {
     return this.rooms.size;
   }
@@ -318,10 +360,15 @@ export class RoomManager {
       do code = randomCode();
       while (this.byCode.has(code));
     }
-    const room = new Room(mode, code, (r) => {
-      this.rooms.delete(r);
-      if (r.code) this.byCode.delete(r.code);
-    });
+    const room = new Room(
+      mode,
+      code,
+      (r) => {
+        this.rooms.delete(r);
+        if (r.code) this.byCode.delete(r.code);
+      },
+      this.onRun,
+    );
     this.rooms.add(room);
     if (code) this.byCode.set(code, room);
     return room;

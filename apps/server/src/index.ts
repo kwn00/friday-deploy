@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
 import { RoomManager, type Conn, type Room } from './room';
-import { IpLimiter, SECURITY_HEADERS, TokenBucket, clientIp, issueSession, originAllowed, pathnameOf, verifySession } from './security';
+import { LEADERBOARD_SEASON, type LeaderboardResponse } from '@friday-deploy/shared';
+import { Leaderboard, MemoryStore, type LeaderboardStore } from './leaderboard';
+import { IpLimiter, SECURITY_HEADERS, TokenBucket, clientIp, issueSession, originAllowed, pathnameOf, queryOf, verifySession } from './security';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
@@ -15,7 +17,26 @@ const MAX_CONNS_PER_IP = 6;
 const HELLO_TIMEOUT_MS = 5000;
 const MAX_VIOLATIONS = 5;
 
-const rooms = new RoomManager();
+/**
+ * 리더보드 저장소. DATABASE_URL 이 있으면 PostgreSQL 에 저장하고, 없으면 메모리에만 둔다
+ * (메모리 기록은 서버가 다시 시작되면 사라진다). 저장소 문제로 게임 서버가 뜨지 못하는 일은 없게 한다.
+ */
+async function openStore(): Promise<LeaderboardStore> {
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url) return new MemoryStore();
+  try {
+    const { createPostgresStore } = await import('./store-postgres');
+    return await createPostgresStore(url);
+  } catch (err) {
+    console.error('[leaderboard] DATABASE_URL 로 저장소를 열지 못했습니다. 이번 실행에서는 메모리에만 기록합니다.', err);
+    return new MemoryStore();
+  }
+}
+
+const leaderboard = new Leaderboard(await openStore(), LEADERBOARD_SEASON);
+void leaderboard.init();
+
+const rooms = new RoomManager((report) => leaderboard.record(report));
 const sessionLimiter = new IpLimiter(10, 0.5);
 /** 정적 파일 요청. 정상 방문은 한 번에 4~5개. 같은 주소에서 반복 요청으로 전송량 한도를 태우는 것을 늦춘다. */
 const staticLimiter = new IpLimiter(120, 4);
@@ -83,6 +104,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
   if (!staticLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': '10' });
+  if (pathname === '/api/leaderboard') {
+    // 읽기 전용 공개 정보. 메모리의 순위표를 그대로 돌려주므로 요청마다 DB 를 읽지 않는다.
+    const board = queryOf(req.url, 'board') === 'coop' ? 'coop' : 'solo';
+    const body: LeaderboardResponse = { board, season: leaderboard.season, persistent: leaderboard.persistent, entries: leaderboard.top(board) };
+    return json(res, 200, body, { 'Access-Control-Allow-Origin': '*' });
+  }
   serveStatic(req, res, pathname);
 }
 
@@ -257,6 +284,12 @@ function onConnection(ws: WebSocket, ip: string): void {
   });
   ws.on('error', () => ws.terminate());
 }
+
+// 배포·재시작 때 아직 저장하지 못한 기록을 마저 쓰고 끝낸다 (최대 3초)
+process.once('SIGTERM', () => {
+  setTimeout(() => process.exit(0), 3000).unref();
+  void leaderboard.close().finally(() => process.exit(0));
+});
 
 server.listen(PORT, () => {
   console.log(`[server] http://localhost:${PORT}  (ws: /ws, env: ${process.env.NODE_ENV ?? 'development'})`);

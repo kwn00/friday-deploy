@@ -210,6 +210,15 @@ export function pathnameOf(target: string | undefined): string | null {
   }
 }
 
+/** 요청 대상의 쿼리 값 하나를 안전하게 꺼낸다. 없거나 형식이 틀리면 null */
+export function queryOf(target: string | undefined, key: string): string | null {
+  try {
+    return new URL(target ?? '/', 'http://localhost').searchParams.get(key);
+  } catch {
+    return null;
+  }
+}
+
 export const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy':
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",

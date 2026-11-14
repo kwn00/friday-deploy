@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import type { WebSocket } from 'ws';
 import { decodeSnapshot, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
+import { Leaderboard, MemoryStore, type RunReport } from './leaderboard';
 import { RoomManager, type Conn, type Room } from './room';
 
 // 방은 실제 시간(setInterval, Date)에 맞춰 돈다. 테스트에서는 시계를 직접 넘긴다.
@@ -194,4 +195,128 @@ test('선택 시간이 끝난 뒤 늦게 도착한 선택은 위반이 아니고
   assert.equal(room.onPick(a.conn, 7), false, '제시되지 않은 번호는 위반');
   assert.equal(room.onPick(a.conn, 0), true);
   assert.equal(room.onPick(a.conn, 0), true, '같은 클릭이 한 번 더 와도 위반이 아니다');
+});
+
+/** 방 안의 플레이어를 쓰러뜨린다 (테스트용) */
+function down(room: Room, conn: Conn): void {
+  const p = room.world.players.get(conn.pid)!;
+  p.alive = false;
+  p.hp = 0;
+}
+/** 죽지 않게 하면서 게임 시간을 seconds 만큼 흘린다 */
+function survive(room: Room, conns: Conn[], seconds: number): void {
+  let seq = 10_000 + Math.floor(room.world.tick);
+  for (let t = 0; t < seconds * 1000; t += 50) {
+    for (const c of conns) {
+      const p = room.world.players.get(c.pid);
+      if (p?.alive) p.hp = 1e9;
+      if (p?.offers) room.onPick(c, 0);
+    }
+    if (t % 1000 === 0) for (const c of conns) room.onInput(c, seq++, 0, 0);
+    mock.timers.tick(50);
+  }
+}
+
+test('리더보드: 솔로 판은 끝날 때 서버가 직접 기록하고, 결과에 순위가 실린다', () => {
+  const reports: RunReport[] = [];
+  const lb = new Leaderboard(new MemoryStore());
+  const rooms = new RoomManager((r) => (reports.push(r), lb.record(r)));
+  const room = rooms.create('solo')!;
+  const a = join(room, 'solo-dev');
+  survive(room, [a.conn], 40);
+  room.world.players.get(a.conn.pid)!.kills = 77;
+  down(room, a.conn);
+  advance(100);
+  const over = last(a.ws, 'over')!;
+  assert.deepEqual(over.place, { board: 'solo', rank: 1 });
+  assert.equal(reports.length, 1);
+  assert.deepEqual([reports[0]!.board, reports[0]!.names, reports[0]!.kills], ['solo', ['solo-dev'], 77]);
+  assert.ok(reports[0]!.time >= 39 && reports[0]!.time <= 41);
+  assert.deepEqual(lb.top('solo').map((e) => [e.rank, e.names, e.kills]), [[1, ['solo-dev'], 77]]);
+});
+
+test('리더보드: 너무 짧은 판은 순위가 없고 결과에도 순위가 실리지 않는다', () => {
+  const lb = new Leaderboard(new MemoryStore());
+  const rooms = new RoomManager((r) => lb.record(r));
+  const room = rooms.create('solo')!;
+  const a = join(room, 'quick');
+  advance(2000);
+  down(room, a.conn);
+  advance(100);
+  assert.equal(last(a.ws, 'over')!.place, undefined);
+  assert.deepEqual(lb.top('solo'), []);
+});
+
+test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 있던 사람만 이름이 오른다', () => {
+  const reports: RunReport[] = [];
+  const lb = new Leaderboard(new MemoryStore());
+  const rooms = new RoomManager((r) => (reports.push(r), lb.record(r)));
+  const room = rooms.create('coop')!;
+  const a = join(room, 'host');
+  const b = join(room, 'mate');
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn], 20);
+  const late = join(room, 'late'); // 20초 뒤 합류: 순위표에는 오르지 않는다
+  survive(room, [a.conn, b.conn, late.conn], 20);
+  room.world.players.get(a.conn.pid)!.kills = 30;
+  room.world.players.get(b.conn.pid)!.kills = 12;
+  room.world.players.get(late.conn.pid)!.kills = 99;
+  down(room, a.conn);
+  down(room, b.conn);
+  down(room, late.conn);
+  advance(100);
+  assert.equal(reports.length, 1, '판 하나에 기록 하나');
+  assert.deepEqual([reports[0]!.board, reports[0]!.names, reports[0]!.kills], ['coop', ['host', 'mate'], 42]);
+  assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
+  assert.deepEqual(last(b.ws, 'over')!.place, { board: 'coop', rank: 1 });
+  assert.equal(last(late.ws, 'over')!.place, undefined, '도중에 들어온 사람에게는 순위를 주지 않는다');
+  assert.deepEqual(lb.top('solo'), []);
+
+  // 같은 방의 다음 판: 한 사람이 나가도 "함께 시작한 판"이면 coop 으로 남는다. 같은 판이 두 번 기록되지 않는다.
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn, late.conn], 10);
+  room.leave(b.conn);
+  survive(room, [a.conn, late.conn], 30);
+  down(room, a.conn);
+  down(room, late.conn);
+  advance(100);
+  assert.equal(reports.length, 2);
+  assert.deepEqual([reports[1]!.board, reports[1]!.names], ['coop', ['host', 'late']]);
+  assert.notEqual(reports[0]!.id, reports[1]!.id);
+});
+
+test('리더보드: 페어 방에서 혼자 한 판은 솔로 순위표에 오른다', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), null));
+  const room = rooms.create('coop')!;
+  const a = join(room, 'alone');
+  room.onStart(a.conn);
+  survive(room, [a.conn], 35);
+  down(room, a.conn);
+  advance(100);
+  assert.deepEqual([reports[0]!.board, reports[0]!.names], ['solo', ['alone']]);
+});
+
+test('리더보드: 일시정지한 시간은 기록에 남고, 기록 함수가 예외를 던져도 판은 정상적으로 끝난다', () => {
+  const reports: RunReport[] = [];
+  const errors = mock.method(console, 'error', () => {});
+  const rooms = new RoomManager((r) => {
+    reports.push(r);
+    throw new Error('leaderboard exploded');
+  });
+  const room = rooms.create('solo')!;
+  const a = join(room, 'p');
+  survive(room, [a.conn], 20);
+  room.onPause(a.conn, true);
+  advance(60_000);
+  room.onPause(a.conn, false);
+  survive(room, [a.conn], 15);
+  down(room, a.conn);
+  assert.doesNotThrow(() => advance(100));
+  errors.mock.restore();
+  assert.ok(reports[0]!.pausedSeconds >= 59 && reports[0]!.pausedSeconds <= 61, `${reports[0]!.pausedSeconds}s`);
+  assert.ok(reports[0]!.time >= 34 && reports[0]!.time <= 36, '멈춰 있던 시간은 생존 시간에 들어가지 않는다');
+  const over = last(a.ws, 'over')!;
+  assert.equal(over.place, undefined);
+  assert.deepEqual(a.ws.closed, [1000, 'over']);
 });
