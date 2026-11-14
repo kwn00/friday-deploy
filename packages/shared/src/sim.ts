@@ -5,6 +5,17 @@
 import {
   DUCK_ORBIT_RADIUS,
   DUCK_ORBIT_SPEED,
+  FIELD_ITEM_FADE,
+  FIELD_ITEM_INTERVAL,
+  FIELD_ITEM_JITTER,
+  FIELD_ITEM_MAX_DIST,
+  FIELD_ITEM_MIN_DIST,
+  FIELD_ITEM_TTL,
+  MAX_FIELD_ITEMS,
+  MAX_REVIVES,
+  REVIVE_BLAST_RADIUS,
+  REVIVE_HP_FRACTION,
+  REVIVE_SHIELD_SECONDS,
   HEAL_DROP_CHANCE,
   HEAL_DROP_COOLDOWN,
   GEM_CONTACT,
@@ -33,11 +44,14 @@ import {
   BOSS_INTERVAL,
   ENEMIES,
   ENEMY_IDS,
+  FIELD_ITEMS,
+  FIELD_ITEM_KINDS,
   SHOT_KINDS,
   UPGRADE_IDS,
   WEAPON_IDS,
   isWeapon,
   type EnemyId,
+  type FieldItemKind,
   type ShotKind,
   type UpgradeId,
 } from './content';
@@ -73,6 +87,10 @@ export interface Player {
    */
   camX: number;
   camY: number;
+  /** 가지고 있는 부활(백업) 수. 쓰러질 때 하나를 써서 그 자리에서 되살아난다 */
+  revives: number;
+  /** 피해를 받지 않는 남은 시간(초). 되살아난 직후에만 0 보다 크다 */
+  shield: number;
   up: Partial<Record<UpgradeId, number>>;
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
@@ -122,6 +140,16 @@ export interface Heal {
   y: number;
 }
 
+/** 시간에 따라 맵에 놓이는 아이템. 적이 떨어뜨리는 회복 아이템(Heal)과 달리 멀리서도 미니맵에 보인다 */
+export interface FieldItem {
+  id: number;
+  kind: FieldItemKind;
+  x: number;
+  y: number;
+  /** 사라지기까지 남은 시간(초) */
+  ttl: number;
+}
+
 export type WorldEvent = { type: 'offers'; pid: number } | { type: 'over' };
 
 export interface World {
@@ -147,6 +175,9 @@ export interface World {
   shots: Shot[];
   gems: Gem[];
   heals: Heal[];
+  items: FieldItem[];
+  /** 다음 필드 아이템이 놓이기까지 남은 시간(초) */
+  itemCd: number;
   /** 다음 회복 아이템이 떨어질 수 있을 때까지 남은 시간(초) */
   healCd: number;
   spawnAcc: number;
@@ -183,6 +214,8 @@ export function createWorld(source: Seed | WorldRandom, secret?: Rand): World {
     gems: [],
     heals: [],
     healCd: HEAL_DROP_COOLDOWN,
+    items: [],
+    itemCd: fieldItemDelay(random.secret),
     spawnAcc: 0,
     nextBossAt: BOSS_INTERVAL,
     events: [],
@@ -227,6 +260,8 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     body: !spectator,
     camX: x,
     camY: y,
+    revives: 0,
+    shield: 0,
     up: { console_log: 1 },
     cd: {},
     offers: null,
@@ -269,6 +304,70 @@ export function pickOffer(world: World, id: number, choice: number): boolean {
 
 export function offersOf(p: Player): Offer[] {
   return (p.offers ?? []).map((id) => ({ id, level: lv(p, id) + 1 }));
+}
+
+/** 다음 필드 아이템까지의 시간. 비밀 난수로 정해서 언제 나올지 관찰로 맞힐 수 없다 */
+function fieldItemDelay(secret: Rand): number {
+  return FIELD_ITEM_INTERVAL * (1 - FIELD_ITEM_JITTER + 2 * FIELD_ITEM_JITTER * secret());
+}
+
+/**
+ * 필드 아이템 하나를 놓는다. 누구 근처에, 어느 방향·거리에, 무엇을 놓을지 모두 비밀 난수로 정한다
+ * (보이는 난수를 쓰지 않으므로 적 스폰의 흐름에 영향을 주지 않는다).
+ */
+function spawnFieldItem(world: World, alive: Player[]): void {
+  const anchor = alive[Math.floor(world.secret() * alive.length)]!;
+  const a = world.secret() * Math.PI * 2;
+  const d = FIELD_ITEM_MIN_DIST + world.secret() * (FIELD_ITEM_MAX_DIST - FIELD_ITEM_MIN_DIST);
+  const total = FIELD_ITEM_KINDS.reduce((sum, k) => sum + FIELD_ITEMS[k].weight, 0);
+  let roll = world.secret() * total;
+  let kind: FieldItemKind = FIELD_ITEM_KINDS[0];
+  for (const k of FIELD_ITEM_KINDS) {
+    roll -= FIELD_ITEMS[k].weight;
+    if (roll < 0) {
+      kind = k;
+      break;
+    }
+  }
+  world.items.push({ id: world.nextId++, kind, x: anchor.x + Math.cos(a) * d, y: anchor.y + Math.sin(a) * d, ttl: FIELD_ITEM_TTL });
+}
+
+/** 이 플레이어가 지금 이 아이템을 주울 수 있는지 (못 줍는 것은 그 자리에 남는다) */
+function canTake(p: Player, kind: FieldItemKind): boolean {
+  // 화면에 보이는 체력(올림)이 가득이면 회복 아이템을 써 버리지 않는다
+  if (kind === 'heal') return Math.ceil(p.hp) < maxHpOf(p);
+  if (kind === 'revive') return p.revives < MAX_REVIVES;
+  return true;
+}
+
+function takeItem(world: World, p: Player, kind: FieldItemKind): void {
+  if (kind === 'heal') {
+    const maxHp = maxHpOf(p);
+    p.hp = Math.min(maxHp, p.hp + Math.ceil(maxHp * HEAL_FRACTION));
+  } else if (kind === 'revive') {
+    p.revives++;
+  } else {
+    // 지금 레벨을 채우는 데 필요한 만큼을 통째로 준다: 정확히 한 레벨 오르고, 모으던 경험치는 그대로 남는다
+    p.xp += p.xpNext;
+    checkLevelUp(world, p);
+  }
+}
+
+/** 쓰러질 순간에 부활을 하나 써서 그 자리에서 되살아난다 */
+function revive(world: World, p: Player): void {
+  p.revives--;
+  p.hp = Math.ceil(maxHpOf(p) * REVIVE_HP_FRACTION);
+  p.shield = REVIVE_SHIELD_SECONDS;
+  // 주변의 적을 반경 밖으로 밀어낸다. 방향은 지금 있는 쪽 그대로 (겹쳐 있으면 적마다 다른 고정된 방향)
+  for (const e of world.enemies) {
+    const dx = e.x - p.x;
+    const dy = e.y - p.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= REVIVE_BLAST_RADIUS) continue;
+    const a = d > 0.001 ? Math.atan2(dy, dx) : e.id * 2.399963;
+    e.x = p.x + Math.cos(a) * REVIVE_BLAST_RADIUS;
+    e.y = p.y + Math.sin(a) * REVIVE_BLAST_RADIUS;
+  }
 }
 
 function checkLevelUp(world: World, p: Player): void {
@@ -475,6 +574,18 @@ export function step(world: World, dt: number): void {
   world.time = world.tick * dt;
   world.healCd -= dt;
 
+  // 필드 아이템: 수명이 다한 것을 치우고, 때가 되면 하나 놓는다 (가득 차 있으면 이번 차례는 건너뛴다)
+  if (world.items.length > 0) {
+    for (const it of world.items) it.ttl -= dt;
+    world.items = world.items.filter((it) => it.ttl > 0);
+  }
+  world.itemCd -= dt;
+  if (world.itemCd <= 0) {
+    world.itemCd = fieldItemDelay(world.secret);
+    if (world.items.length < MAX_FIELD_ITEMS) spawnFieldItem(world, alive);
+  }
+  for (const p of players) if (p.shield > 0) p.shield = Math.max(0, p.shield - dt);
+
   // 선택 중인 플레이어는 이동/피격/공격 없음
   const active = alive.filter((p) => p.offers === null);
 
@@ -546,13 +657,18 @@ export function step(world: World, dt: number): void {
     }
     e.x += ((target.x - e.x) / dist) * def.speed * dt;
     e.y += ((target.y - e.y) / dist) * def.speed * dt;
-    if (dist < def.r + PLAYER_RADIUS) {
+    // 되살아난 직후(shield)에는 피해를 받지 않는다
+    if (dist < def.r + PLAYER_RADIUS && target.shield <= 0) {
       target.hp -= def.dps * dt;
       if (target.hp <= 0) {
-        target.hp = 0;
-        target.alive = false;
-        target.dx = 0;
-        target.dy = 0;
+        if (target.revives > 0) {
+          revive(world, target);
+        } else {
+          target.hp = 0;
+          target.alive = false;
+          target.dx = 0;
+          target.dy = 0;
+        }
       }
     }
   }
@@ -643,6 +759,26 @@ export function step(world: World, dt: number): void {
     checkLevelUp(world, p);
   }
 
+  // 필드 아이템: 획득 범위 안에 들어온 사람 중 가장 가까운(그리고 그것을 주울 수 있는) 사람이 갖는다
+  if (world.items.length > 0) {
+    world.items = world.items.filter((it) => {
+      let who: Player | null = null;
+      let best = Infinity;
+      for (const p of pullers) {
+        // 이번 틱에 쓰러졌거나, 방금 다른 아이템으로 레벨업 선택에 들어간 사람은 제외
+        if (!p.alive || p.offers !== null || !canTake(p, it.kind)) continue;
+        const d2 = (it.x - p.x) ** 2 + (it.y - p.y) ** 2;
+        if (d2 <= pickupOf(p) ** 2 && d2 < best) {
+          best = d2;
+          who = p;
+        }
+      }
+      if (!who) return true;
+      takeItem(world, who, it.kind);
+      return false;
+    });
+  }
+
   for (const p of active) {
     if (!p.alive) continue;
     const r2 = pickupOf(p) ** 2;
@@ -685,6 +821,7 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
       level: me.level,
       kills: me.kills,
       alive: me.alive,
+      revives: me.revives,
       up: me.up,
     },
     p: [],
@@ -692,18 +829,21 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
     s: [],
     g: [],
     h: [],
+    i: [],
   };
   // 같은 방의 플레이어는 멀리 있어도 보낸다 (아군 위치는 숨길 정보가 아니고, 미니맵에서 서로를 찾을 수 있어야 한다)
   // 몸이 없는 사람(관전으로 합류)은 보내지 않는다: 그릴 것이 없다
   for (const p of world.players.values()) {
     if (!p.body) continue;
-    snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0]);
+    snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0, p.alive && p.shield > 0 ? 1 : 0]);
   }
   for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0]);
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
   // 끌려오는 경험치는 움직이므로 소수 좌표로 보낸다 (전송 크기는 같다: 어차피 1/16 픽셀 정수로 부호화한다)
   for (const g of world.gems) if (near(g.x, g.y)) snap.g.push([g.id, r1(g.x), r1(g.y)]);
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);
+  // 필드 아이템은 거리와 상관없이 모두에게 보낸다: 찾아가라고 놓는 것이라 숨길 정보가 아니다 (최대 MAX_FIELD_ITEMS 개)
+  for (const it of world.items) snap.i.push([it.id, FIELD_ITEM_KINDS.indexOf(it.kind), r1(it.x), r1(it.y), it.ttl <= FIELD_ITEM_FADE ? 1 : 0]);
   return snap;
 }
 

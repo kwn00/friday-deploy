@@ -1,8 +1,10 @@
-import { ENEMY_IDS, VIEW_RADIUS, type Snapshot } from '@friday-deploy/shared';
+import { ENEMY_IDS, FIELD_ITEM_KINDS, VIEW_RADIUS, type Snapshot } from '@friday-deploy/shared';
 
 /**
  * 미니맵. 서버가 이미 보내준 정보(내 주변 VIEW_RADIUS 안 + 같은 방 플레이어)만 그린다.
  * 화면 밖에서 다가오는 적, 떨어진 회복 아이템, 멀어진 동료의 방향을 알려주는 용도.
+ * 필드 아이템(피자·LGTM·백업)은 서버가 거리와 상관없이 보내 준다. 범위 밖이면 가장자리에 붙여 방향을 알려주고,
+ * 새로 놓인 것은 몇 초 동안 테두리가 퍼지며 눈에 띄게 한다.
  * 크기와 위치는 CSS 브레이크포인트가 정하고, 여기서는 그 크기에 맞춰 그리기만 한다.
  */
 export class Minimap {
@@ -10,6 +12,9 @@ export class Minimap {
   private px = 0;
   private lastSnap: Snapshot | null = null;
   private lastAt = 0;
+  /** 필드 아이템 id → 처음 본 시각(ms). 새로 놓인 것을 잠깐 강조하는 데 쓴다 */
+  private firstSeen = new Map<number, number>();
+  private calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   constructor(private el: HTMLCanvasElement) {
     this.ctx = el.getContext('2d')!;
@@ -72,8 +77,51 @@ export class Minimap {
       }
     }
 
-    // 동료: 범위를 벗어나면 가장자리에 붙여서 방향을 알려준다
     const edge = u * 2;
+
+    // 필드 아이템: 거리와 상관없이 표시한다. 범위를 벗어나면 가장자리에 붙여 방향을 알려준다.
+    const present = new Set<number>();
+    for (const it of snap.i) {
+      const kind = FIELD_ITEM_KINDS[it[1]];
+      if (!kind) continue;
+      present.add(it[0]);
+      let born = this.firstSeen.get(it[0]);
+      if (born === undefined) this.firstSeen.set(it[0], (born = now));
+      const age = now - born;
+      // 곧 사라질 것은 깜빡인다
+      if (it[4] && !this.calm && Math.floor(now / 250) % 2 === 0) continue;
+      const pad = u * 3;
+      const x = Math.min(px - pad, Math.max(pad, mx(it[2])));
+      const y = Math.min(px - pad, Math.max(pad, my(it[3])));
+      // 새로 놓인 것: 4초 동안 테두리가 퍼져 나간다 (동작 줄이기 설정에서는 고정된 테두리)
+      if (age < 4000) {
+        const grow = this.calm ? u * 4 : u * 3 + ((age % 1000) / 1000) * u * 5;
+        ctx.strokeStyle = kind === 'revive' ? '#89dceb' : kind === 'levelup' ? '#f9e2af' : '#a6e3a1';
+        ctx.lineWidth = Math.max(1, u >> 1);
+        ctx.strokeRect(Math.round(x - grow) + 0.5, Math.round(y - grow) + 0.5, Math.round(grow * 2), Math.round(grow * 2));
+      }
+      if (kind === 'heal') {
+        // 피자: 초록 십자 (적이 떨어뜨린 회복 아이템과 같은 모양)
+        ctx.fillStyle = '#11111b';
+        ctx.fillRect(x - u * 2 - 1, y - (u >> 1) - 1, u * 4 + 2, u + 2);
+        ctx.fillRect(x - (u >> 1) - 1, y - u * 2 - 1, u + 2, u * 4 + 2);
+        ctx.fillStyle = '#a6e3a1';
+        ctx.fillRect(x - u * 2, y - (u >> 1), u * 4, u);
+        ctx.fillRect(x - (u >> 1), y - u * 2, u, u * 4);
+      } else if (kind === 'levelup') {
+        // LGTM: 노란 마름모
+        this.diamond(x, y, u + 1, '#11111b');
+        this.diamond(x, y, u, '#f9e2af');
+      } else {
+        // 백업: 하늘색 네모 (가장 드물다. 조금 크게)
+        dot(x, y, u * 4 + 2, '#11111b');
+        dot(x, y, u * 4, '#89dceb');
+        dot(x, y, u * 2, '#eff1f5');
+      }
+    }
+    for (const id of this.firstSeen.keys()) if (!present.has(id)) this.firstSeen.delete(id);
+
+    // 동료: 범위를 벗어나면 가장자리에 붙여서 방향을 알려준다
     for (const p of snap.p) {
       // 살아 있는 나는 가운데 점으로 그린다. 쓰러진 뒤에는 내 묘비도 다른 묘비처럼 표시한다 (관전 시점이 묘비를 떠나므로)
       if (p[0] === snap.me.id && p[4]) continue;
@@ -85,5 +133,14 @@ export class Minimap {
 
     dot(c | 0, c | 0, u * 2 + 2, '#11111b');
     dot(c | 0, c | 0, u * 2, '#eff1f5');
+  }
+
+  /** 픽셀 느낌의 마름모: 가운데 줄이 가장 넓고 위아래로 한 칸씩 줄어든다 (s = 한 칸의 크기) */
+  private diamond(x: number, y: number, s: number, color: string): void {
+    this.ctx.fillStyle = color;
+    for (let k = -2; k <= 2; k++) {
+      const w = (5 - 2 * Math.abs(k)) * s;
+      this.ctx.fillRect(Math.round(x - w / 2), Math.round(y + k * s - s / 2), w, s);
+    }
   }
 }

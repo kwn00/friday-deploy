@@ -9,10 +9,10 @@
  * 서버 → 클라이언트 전용이다. 클라이언트가 보내는 메시지는 여전히 엄격히 검증하는 JSON 텍스트뿐이다.
  */
 import { DT } from './constants';
-import { UPGRADE_IDS, type UpgradeId } from './content';
+import { FIELD_ITEM_KINDS, UPGRADE_IDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 2;
+const VERSION = 3;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 
@@ -126,6 +126,7 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
   w.varuint(s.me.xpNext);
   w.varuint(s.me.level);
   w.varuint(s.me.kills);
+  w.u8(Math.max(0, Math.min(255, s.me.revives)));
   for (const id of UPGRADE_IDS) w.u8(s.me.up[id] ?? 0);
 
   // 플레이어는 멀리 있을 수 있어 절대 좌표(f32)로 보낸다. 최대 4명이라 크기 부담이 없다.
@@ -134,7 +135,8 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.varuint(p[0]);
     w.f32(p[1]);
     w.f32(p[2]);
-    w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((p[6] & 7) << 2));
+    // 방향(1) · 생존(2) · 러버덕 수(4,8,16) · 무적 중(32)
+    w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((p[6] & 7) << 2) | (p[7] ? 32 : 0));
     w.u8(Math.max(0, Math.min(100, p[5])));
   }
 
@@ -168,6 +170,17 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
       w.i16(rel(g[2], oy));
     }
   }
+  // 필드 아이템: 멀리 있을 수 있어 플레이어처럼 절대 좌표로 보낸다 (몇 개 안 된다)
+  prev = 0;
+  w.u8(s.i.length);
+  for (const it of s.i) {
+    w.varint(it[0] - prev);
+    prev = it[0];
+    // 종류(하위 7비트) + 곧 사라짐(최상위 비트)
+    w.u8((it[1] & 0x7f) | (it[4] ? 0x80 : 0));
+    w.f32(it[2]);
+    w.f32(it[3]);
+  }
   return w.finish();
 }
 
@@ -189,6 +202,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
     level: r.varuint(),
     kills: r.varuint(),
     alive: (flags & 2) !== 0,
+    revives: r.u8(),
     up: {},
   };
   for (const id of UPGRADE_IDS) {
@@ -203,14 +217,14 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   };
   const abs = (o: number): number => o + r.i16() / Q;
 
-  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], me, p: [], e: [], s: [], g: [], h: [] };
+  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], me, p: [], e: [], s: [], g: [], h: [], i: [] };
   const players = r.u8();
   for (let i = 0; i < players; i++) {
     const id = r.varuint();
     const x = r.f32();
     const y = r.f32();
     const bits = r.u8();
-    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, r.u8(), (bits >> 2) & 7]);
+    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, r.u8(), (bits >> 2) & 7, bits & 32 ? 1 : 0]);
   }
   let id = 0;
   for (let i = count(); i > 0; i--) {
@@ -230,6 +244,13 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
       id += r.varint();
       list.push([id, abs(ox), abs(oy)]);
     }
+  }
+  id = 0;
+  for (let i = r.u8(); i > 0; i--) {
+    id += r.varint();
+    const kind = r.u8();
+    if ((kind & 0x7f) >= FIELD_ITEM_KINDS.length) throw new RangeError('unknown field item kind');
+    snap.i.push([id, kind & 0x7f, r.f32(), r.f32(), kind >> 7]);
   }
   if (!r.done) throw new RangeError('snapshot has trailing bytes');
   return snap;

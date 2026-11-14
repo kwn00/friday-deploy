@@ -65,3 +65,23 @@ export function isWeapon(id: UpgradeId): id is WeaponId {
 export function isUpgradeId(v: unknown): v is UpgradeId {
   return typeof v === 'string' && (UPGRADE_IDS as readonly string[]).includes(v);
 }
+
+/* ───────────── 필드 아이템 ───────────── */
+
+/** 순서가 곧 통신에서 쓰는 번호다. 중간에 끼워 넣지 말고 뒤에 추가할 것 */
+export const FIELD_ITEM_KINDS = ['heal', 'levelup', 'revive'] as const;
+export type FieldItemKind = (typeof FIELD_ITEM_KINDS)[number];
+
+export interface FieldItemDef {
+  name: string;
+  icon: string;
+  desc: string;
+  /** 놓일 때 이 종류가 뽑힐 비중 */
+  weight: number;
+}
+
+export const FIELD_ITEMS: Record<FieldItemKind, FieldItemDef> = {
+  heal: { name: '야근 피자', icon: '🍕', desc: '체력 20% 회복', weight: 65 },
+  levelup: { name: 'LGTM', icon: '✅', desc: '즉시 1레벨 업', weight: 34 },
+  revive: { name: '백업', icon: '💾', desc: '쓰러져도 한 번 되살아난다', weight: 1 },
+};
