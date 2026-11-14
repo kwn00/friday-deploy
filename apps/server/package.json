@@ -9,11 +9,13 @@
   },
   "dependencies": {
     "@friday-deploy/shared": "*",
+    "pg": "^8.23.1",
     "tsx": "^4.19.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "@types/ws": "^8.5.13"
   }
 }
