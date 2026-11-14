@@ -165,6 +165,9 @@ function setPhase(next: Phase): void {
   el.over.classList.toggle('hidden', next !== 'over');
   el.hud.classList.toggle('hidden', next !== 'playing' && next !== 'over');
   if (next !== 'playing') {
+    // 판이 끝나거나 나가면 떠 있던 아이템 알림도 치운다
+    window.clearTimeout(toastTimer);
+    el.toast.classList.add('hidden');
     el.levelup.classList.add('hidden');
     hideMenu();
     // 일시정지한 채로 판을 떠나면 "재개" 알림이 오지 않는다. 남겨 두면 다음 판의 선택 시간 표시가 틀어진다.
@@ -185,6 +188,8 @@ function updateHud(s: Snapshot): void {
   el.kills.textContent = `🐛 ${me.kills}`;
   // 페어에서 쓰러졌거나(또는 누군가 쓰러진 뒤에 들어와서) 이번 판을 관전 중일 때
   el.spectate.classList.toggle('hidden', me.alive || mode !== 'coop' || phase !== 'playing');
+  // 관전 안내와 아이템 알림은 같은 자리에 뜬다. 관전 중에는 알림을 치운다 (쓰러진 사람은 아이템을 주울 수도 없다)
+  if (!me.alive) el.toast.classList.add('hidden');
   const key = `${JSON.stringify(me.up)}|${me.revives}`;
   if (key !== loadoutKey) {
     loadoutKey = key;
@@ -242,7 +247,8 @@ function noticeItems(s: Snapshot): void {
     if (kind && (fresh === null || FIELD_ITEMS[kind].weight < FIELD_ITEMS[fresh].weight)) fresh = kind;
   }
   if (knownItems.size > 64) for (const id of knownItems) if (!s.i.some((it) => it[0] === id)) knownItems.delete(id);
-  if (fresh && me.alive && phase === 'playing') toast(`${FIELD_ITEMS[fresh].icon} ${ITEM_DROPPED[fresh]} · 미니맵을 보세요`);
+  // 미니맵을 꺼 둔 사람에게 "미니맵을 보세요"라고 하면 헷갈린다: 켜면 보인다고 알려준다
+  if (fresh && me.alive && phase === 'playing') toast(`${FIELD_ITEMS[fresh].icon} ${ITEM_DROPPED[fresh]} · ${minimapOn ? '미니맵을 보세요' : '미니맵을 켜면 위치가 보여요'}`);
 }
 
 /** 아이템이 놓였을 때의 문구 (이름마다 조사가 달라서 통째로 적는다) */

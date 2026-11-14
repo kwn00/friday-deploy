@@ -634,7 +634,8 @@ test('필드 아이템: 아주 가끔, 화면 밖 적당한 거리에 놓이고,
     for (const id of born.keys()) if (!gone.has(id) && !w.items.some((it) => it.id === id)) gone.set(id, w.time);
   }
   const times = [...born.values()];
-  assert.ok(times.length >= 30 && times.length <= 70, `한 시간에 ${times.length}개 (평균 ${FIELD_ITEM_INTERVAL}초에 하나)`);
+  const expected = 3600 / FIELD_ITEM_INTERVAL;
+  assert.ok(times.length >= expected * 0.65 && times.length <= expected * 1.35, `한 시간에 ${times.length}개 (평균 ${FIELD_ITEM_INTERVAL}초에 하나면 약 ${Math.round(expected)}개)`);
   assert.ok(times[0]! >= FIELD_ITEM_INTERVAL * 0.6 - 0.1, `첫 아이템은 ${times[0]}초에: 시작하자마자 나오지 않는다`);
   for (let i = 1; i < times.length; i++) assert.ok(times[i]! - times[i - 1]! >= FIELD_ITEM_INTERVAL * 0.6 - 0.1, `간격 ${times[i]! - times[i - 1]!}`);
   // 아무도 줍지 않았으므로 전부 수명(90초)을 채우고 사라졌다

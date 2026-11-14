@@ -86,8 +86,10 @@ export const MAX_HEALS = 4;
 /**
  * 필드 아이템: 적을 잡지 않아도 시간에 따라 맵에 저절로 놓이는 아이템 (종류와 비중은 content.ts 의 FIELD_ITEMS).
  * 아주 조금만 나온다: 평균 FIELD_ITEM_INTERVAL 초에 하나.
+ * 처음에는 75초로 잡았는데, 봇으로 재 보니 아이템을 찾아다니는 플레이의 생존 시간이 중앙값 +27%(상위 25% 는 +47%)
+ * 늘어서 110초로 늦췄다 (같은 측정에서 약 +8%). 간격을 줄이려면 다시 재 볼 것.
  */
-export const FIELD_ITEM_INTERVAL = 75;
+export const FIELD_ITEM_INTERVAL = 110;
 /** 실제 간격은 평균의 (1 - 이 값) ~ (1 + 이 값) 배 사이에서 무작위 (언제 나올지 맞힐 수 없게) */
 export const FIELD_ITEM_JITTER = 0.4;
 /** 맵에 동시에 있을 수 있는 개수. 가득 차 있으면 그 차례는 건너뛴다 */
