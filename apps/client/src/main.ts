@@ -1,13 +1,16 @@
 import {
+  APP_VERSION,
   GAME_TAGLINE,
   GAME_TITLE,
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SIZE,
   MAX_PAUSE_SECONDS,
+  RELEASES,
   ROOM_CODE_LEN,
   UPGRADES,
   normalizeRoomCode,
   sanitizeName,
+  unseenReleases,
   type BoardId,
   type GameMode,
   type Offer,
@@ -19,6 +22,7 @@ import {
 } from '@friday-deploy/shared';
 import { Input } from './input';
 import { Leaderboard } from './leaderboard';
+import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
 import { Net } from './net';
 import { Renderer } from './render';
@@ -56,6 +60,7 @@ const el = {
   quit: $<HTMLButtonElement>('btn-quit'),
   minimap: $<HTMLCanvasElement>('minimap'),
   spectate: $('spectate-text'),
+  version: $('btn-version'),
   offers: $('offers'),
   offerTimer: $('offer-timer'),
   result: $('result'),
@@ -81,6 +86,7 @@ const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
 // 순위표가 열려 있는 동안 뒤 화면은 포커스를 받지 않는다
 const board = new Leaderboard([el.title, el.over, el.lobby]);
+const notes = new ReleaseNotes([el.title, el.over, el.lobby]);
 
 type Phase = 'title' | 'connecting' | 'lobby' | 'playing' | 'over';
 let phase: Phase = 'title';
@@ -107,11 +113,13 @@ const store = {
       return null; // 사생활 보호 모드 등
     }
   },
-  set(key: string, value: string): void {
+  /** 저장에 성공했는지 돌려준다 (사생활 보호 모드 등에서는 실패할 수 있다) */
+  set(key: string, value: string): boolean {
     try {
       localStorage.setItem(key, value);
+      return true;
     } catch {
-      /* 무시 */
+      return false;
     }
   },
 };
@@ -147,6 +155,7 @@ function setPhase(next: Phase): void {
   phase = next;
   // 순위표는 타이틀과 결과 화면에서만 연다. 판이 시작되거나 대기실로 넘어가면(페어에서 방장이 시작한 경우 등) 닫는다.
   if (next !== 'title' && next !== 'over') board.close();
+  if (next !== 'title') notes.close();
   el.title.classList.toggle('hidden', next !== 'title' && next !== 'connecting');
   el.lobby.classList.toggle('hidden', next !== 'lobby');
   el.over.classList.toggle('hidden', next !== 'over');
@@ -491,6 +500,14 @@ el.quit.addEventListener('click', quitToTitle);
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.repeat) return;
+  // 새 소식이 열려 있으면 Esc 는 그것만 닫는다
+  if (notes.isOpen) {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      notes.close();
+    }
+    return;
+  }
   // 순위표가 열려 있으면 Esc 는 순위표만 닫는다 (메뉴/게임 단축키는 건드리지 않는다)
   if (board.isOpen) {
     if (e.code === 'Escape') {
@@ -515,6 +532,14 @@ document.addEventListener('visibilitychange', () => {
 });
 
 el.name.value = store.get('name') ?? '';
+
+// 버전 표기와 새 소식. 이 버전을 처음 보는 브라우저에는 한 번 자동으로 띄우고, 같은 버전으로 다시 오면 띄우지 않는다.
+// "봤다"는 표시를 먼저 남기고 띄운다: 저장할 수 없는 브라우저(사생활 보호 모드 등)에서 올 때마다 뜨는 일이 없게.
+el.version.textContent = `v${APP_VERSION}`;
+el.version.setAttribute('aria-label', `버전 ${APP_VERSION} · 새 소식 보기`);
+el.version.addEventListener('click', () => notes.open(RELEASES.slice(0, 3)));
+const unseen = unseenReleases(store.get('seenVersion'));
+if (unseen.length > 0 && store.set('seenVersion', APP_VERSION)) notes.open(unseen);
 
 // 초대 링크(?room=CODE)로 들어온 경우: 코드를 채워 두고 닉네임만 넣으면 되게 한다
 const invited = normalizeRoomCode(new URLSearchParams(location.search).get('room'));

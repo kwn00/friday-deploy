@@ -988,3 +988,105 @@ body {
     transition: none;
   }
 }
+
+/* ───────────── 버전 표기와 새 소식(릴리즈노트) ───────────── */
+/* 타이틀 화면의 오른쪽 아래 구석. 글자는 작게, 누르는 영역은 손가락 크기로 */
+.panel--title {
+  position: relative;
+}
+.version {
+  position: fixed;
+  right: calc(var(--safe-r) + 2px);
+  bottom: calc(var(--safe-b) + 2px);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 18px 8px 6px 14px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  text-align: right;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.version:hover,
+.version:focus-visible {
+  color: var(--text);
+}
+.version:focus-visible {
+  outline: var(--px) solid var(--yellow);
+  outline-offset: calc(var(--px) * -1);
+}
+.panel.panel--notes {
+  max-width: 400px;
+}
+.notes__body {
+  padding: 2px 14px 4px;
+}
+.note + .note {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: var(--px) solid var(--line);
+}
+.note__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.note__version {
+  padding: 2px 6px;
+  color: #11111b;
+  background: var(--green);
+}
+.note__title {
+  margin: 8px 0 6px;
+  font-size: 14px;
+  font-weight: normal;
+  color: var(--yellow);
+  word-break: keep-all;
+}
+.note__items {
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  word-break: keep-all;
+}
+.note__items li + li {
+  margin-top: 4px;
+}
+.notes__foot {
+  flex: none;
+  padding: 8px 12px 12px;
+}
+.notes__foot .btn {
+  width: 100%;
+}
+
+/* 화면이 낮으면 타이틀 패널이 화면 구석까지 차지한다. 그때는 버전 표기를 패널 안쪽 구석에 붙인다 (패널 테두리에 걸치지 않게) */
+@media (max-height: 540px) {
+  .version {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    padding: 18px 10px 8px 14px;
+  }
+}
+@media (orientation: portrait) and (max-height: 540px) {
+  /* 좁고 낮은 화면: 안내 문구가 여러 줄로 내려와도 겹치지 않게 패널 아래에 버전 표기 자리를 둔다 */
+  .panel--title {
+    padding-bottom: 34px;
+  }
+}
+@media (orientation: landscape) and (max-height: 540px) {
+  /* 가운데 정렬된 안내 문구가 길어져도 구석의 버전 표기와 겹치지 않게 양옆을 비워 둔다 */
+  .panel--title .status,
+  .panel--title .hint {
+    padding-inline: 52px;
+  }
+}

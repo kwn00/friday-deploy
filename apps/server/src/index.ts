@@ -3,7 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
-import { PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
+import { APP_VERSION, PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
 import { RoomManager, type Conn, type Room } from './room';
 import { LEADERBOARD_SEASON, type LeaderboardResponse } from '@friday-deploy/shared';
 import { Leaderboard, MemoryStore, type LeaderboardStore } from './leaderboard';
@@ -92,7 +92,8 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string
 function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const pathname = pathnameOf(req.url);
   if (pathname === null) return json(res, 400, { error: 'bad_request' });
-  if (pathname === '/healthz') return json(res, 200, { ok: true, rooms: rooms.count });
+  // version: 지금 떠 있는 서버가 어느 버전인지 (배포가 끝났는지 확인하는 용도)
+  if (pathname === '/healthz') return json(res, 200, { ok: true, rooms: rooms.count, version: APP_VERSION });
   if (pathname === '/api/session') {
     if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
     if (!originAllowed(req)) return json(res, 403, { error: 'forbidden_origin' });
