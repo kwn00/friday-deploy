@@ -142,6 +142,17 @@
       </div>
     </section>
 
+    <!-- 연결이 끊겼을 때: 모든 화면 위에 뜨고, 다시 연결되면 사라진다 (문서에서 가장 뒤에 있어 맨 위에 그려진다) -->
+    <section id="screen-reconnect" class="screen hidden" role="alertdialog" aria-modal="true" aria-labelledby="reconnect-title" aria-describedby="reconnect-sub">
+      <div class="panel panel--menu">
+        <h2 id="reconnect-title" class="panel__title panel__title--warn">🔌 connection lost</h2>
+        <p id="reconnect-sub" class="panel__sub panel__sub--wide" role="status"></p>
+        <div class="buttons">
+          <button id="btn-reconnect-quit" class="btn" type="button">✕ 그만두기</button>
+        </div>
+      </div>
+    </section>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

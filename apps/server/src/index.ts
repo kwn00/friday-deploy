@@ -17,6 +17,7 @@ const MAX_CONNS_PER_IP = 6;
 /**
  * 한 주소가 연결 없이 지켜 둘 수 있는 자리 수. 끊긴 자리는 연결 수 제한에 잡히지 않으므로 따로 센다
  * (세지 않으면 방을 만들고 끊기를 되풀이해, 연결 6개 제한을 넘는 수의 방을 붙잡아 둘 수 있다).
+ * 넘치면 그 주소가 지켜 둔 자리 중 가장 오래된 것부터 비운다.
  */
 const MAX_HELD_PER_IP = 6;
 const HELLO_TIMEOUT_MS = 5000;
@@ -46,12 +47,21 @@ const sessionLimiter = new IpLimiter(10, 0.5);
 /** 정적 파일 요청. 정상 방문은 한 번에 4~5개. 같은 주소에서 반복 요청으로 전송량 한도를 태우는 것을 늦춘다. */
 const staticLimiter = new IpLimiter(120, 4);
 const connsPerIp = new Map<string, number>();
-const heldPerIp = new Map<string, number>();
 const bump = (map: Map<string, number>, ip: string, by: 1 | -1): void => {
   const n = (map.get(ip) ?? 0) + by;
   if (n <= 0) map.delete(ip);
   else map.set(ip, n);
 };
+/** 주소별로, 연결 없이 지켜 두고 있는 자리들 (먼저 끊긴 것부터). 값은 그 자리를 비우는 함수다 */
+const heldByIp = new Map<string, Set<() => void>>();
+const heldCount = (ip: string): number => heldByIp.get(ip)?.size ?? 0;
+/** 이 주소가 지켜 둔 자리 중 가장 오래된 것을 비운다. 비울 것이 없으면 false */
+function evictOldestHeld(ip: string): boolean {
+  const evict = heldByIp.get(ip)?.values().next().value;
+  if (!evict) return false;
+  evict(); // 자리가 비워지면서 목록에서도 빠진다 (아래 close 처리의 onFree)
+  return true;
+}
 /** 하나의 세션 토큰은 동시에 한 연결에서만, 그리고 한 번만 사용 가능 */
 const usedSessions = new Map<string, number>();
 setInterval(() => {
@@ -262,12 +272,9 @@ function onConnection(ws: WebSocket, ip: string): void {
         conn = seat.conn;
         return;
       }
-      // 한 주소가 가질 수 있는 자리는 연결과 지켜 둔 자리를 합쳐서 센다. 지켜 둔 자리가 많은 주소는
-      // 새로 들어오지 못하고 이어받기만 할 수 있다 (이어받으면 지켜 둔 자리가 하나 줄어든다)
-      if ((connsPerIp.get(ip) ?? 0) + (heldPerIp.get(ip) ?? 0) > MAX_CONNS_PER_IP) {
-        send({ t: 'error', code: 'server_full' });
-        return drop(4004, 'server_full');
-      }
+      // 한 주소가 가질 수 있는 자리는 연결과 지켜 둔 자리를 합쳐서 센다 (연결을 끊어 두는 것으로 한도보다 많은 방을
+      // 붙잡아 둘 수 없다). 넘치면 새로 들어오는 쪽을 막지 않고, 그 주소가 지켜 둔 자리 중 가장 오래된 것부터 비운다
+      while ((connsPerIp.get(ip) ?? 0) + heldCount(ip) > MAX_CONNS_PER_IP && evictOldestHeld(ip));
       let found: Room | null;
       if (msg.mode === 'coop' && msg.room !== undefined) {
         const target = rooms.find(msg.room);
@@ -332,9 +339,20 @@ function onConnection(ws: WebSocket, ip: string): void {
     clearInterval(heartbeat);
     bump(connsPerIp, ip, -1);
     if (!room || !conn) return;
-    // 통신이 끊긴 것이면 자리를 잠시 지켜 둔다 (돌아오면 이어서 한다). 이 주소가 이미 지켜 둔 자리가 많으면 지키지 않는다.
-    const hold = !leaving && (heldPerIp.get(ip) ?? 0) < MAX_HELD_PER_IP;
-    if (room.disconnect(conn, ws, hold, () => bump(heldPerIp, ip, -1))) bump(heldPerIp, ip, 1);
+    // 통신이 끊긴 것이면 자리를 잠시 지켜 둔다 (돌아오면 이어서 한다).
+    // 이 주소가 지켜 둔 자리가 이미 많으면 가장 오래된 것을 비우고 지킨다 (방금 끊긴 쪽이 돌아올 가능성이 더 높다)
+    if (!leaving && heldCount(ip) >= MAX_HELD_PER_IP) evictOldestHeld(ip);
+    const r = room;
+    const c = conn;
+    const evict = (): void => r.leave(c);
+    const freed = (): void => {
+      const set = heldByIp.get(ip);
+      if (set?.delete(evict) && set.size === 0) heldByIp.delete(ip);
+    };
+    if (!room.disconnect(conn, ws, !leaving, freed)) return;
+    let set = heldByIp.get(ip);
+    if (!set) heldByIp.set(ip, (set = new Set()));
+    set.add(evict);
   });
   ws.on('error', () => ws.terminate());
 }

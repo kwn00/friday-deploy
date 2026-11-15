@@ -17,6 +17,7 @@ import {
   type FieldItemKind,
   type GameMode,
   type Offer,
+  type RosterPlayer,
   type RunResult,
   type ServerMsg,
   type Snapshot,
@@ -27,7 +28,7 @@ import { Input } from './input';
 import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
-import { Net } from './net';
+import { CLOSE_TIMEOUT, ConnectError, Net } from './net';
 import { Renderer } from './render';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -62,6 +63,10 @@ const el = {
   minimapBtn: $<HTMLButtonElement>('btn-minimap'),
   quit: $<HTMLButtonElement>('btn-quit'),
   minimap: $<HTMLCanvasElement>('minimap'),
+  reconnect: $('screen-reconnect'),
+  reconnectSub: $('reconnect-sub'),
+  reconnectQuit: $<HTMLButtonElement>('btn-reconnect-quit'),
+  levelupScreen: $('screen-levelup'),
   spectate: $('spectate-text'),
   toast: $('toast-text'),
   version: $('btn-version'),
@@ -98,7 +103,7 @@ let mode: GameMode = 'solo';
 let roomCode = '';
 let myId = -1;
 let hostId = -1;
-let roster: { id: number; name: string }[] = [];
+let roster: RosterPlayer[] = [];
 let gotResult = false;
 let lastError = '';
 let menuOpen = false;
@@ -108,6 +113,31 @@ let offerDeadline = 0;
 let loadoutKey = '';
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
 let resultBoard: BoardId | null = null;
+
+/** 이 탭에서만 유지되는 저장소 (새로고침해도 남고, 탭을 닫으면 사라진다) */
+const tab = {
+  get(key: string): string | null {
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: string): void {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* 사생활 보호 모드 등: 새로고침 뒤 이어하기만 안 된다 */
+    }
+  },
+  remove(key: string): void {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      /* 위와 같다 */
+    }
+  },
+};
 
 const store = {
   get(key: string): string | null {
@@ -146,6 +176,7 @@ const ERRORS: Record<string, string> = {
   bad_session: '세션이 만료됐어요. 다시 시도해주세요.',
   lobby_idle: '대기실이 오래 비어 있어서 닫혔어요.',
   idle: '오랫동안 입력이 없어서 연결이 끊겼어요.',
+  replaced: '다른 창에서 이 게임을 이어서 하고 있어요.',
 };
 
 /** 타이틀 화면 아래의 안내 줄. 화면이 낮아 가려져 있으면 보이는 곳으로 스크롤한다. info: 오류가 아닌 진행 안내 */
@@ -302,7 +333,8 @@ function hideMenu(): void {
   el.pause.classList.add('hidden');
 }
 
-function openMenu(): void {
+/** 메뉴 화면만 연다 (서버에 일시정지를 요청하지 않는다) */
+function showMenu(): void {
   if (phase !== 'playing' || menuOpen) return;
   menuOpen = true;
   input.reset();
@@ -315,8 +347,13 @@ function openMenu(): void {
   el.pauseCode.classList.toggle('hidden', solo);
   el.pauseCode.textContent = solo ? '' : `방 코드 ${roomCode}`;
   el.pause.classList.remove('hidden');
-  if (solo) net.sendPause(true);
   el.resume.focus({ preventScroll: true });
+}
+
+function openMenu(): void {
+  if (phase !== 'playing' || menuOpen) return;
+  showMenu();
+  if (mode === 'solo') net.sendPause(true);
 }
 
 function closeMenu(): void {
@@ -325,8 +362,11 @@ function closeMenu(): void {
   if (mode === 'solo') net.sendPause(false);
 }
 
+/** 스스로 나간다: 서버가 자리를 바로 비우고, 이어받기 열쇠도 버린다 */
 function quitToTitle(): void {
-  net.close();
+  stopReconnect();
+  forgetSeat();
+  net.leave();
   renderer.reset();
   setPhase('title');
 }
@@ -341,18 +381,22 @@ function renderLobby(): void {
   el.lobbyCode.textContent = roomCode;
   el.lobbyPlayers.replaceChildren(
     ...roster.map((p) => {
-      const li = node('li', 'players__item', p.name);
+      const li = node('li', p.away ? 'players__item players__item--away' : 'players__item', p.name);
       if (p.id === hostId) li.append(node('em', '', '방장'));
       if (p.id === myId) li.append(node('em', 'me', '나'));
+      if (p.away) li.append(node('em', 'away', '연결 끊김'));
       return li;
     }),
   );
   const host = myId === hostId;
+  const anyAway = roster.some((p) => p.away);
   el.start.classList.toggle('hidden', !host);
   el.lobbyStatus.textContent = host
-    ? roster.length < 2
-      ? '혼자 시작해도 돼요. 나중에 들어온 사람도 같은 코드로 합류할 수 있어요.'
-      : '모두 모였으면 시작하세요.'
+    ? anyAway
+      ? '연결이 끊긴 사람이 있어요. 조금 기다리면 돌아올 수 있어요. 지금 시작하면 그 사람은 빼고 시작해요.'
+      : roster.length < 2
+        ? '혼자 시작해도 돼요. 나중에 들어온 사람도 같은 코드로 합류할 수 있어요.'
+        : '모두 모였으면 시작하세요.'
     : '방장이 시작하기를 기다리는 중…';
 }
 
@@ -375,6 +419,8 @@ async function invite(): Promise<void> {
 
 function showResult(r: RunResult, place?: { board: BoardId; rank: number }, unranked?: UnrankedReason): void {
   gotResult = true;
+  // 혼자 하는 판은 끝나면 방도 닫힌다: 이어받을 자리가 없다
+  if (mode === 'solo') forgetSeat();
   const rows: [string, string][] = [
     ['uptime', mmss(r.time)],
     ['resolved bugs', String(r.kills)],
@@ -416,32 +462,60 @@ const UNRANKED_HINT: Record<UnrankedReason, string> = {
 
 function onMessage(msg: ServerMsg): void {
   switch (msg.t) {
-    case 'welcome':
-      // 새 판(또는 같은 방의 다음 판). 결과 화면을 보고 있는 중이면 화면은 그대로 둔다.
+    case 'welcome': {
+      // 새 판(또는 같은 방의 다음 판, 또는 끊겼던 자리로 돌아옴). 결과 화면을 보고 있는 중이면 화면은 그대로 둔다.
+      const sameRun = msg.resumed === true && msg.id === myId;
+      if (reconnecting) {
+        resumedAt = performance.now();
+        stopReconnect();
+      }
+      rejoining = false;
       renderer.reset();
       myId = msg.id;
       mode = msg.mode;
       roomCode = msg.code;
       loadoutKey = '';
-      resetItemNotices();
+      // 하던 판으로 돌아온 것이면, 이미 알린 아이템을 새로 떨어진 것처럼 다시 알리지 않는다
+      if (!sameRun) resetItemNotices();
+      if (msg.resumed === true) {
+        // 끊겨 있던 동안의 화면 상태(선택창, 메뉴)는 믿을 수 없다. 서버가 지금 상태를 바로 이어서 알려준다
+        el.levelup.classList.add('hidden');
+        hideMenu();
+        pausedSince = 0;
+      }
+      rememberSeat(msg.key, msg.mode, msg.code);
       break;
-    case 'roster':
+    }
+    case 'roster': {
+      const before = new Map(roster.map((p) => [p.id, p]));
       roster = msg.players;
       hostId = msg.host;
       renderer.setRoster(msg.players);
       renderLobby();
+      // 동료의 연결이 끊겼을 때와 돌아왔을 때 알려준다 (잠깐 화면을 떠난 것은 이름표의 표시로 충분하다)
+      if (phase === 'playing' && msg.started) {
+        for (const p of msg.players) {
+          const was = before.get(p.id);
+          if (p.id === myId || !was) continue;
+          if (p.away && !was.away) toast(`🔌 ${p.name} 님의 연결이 끊겼어요`);
+          else if (!p.away && was.away) toast(`👋 ${p.name} 님이 돌아왔어요`);
+        }
+      }
       if (msg.started) {
         if (phase !== 'playing') {
           gotResult = false;
           setPhase('playing');
         }
-      } else if (phase === 'connecting') {
+      } else if (phase === 'connecting' || phase === 'playing') {
+        // playing 인데 시작 전이라면: 자리를 비운 사이에 판이 끝났고 그 결과는 이미 봤다
         setPhase('lobby');
       }
       break;
+    }
     case 'snap':
       renderer.push(msg);
       updateHud(msg);
+      touchSeat();
       break;
     case 'levelup':
       showOffers(msg.offers, msg.timeout);
@@ -449,7 +523,13 @@ function onMessage(msg: ServerMsg): void {
     case 'pause':
       if (msg.on) {
         pausedSince = performance.now();
-        el.pauseSub.textContent = `게임을 멈췄어요. ${Math.max(1, Math.ceil(msg.max / 60))}분이 지나면 자동으로 다시 시작돼요.`;
+        // 내가 멈춘 것이 아니라 서버가 멈춰 둔 것이면(연결이 끊겼다 돌아왔거나, 한동안 입력이 없었다) 메뉴를 열어 알려준다
+        const byServer = !menuOpen && mode === 'solo' && phase === 'playing';
+        if (byServer) showMenu();
+        const minutes = Math.max(1, Math.ceil(msg.max / 60));
+        el.pauseSub.textContent = byServer
+          ? `자리를 비운 사이에 게임을 멈춰 뒀어요. ${minutes}분이 지나면 자동으로 다시 시작돼요.`
+          : `게임을 멈췄어요. ${minutes}분이 지나면 자동으로 다시 시작돼요.`;
       } else {
         const wasPaused = pausedSince > 0;
         // 멈춰 있던 시간만큼 선택 제한 시간 표시도 미룬다
@@ -467,29 +547,229 @@ function onMessage(msg: ServerMsg): void {
         }
       }
       break;
-    case 'over':
+    case 'over': {
+      // 끊겼다 돌아오면 서버가 지난 결과를 한 번 더 준다 (받지 못했을 수 있어서). 이미 본 판이면 넘어간다
+      const run = Number.isInteger(msg.result?.run) ? msg.result.run : 0;
+      if (seat) {
+        if (run <= seat.seenRun) break;
+        seat.seenRun = run;
+        saveSeat();
+      }
+      // 혼자 하던 판이 자리를 비운 사이에 끝났다면, 이어받는 대신 결과만 온다
+      if (reconnecting) stopReconnect();
       showResult(msg.result, msg.place, msg.unranked);
       break;
+    }
     case 'error':
       lastError = msg.code;
       break;
   }
 }
 
-function onClose(reason: string): void {
-  const why = ERRORS[lastError] ?? ERRORS[reason];
+function onClose(reason: string, code: number): void {
+  const err = lastError;
   lastError = '';
-  if (gotResult && phase === 'over') return; // 결과 화면은 그대로 둔다 (다시 하기를 누르면 새로 연결)
+  if (reconnecting) return onResumeClosed(err);
+  // 혼자 하는 판이 끝났다: 결과 화면은 그대로 둔다 (다시 하기를 누르면 새로 연결)
+  if (gotResult && phase === 'over' && mode === 'solo') return forgetSeat();
   if (phase === 'title') return;
+  // 서버가 내보낸 것이 아니라 통신이 끊긴 것이면 서버가 자리를 지키고 있다: 다시 붙는다.
+  // (다시 붙자마자 또 끊기는 일이 거듭되면 그만둔다)
+  if (seat && !err && resumable(code)) {
+    flaps = performance.now() - resumedAt < 5000 ? flaps + 1 : 0;
+    if (flaps < 3) return beginReconnect();
+  }
+  // 하던 방으로 다시 들어가려다 실패했을 때: 치지도 않은 코드를 확인하라고 하지 않는다
+  const gone = rejoining && (err === 'room_not_found' || err === 'room_full');
+  rejoining = false;
+  forgetSeat();
+  if (gotResult && phase === 'over') return; // 결과 화면은 그대로 둔다
   renderer.reset();
   setPhase('title');
-  setStatus(why ?? `연결이 끊겼어요 (${reason}). 아마 누가 금요일에 배포했나 봐요.`);
+  setStatus(gone ? '하던 방이 사라졌어요. 새 방을 만들어 주세요.' : (ERRORS[err] ?? ERRORS[reason] ?? `연결이 끊겼어요 (${reason}). 아마 누가 금요일에 배포했나 봐요.`));
 }
 
 const net = new Net(onMessage, onClose);
 
+/* ───────────── 끊긴 연결 다시 붙기 ─────────────
+ * 서버는 통신이 끊긴 사람의 자리를 잠시 지켜 둔다. 서버가 welcome 에 실어 준 열쇠를 내면 같은 캐릭터로 돌아간다.
+ * 열쇠는 "어느 자리인지"만 가리킨다. 체력이나 위치 같은 상태는 서버에만 있고, 여기서 보내는 것은 없다. */
+
+interface Seat {
+  key: string;
+  mode: GameMode;
+  code: string;
+  /** 이미 결과 화면을 본 판 번호 (서버가 결과를 다시 줄 때 걸러 낸다) */
+  seenRun: number;
+  /** 마지막으로 연결이 살아 있던 시각 */
+  at: number;
+}
+const SEAT_STORE = 'seat';
+/** 이보다 오래 연결이 없었던 자리는 서버에도 남아 있지 않다 (가장 오래 지켜 주는 것이 일시정지 한 번의 길이다) */
+const SEAT_STALE_MS = (MAX_PAUSE_SECONDS + 300) * 1000;
+/** 화면이 보이는 채로 이만큼 애써도 서버에 닿지 않으면 그만둔다 */
+const GIVE_UP_MS = 150_000;
+
+let seat: Seat | null = null;
+let reconnecting = false;
+/** 시도 하나가 진행 중 (한 번에 하나만 한다) */
+let attempting = false;
+let retryTimer = 0;
+let retryDelay = 500;
+let retrySince = 0;
+let hintTimer = 0;
+let overlayTimer = 0;
+let resumedAt = 0;
+let flaps = 0;
+/** 자리가 없어져서, 하던 방에 코드로 다시 들어가는 중 */
+let rejoining = false;
+
+/** 통신이 끊긴 것으로 볼 닫힘 코드. 서버가 이유를 대고 내보낸 것(1000, 1008, 4xxx)은 다시 붙지 않는다 */
+function resumable(code: number): boolean {
+  return code === CLOSE_TIMEOUT || code === 1001 || code === 1005 || code === 1006 || (code >= 1011 && code <= 1015);
+}
+
+function saveSeat(): void {
+  if (!seat) return;
+  seat.at = Date.now();
+  tab.set(SEAT_STORE, JSON.stringify(seat));
+}
+
+/** 연결이 살아 있다는 표시를 가끔 새로 남긴다 (새로고침했을 때, 너무 오래된 자리인지 가리는 데 쓴다) */
+function touchSeat(): void {
+  if (seat && Date.now() - seat.at > 20_000) saveSeat();
+}
+
+function forgetSeat(): void {
+  seat = null;
+  tab.remove(SEAT_STORE);
+}
+
+function rememberSeat(key: unknown, m: GameMode, code: string): void {
+  if (typeof key !== 'string' || key.length < 16 || key.length > 64) return;
+  seat = { key, mode: m, code, seenRun: seat?.key === key ? seat.seenRun : 0, at: 0 };
+  saveSeat();
+}
+
+function loadSeat(): Seat | null {
+  try {
+    const o = JSON.parse(tab.get(SEAT_STORE) ?? 'null') as Partial<Seat> | null;
+    if (!o || typeof o.key !== 'string' || o.key.length < 16 || o.key.length > 64) return null;
+    if (o.mode !== 'solo' && o.mode !== 'coop') return null;
+    if (typeof o.at !== 'number' || !(Date.now() - o.at < SEAT_STALE_MS)) return null;
+    const code = o.mode === 'coop' ? normalizeRoomCode(o.code) : '';
+    if (code === null) return null;
+    return { key: o.key, mode: o.mode, code, seenRun: typeof o.seenRun === 'number' && Number.isInteger(o.seenRun) ? o.seenRun : 0, at: o.at };
+  } catch {
+    return null;
+  }
+}
+
+/** 다시 연결하는 동안 뒤 화면은 누르거나 포커스할 수 없다 */
+const behindReconnect = [el.title, el.lobby, el.levelupScreen, el.pause, el.over, el.hud];
+
+function showReconnect(on: boolean): void {
+  window.clearTimeout(hintTimer);
+  el.reconnect.classList.toggle('hidden', !on);
+  // 순위표와 새 소식은 닫을 때 뒤 화면을 다시 풀어 주므로, 먼저 닫고 나서 막는다
+  if (on) {
+    board.close();
+    notes.close();
+  }
+  for (const b of behindReconnect) b.inert = on;
+  if (!on) return;
+  el.reconnectSub.textContent = '연결이 끊겼어요. 다시 연결하는 중이에요…';
+  // 오래 걸리면 왜 그런지 알려준다
+  hintTimer = window.setTimeout(() => {
+    el.reconnectSub.textContent = '다시 연결하는 중이에요… 인터넷이 불안정하거나 서버가 깨어나는 중일 수 있어요. 1분쯤 걸리기도 해요.';
+  }, 8000);
+  el.reconnectQuit.focus({ preventScroll: true });
+}
+
+function beginReconnect(): void {
+  if (reconnecting || !seat) return;
+  reconnecting = true;
+  attempting = false;
+  retryDelay = 500;
+  retrySince = performance.now();
+  input.reset();
+  // 금방 다시 붙는 경우가 많다. 그때 안내가 번쩍였다 사라지지 않게 조금 있다가 띄운다
+  window.clearTimeout(overlayTimer);
+  overlayTimer = window.setTimeout(() => showReconnect(true), 400);
+  void tryResume();
+}
+
+/** 다시 붙기를 멈춘다 (붙었거나, 그만뒀거나). 화면만 정리하고 연결과 자리는 건드리지 않는다 */
+function stopReconnect(): void {
+  reconnecting = false;
+  attempting = false;
+  window.clearTimeout(retryTimer);
+  window.clearTimeout(overlayTimer);
+  showReconnect(false);
+}
+
+async function tryResume(): Promise<void> {
+  window.clearTimeout(retryTimer);
+  // 화면이 가려져 있는 동안에는 시도하지 않는다. 돌아오면 바로 다시 시도한다
+  if (!reconnecting || !seat || attempting || document.hidden) return;
+  attempting = true;
+  try {
+    await net.resume(seat.key);
+    // 연결이 열렸고 resume 을 보냈다. 받아들여지면 welcome 이, 아니면 error 와 닫힘이 온다 (그때까지 이 시도는 진행 중이다)
+  } catch (err) {
+    if (err instanceof ConnectError && err.kind === 'cancelled') return;
+    attempting = false;
+    // 요청이 너무 많다고 하면 넉넉히 쉰다 (같은 공유기를 쓰는 친구들과 한도를 나눠 쓴다)
+    retryLater(err instanceof ConnectError && err.kind === 'rate' ? 3000 : 0);
+  }
+}
+
+function retryLater(minWait = 0): void {
+  if (!reconnecting) return;
+  if (performance.now() - retrySince > GIVE_UP_MS) return giveUp('다시 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시작해 주세요.');
+  const wait = Math.max(minWait, retryDelay);
+  retryDelay = Math.min(5000, retryDelay * 2);
+  retryTimer = window.setTimeout(() => void tryResume(), wait);
+}
+
+/** 다시 붙으려던 연결이 닫혔다. err: 서버가 닫기 전에 알려준 이유 (없으면 통신 문제) */
+function onResumeClosed(err: string): void {
+  attempting = false;
+  if (err === 'resume_failed') return seatGone();
+  if (err === 'version_mismatch') return giveUp(ERRORS.version_mismatch!);
+  retryLater(err ? 1000 : 0);
+}
+
+/** 다시 붙지 못했다. 결과 화면을 보던 중이면 그대로 두고, 아니면 타이틀로 돌아가 이유를 알린다 */
+function giveUp(text: string): void {
+  // 새로고침 직후에 조용히 이어 보려던 것이면(connecting) 아무 말 없이 타이틀을 보여준다
+  const quiet = phase === 'connecting';
+  stopReconnect();
+  forgetSeat();
+  net.close();
+  if (gotResult && phase === 'over') return;
+  renderer.reset();
+  setPhase('title');
+  if (!quiet) setStatus(text);
+}
+
+/** 서버가 그 자리는 이제 없다고 했다: 너무 오래 비웠거나, 서버가 새로 시작됐거나, 방이 닫혔다 */
+function seatGone(): void {
+  const was = seat;
+  const quiet = phase === 'connecting';
+  giveUp('자리를 너무 오래 비웠거나 서버가 새로 시작돼서, 하던 판을 이어갈 수 없어요.');
+  // 함께 하던 방이면 코드로 다시 들어가 본다: 판이 진행 중이면 이번 판은 구경하고, 대기실이면 그대로 함께 한다
+  if (quiet || phase !== 'title' || was?.mode !== 'coop' || !was.code) return;
+  rejoining = true;
+  void start('coop', was.code);
+}
+
 async function start(m: GameMode, room?: string): Promise<void> {
   if (phase === 'connecting') return;
+  // 새로 시작한다: 하던 자리가 있었다면 비운다
+  stopReconnect();
+  forgetSeat();
+  net.leave();
   mode = m;
   gotResult = false;
   lastError = '';
@@ -503,6 +783,9 @@ async function start(m: GameMode, room?: string): Promise<void> {
     // 여기까지 오면 연결됐다. 방을 못 찾는 등의 거절은 이 뒤에 서버 메시지로 오고, 그때 다시 안내한다.
     setStatus('', true);
   } catch (err) {
+    // 그 사이에 나갔거나 다른 시도가 시작됐다: 화면은 이미 그쪽이 정했다
+    if (err instanceof ConnectError && err.kind === 'cancelled') return;
+    rejoining = false;
     setPhase('title');
     setStatus(err instanceof Error ? err.message : '연결 실패');
   }
@@ -561,9 +844,12 @@ $('btn-levelup-menu').addEventListener('click', openMenu);
 el.resume.addEventListener('click', closeMenu);
 el.minimapBtn.addEventListener('click', toggleMinimap);
 el.quit.addEventListener('click', quitToTitle);
+el.reconnectQuit.addEventListener('click', quitToTitle);
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.repeat) return;
+  // 다시 연결하는 동안에는 단축키를 받지 않는다 (뒤 화면을 건드리지 않는다)
+  if (reconnecting) return;
   // 새 소식이 열려 있으면 Esc 는 그것만 닫는다
   if (notes.isOpen) {
     if (e.code === 'Escape') {
@@ -590,10 +876,36 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// 탭을 떠나면(전화, 앱 전환 등) 솔로에서는 알아서 멈춘다
+/** 화면으로 돌아왔거나 네트워크가 돌아왔다: 연결이 살아 있는지 바로 확인하고, 다시 붙는 중이었으면 바로 시도한다 */
+function onBack(): void {
+  if (document.hidden) return;
+  if (reconnecting) {
+    // 화면을 떠나 있던 시간은 "애쓴 시간"으로 세지 않는다
+    retrySince = performance.now();
+    retryDelay = 500;
+    void tryResume();
+  } else {
+    net.poke();
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && phase === 'playing' && mode === 'solo') openMenu();
+  if (!document.hidden) return onBack();
+  saveSeat();
+  if (phase !== 'playing') return;
+  // 화면을 떠나면(전화, 앱 전환 등) 캐릭터를 세운다. 화면이 가려진 동안에는 입력을 보낼 수 없어서,
+  // 그대로 두면 누르고 있던 방향으로 계속 달린다
+  input.reset();
+  if (net.sendInput(0, 0)) lastSent = { dx: 0, dy: 0, at: performance.now() };
+  // 솔로에서는 알아서 멈춘다
+  if (mode === 'solo') openMenu();
 });
+// 뒤로 가기 캐시에서 되살아난 페이지: 연결은 이미 끊겨 있다
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) onBack();
+});
+window.addEventListener('pagehide', saveSeat);
+window.addEventListener('online', onBack);
 
 el.name.value = store.get('name') ?? '';
 
@@ -612,6 +924,19 @@ if (invited) {
   setStatus(`초대받은 방 ${invited} — 닉네임을 넣고 참가를 누르세요.`, true);
 }
 
+// 새로고침했거나 휴대폰 브라우저가 탭을 다시 불러온 경우: 하던 자리가 남아 있으면 이어서 한다.
+// 다른 방의 초대 링크로 들어온 것이면 그 방이 먼저다. 새 버전의 새 소식이 떠 있으면(= 서버가 새로 시작됐다) 시도하지 않는다.
+const saved = loadSeat();
+if (saved && !notes.isOpen && (!invited || invited === saved.code)) {
+  seat = saved;
+  mode = saved.mode;
+  roomCode = saved.code;
+  setPhase('connecting');
+  beginReconnect();
+} else {
+  forgetSeat();
+}
+
 // 입력 전송: 값이 바뀌었을 때 + 최대 20Hz (서버 레이트리밋보다 충분히 낮게). 1초에 한 번은 변화가 없어도 보낸다(연결 유지).
 let lastSent = { dx: 0, dy: 0, at: 0 };
 function pumpInput(now: number): void {
@@ -621,8 +946,8 @@ function pumpInput(now: number): void {
   const dy = menuOpen ? 0 : Math.round(input.dy * 100) / 100;
   const changed = dx !== lastSent.dx || dy !== lastSent.dy;
   if ((changed && now - lastSent.at >= 50) || now - lastSent.at >= 1000) {
-    net.sendInput(dx, dy);
-    lastSent = { dx, dy, at: now };
+    // 통신이 막혀 있는 동안에는 보내지지 않는다. 그때는 다음 프레임에 최신 값으로 다시 시도한다
+    if (net.sendInput(dx, dy)) lastSent = { dx, dy, at: now };
   }
 }
 
