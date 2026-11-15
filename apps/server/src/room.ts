@@ -552,6 +552,8 @@ export class Room {
       conn.joinedAt = 0;
       conn.stalled = false;
       conn.lastInput = now;
+      // 판 도중에 끊긴 사람은 2분만 기다리기로 했었다. 이제 대기실이니 대기실 기준(닫힐 때까지)으로 기다린다
+      if (conn.away) conn.awayUntil = Math.max(conn.awayUntil, now + LOBBY_IDLE_MS);
       this.conns.set(conn.pid, conn);
     }
     this.hostPid = host?.pid ?? -1;

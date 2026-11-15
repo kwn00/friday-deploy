@@ -872,3 +872,29 @@ test('입력이 멈춘 연결: 4초 넘게 입력이 없으면 캐릭터를 세�
   survive(solo, [c.conn], 1);
   assert.ok(solo.world.tick > frozen + 15, '같은 연결로 이어서 한다');
 });
+
+test('재접속: 판 도중에 끊긴 사람은, 판이 끝나 대기실로 돌아가면 대기실 기준(닫힐 때까지)으로 자리를 지킨다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn], 2);
+  const key = keyOf(b.ws);
+  hangUp(room, b);
+  // 끊긴 채로 판이 끝난다
+  down(room, a.conn);
+  down(room, b.conn);
+  advance(100);
+  assert.equal(last(a.ws, 'roster')!.started, false);
+  // 2분이 지나도 대기실에서는 자리가 남아 있다 (예전에는 판 기준 2분으로 비워졌다)
+  for (let i = 0; i < 5; i++) {
+    room.onInput(a.conn, 700_000 + i, 0, 0);
+    advance(MIN);
+  }
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.away, true);
+  const ws2 = socket();
+  assert.equal(rooms.resume(key, ws2 as unknown as WebSocket)?.conn, b.conn, '5분 뒤에도 이어받는다');
+  assert.equal(last(ws2, 'over')!.result.name, 'b', '놓친 판의 결과도 받는다');
+  assert.equal(last(ws2, 'roster')!.started, false);
+});

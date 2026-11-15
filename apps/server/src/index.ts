@@ -339,9 +339,7 @@ function onConnection(ws: WebSocket, ip: string): void {
     clearInterval(heartbeat);
     bump(connsPerIp, ip, -1);
     if (!room || !conn) return;
-    // 통신이 끊긴 것이면 자리를 잠시 지켜 둔다 (돌아오면 이어서 한다).
-    // 이 주소가 지켜 둔 자리가 이미 많으면 가장 오래된 것을 비우고 지킨다 (방금 끊긴 쪽이 돌아올 가능성이 더 높다)
-    if (!leaving && heldCount(ip) >= MAX_HELD_PER_IP) evictOldestHeld(ip);
+    // 통신이 끊긴 것이면 자리를 잠시 지켜 둔다 (돌아오면 이어서 한다)
     const r = room;
     const c = conn;
     const evict = (): void => r.leave(c);
@@ -349,7 +347,10 @@ function onConnection(ws: WebSocket, ip: string): void {
       const set = heldByIp.get(ip);
       if (set?.delete(evict) && set.size === 0) heldByIp.delete(ip);
     };
+    // 자리를 지키지 않는 닫힘(스스로 나감, 서버가 끊음, 다른 연결이 이어받음, 끝난 방)은 여기서 끝난다
     if (!room.disconnect(conn, ws, !leaving, freed)) return;
+    // 이 주소가 지켜 둔 자리가 이미 많으면 가장 오래된 것부터 비운다 (방금 끊긴 쪽이 돌아올 가능성이 더 높다)
+    while (heldCount(ip) >= MAX_HELD_PER_IP && evictOldestHeld(ip));
     let set = heldByIp.get(ip);
     if (!set) heldByIp.set(ip, (set = new Set()));
     set.add(evict);
