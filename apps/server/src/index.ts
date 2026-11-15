@@ -14,6 +14,11 @@ const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 const MAX_CONNS_TOTAL = 800;
 const MAX_CONNS_PER_IP = 6;
+/**
+ * 한 주소가 연결 없이 지켜 둘 수 있는 자리 수. 끊긴 자리는 연결 수 제한에 잡히지 않으므로 따로 센다
+ * (세지 않으면 방을 만들고 끊기를 되풀이해, 연결 6개 제한을 넘는 수의 방을 붙잡아 둘 수 있다).
+ */
+const MAX_HELD_PER_IP = 6;
 const HELLO_TIMEOUT_MS = 5000;
 const MAX_VIOLATIONS = 5;
 
@@ -41,6 +46,12 @@ const sessionLimiter = new IpLimiter(10, 0.5);
 /** 정적 파일 요청. 정상 방문은 한 번에 4~5개. 같은 주소에서 반복 요청으로 전송량 한도를 태우는 것을 늦춘다. */
 const staticLimiter = new IpLimiter(120, 4);
 const connsPerIp = new Map<string, number>();
+const heldPerIp = new Map<string, number>();
+const bump = (map: Map<string, number>, ip: string, by: 1 | -1): void => {
+  const n = (map.get(ip) ?? 0) + by;
+  if (n <= 0) map.delete(ip);
+  else map.set(ip, n);
+};
 /** 하나의 세션 토큰은 동시에 한 연결에서만, 그리고 한 번만 사용 가능 */
 const usedSessions = new Map<string, number>();
 setInterval(() => {
@@ -173,12 +184,14 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 function onConnection(ws: WebSocket, ip: string): void {
-  connsPerIp.set(ip, (connsPerIp.get(ip) ?? 0) + 1);
+  bump(connsPerIp, ip, 1);
   const bucket = new TokenBucket(60, 40); // 정상 클라이언트는 초당 ~20개
   let room: Room | null = null;
   let conn: Conn | null = null;
   let violations = 0;
   let alive = true;
+  /** 스스로 나갔거나 서버가 끊기로 한 연결: 닫힐 때 자리를 지켜 두지 않는다 */
+  let leaving = false;
 
   const send = (msg: ServerMsg): void => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -188,6 +201,10 @@ function onConnection(ws: WebSocket, ip: string): void {
    * 응답하지 않는 클라이언트는 쫓겨난 뒤에도 자리를 차지한다. 그래서 잠시 뒤 강제로 닫는다.
    */
   const drop = (code: number, reason: string): void => {
+    // 서버가 끊는 연결(규칙 위반, 오류 등)은 자리를 지켜 주지 않는다. 지켜 주는 것은 통신이 끊긴 경우뿐이다.
+    // 닫히기를 기다리지 않고 지금 비운다: 닫히는 사이에 같은 열쇠로 이어받아 쫓겨난 자리를 되찾을 수 없다
+    leaving = true;
+    if (room && conn && conn.ws === ws) room.leave(conn);
     if (ws.readyState !== ws.OPEN) return;
     ws.close(code, reason);
     setTimeout(() => ws.terminate(), 1000).unref();
@@ -213,8 +230,8 @@ function onConnection(ws: WebSocket, ip: string): void {
     if (!msg) return violation('bad_message');
 
     if (!conn || !room) {
-      // 인증 전에는 hello 만 허용
-      if (msg.t !== 'hello') return violation('hello_required');
+      // 인증 전에는 hello (새로 들어오기) 또는 resume (끊긴 자리 이어받기) 만 허용
+      if (msg.t !== 'hello' && msg.t !== 'resume') return violation('hello_required');
       if (msg.v !== PROTOCOL_VERSION) {
         send({ t: 'error', code: 'version_mismatch' });
         return drop(4002, 'version_mismatch');
@@ -227,6 +244,30 @@ function onConnection(ws: WebSocket, ip: string): void {
       // 토큰은 방을 찾기 전에 소모한다. 방 코드를 틀려도 토큰 하나를 쓰게 되므로,
       // 코드를 마구 대입해 남의 방을 찾으려는 시도는 세션 발급 레이트리밋(IP 당 초당 0.5개)에 묶인다.
       usedSessions.set(sid, Date.now());
+      if (msg.t === 'resume') {
+        // 틀린 열쇠도 세션 토큰 하나를 쓴다: 대입은 세션 발급 제한(IP 당 초당 0.5개)에 묶인다
+        const seat = rooms.resume(msg.key, ws);
+        if (!seat) {
+          // 혼자 하던 판이 그 사이에 끝났다면 결과만 전해 주고 끝낸다 (판이 끝났을 때와 같은 닫힘)
+          const over = rooms.resultFor(msg.key);
+          if (over) {
+            send(over);
+            return drop(1000, 'over');
+          }
+          send({ t: 'error', code: 'resume_failed' });
+          return drop(4006, 'resume_failed');
+        }
+        clearTimeout(helloTimer);
+        room = seat.room;
+        conn = seat.conn;
+        return;
+      }
+      // 한 주소가 가질 수 있는 자리는 연결과 지켜 둔 자리를 합쳐서 센다. 지켜 둔 자리가 많은 주소는
+      // 새로 들어오지 못하고 이어받기만 할 수 있다 (이어받으면 지켜 둔 자리가 하나 줄어든다)
+      if ((connsPerIp.get(ip) ?? 0) + (heldPerIp.get(ip) ?? 0) > MAX_CONNS_PER_IP) {
+        send({ t: 'error', code: 'server_full' });
+        return drop(4004, 'server_full');
+      }
       let found: Room | null;
       if (msg.mode === 'coop' && msg.room !== undefined) {
         const target = rooms.find(msg.room);
@@ -250,6 +291,10 @@ function onConnection(ws: WebSocket, ip: string): void {
     }
 
     switch (msg.t) {
+      case 'leave':
+        // 스스로 나간다: 자리를 바로 비운다
+        drop(1000, 'left');
+        break;
       case 'input':
         if (!room.onInput(conn, msg.seq, msg.dx, msg.dy)) violation('bad_seq');
         break;
@@ -266,6 +311,7 @@ function onConnection(ws: WebSocket, ip: string): void {
         send({ t: 'pong', ts: msg.ts });
         break;
       case 'hello':
+      case 'resume':
         violation('duplicate_hello');
         break;
     }
@@ -284,10 +330,11 @@ function onConnection(ws: WebSocket, ip: string): void {
   ws.on('close', () => {
     clearTimeout(helloTimer);
     clearInterval(heartbeat);
-    const n = (connsPerIp.get(ip) ?? 1) - 1;
-    if (n <= 0) connsPerIp.delete(ip);
-    else connsPerIp.set(ip, n);
-    if (room && conn) room.leave(conn);
+    bump(connsPerIp, ip, -1);
+    if (!room || !conn) return;
+    // 통신이 끊긴 것이면 자리를 잠시 지켜 둔다 (돌아오면 이어서 한다). 이 주소가 이미 지켜 둔 자리가 많으면 지키지 않는다.
+    const hold = !leaving && (heldPerIp.get(ip) ?? 0) < MAX_HELD_PER_IP;
+    if (room.disconnect(conn, ws, hold, () => bump(heldPerIp, ip, -1))) bump(heldPerIp, ip, 1);
   });
   ws.on('error', () => ws.terminate());
 }

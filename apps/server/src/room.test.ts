@@ -22,6 +22,7 @@ interface FakeSocket {
   closed: [number, string] | null;
   send(data: string | Uint8Array): void;
   close(code: number, reason: string): void;
+  terminate(): void;
 }
 
 function socket(): FakeSocket {
@@ -38,6 +39,9 @@ function socket(): FakeSocket {
     },
     close(code, reason) {
       this.closed = [code, reason];
+      this.readyState = 3;
+    },
+    terminate() {
       this.readyState = 3;
     },
   };
@@ -504,4 +508,367 @@ test('리더보드: 관전으로 들어온 사람은 판이 시작된 직후에 
   assert.equal(reports.length, 1, '관전자만 남은 판은 기록되지 않는다');
   const over = last(watcher.ws, 'over')!;
   assert.deepEqual([over.place, over.unranked], [undefined, 'watched']);
+});
+
+/* ───────────── 끊긴 연결 다시 붙기 ───────────── */
+
+/** 통신이 끊겼다 (스스로 나간 것이 아니다): 소켓이 닫히고, 서버의 연결 처리가 방에 알린다. 자리를 지켜 두었으면 true */
+function hangUp(room: Room, who: { conn: Conn; ws: FakeSocket }, onFree?: () => void): boolean {
+  who.ws.readyState = 3;
+  return room.disconnect(who.conn, who.ws as unknown as WebSocket, true, onFree);
+}
+const keyOf = (ws: FakeSocket): string => last(ws, 'welcome')!.key;
+/** 입력 없이(자리를 비운 채로) 시간을 흘린다. 서 있는 캐릭터가 쓰러지지는 않게 한다 */
+function unattended(room: Room, conn: Conn, seconds: number): void {
+  for (let t = 0; t < seconds * 1000; t += 50) {
+    const p = room.world.players.get(conn.pid);
+    if (p?.alive) p.hp = 1e9;
+    mock.timers.tick(50);
+  }
+}
+const rosterOf = (ws: FakeSocket, pid: number) => last(ws, 'roster')!.players.find((p) => p.id === pid);
+
+test('재접속(솔로): 연결이 끊기면 월드를 멈추고 자리를 지킨다. 같은 열쇠로 돌아오면 그 캐릭터 그대로 이어서 한다', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), 1));
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const key = keyOf(a.ws);
+  assert.match(key, /^[0-9a-f]{8}\.[A-Za-z0-9_-]{32}$/, '방 id 와 192비트 비밀 값');
+  survive(room, [a.conn], 35);
+  const p = room.world.players.get(a.conn.pid)!;
+  p.hp = 37;
+  p.kills = 5;
+  room.onInput(a.conn, 900_000, 1, 0);
+  const tick = room.world.tick;
+  let freed = 0;
+  assert.equal(hangUp(room, a, () => freed++), true, '자리를 지켜 둔다');
+  assert.deepEqual([p.dx, p.dy], [0, 0], '달리던 방향 그대로 계속 가지 않는다');
+  advance(60_000);
+  assert.equal(room.closed, false);
+  assert.equal(rooms.count, 1);
+  assert.equal(room.world.tick, tick, '자리를 비운 동안 월드는 멈춰 있다');
+  assert.equal(freed, 0);
+
+  const ws2 = socket();
+  const back = rooms.resume(key, ws2 as unknown as WebSocket);
+  assert.ok(back && back.conn === a.conn && back.room === room, '같은 자리를 돌려받는다');
+  assert.equal(freed, 1, '지켜 두던 자리 하나가 풀렸다');
+  const w = last(ws2, 'welcome')!;
+  assert.deepEqual([w.id, w.resumed, w.key, w.mode], [a.conn.pid, true, key, 'solo']);
+  assert.equal(last(ws2, 'roster')!.started, true);
+  const pause = last(ws2, 'pause')!;
+  assert.ok(pause.on && pause.max > 530 && pause.max <= 540, `멈춰 있다고 알려주고 남은 시간도 준다 (${pause.max}s)`);
+  const snap = ws2.snaps.at(-1)!;
+  assert.deepEqual([snap.me.hp, snap.me.kills, snap.paused, snap.tick], [37, 5, true, tick], '체력·처치 수·시간 모두 끊기기 전 그대로');
+
+  // 계속하기: 새 연결의 입력 번호는 처음부터 다시 센다
+  room.onPause(a.conn, false);
+  assert.equal(room.onInput(a.conn, 1, 1, 0), true);
+  survive(room, [a.conn], 1);
+  assert.ok(room.world.tick > tick + 15 && ws2.snaps.at(-1)!.tick > tick + 15, '다시 돌아간다');
+  assert.equal(a.ws.snaps.at(-1)!.tick <= tick, true, '옛 소켓으로는 더 보내지 않는다');
+
+  // 자리를 비운 시간은 일시정지와 똑같이 기록에 남는다
+  down(room, a.conn);
+  advance(100);
+  assert.equal(reports.length, 1);
+  assert.ok(reports[0]!.pausedSeconds >= 59 && reports[0]!.pausedSeconds <= 61, `pausedSeconds ${reports[0]!.pausedSeconds}`);
+  assert.ok(reports[0]!.time >= 35 && reports[0]!.time <= 37, '멈춰 있던 60초는 생존 시간에 들어가지 않는다');
+});
+
+test('재접속(솔로): 돌아오지 않으면 일시정지가 끝날 때(10분) 방을 닫는다. 일시정지 시간을 다 쓴 판은 2분만 기다린다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const key = keyOf(a.ws);
+  survive(room, [a.conn], 3);
+  let freed = 0;
+  hangUp(room, a, () => freed++);
+  advance(9 * MIN + 55_000);
+  assert.equal(room.closed, false, '멈춰 있는 동안에는 드는 것이 없으므로 일시정지가 끝날 때까지 기다린다');
+  advance(10_000);
+  assert.equal(room.closed, true);
+  assert.equal(rooms.count, 0);
+  assert.equal(freed, 1, '방이 닫히면 지켜 두던 자리도 풀린다');
+  assert.equal(rooms.resume(key, socket() as unknown as WebSocket), null, '닫힌 방의 열쇠는 통하지 않는다');
+
+  // 일시정지 시간(한 판에 30분)을 다 쓴 판: 멈출 수 없으므로 월드는 계속 돌고, 자리는 2분만 지킨다
+  const room2 = rooms.create('solo')!;
+  const b = join(room2, 'b');
+  for (let i = 0; i < 3; i++) {
+    room2.onPause(b.conn, true);
+    advance(10 * MIN + 1000);
+  }
+  room2.onPause(b.conn, true);
+  assert.equal(last(b.ws, 'pause')!.on, false, '일시정지 시간을 다 썼다');
+  survive(room2, [b.conn], 1);
+  const tick = room2.world.tick;
+  hangUp(room2, b);
+  unattended(room2, b.conn, 119);
+  assert.equal(room2.closed, false);
+  // (레벨업 선택 대기로 잠깐씩 멈추는 것은 접속해 있을 때와 같다: 20초 뒤 서버가 대신 고른다)
+  assert.ok(room2.world.tick > tick + 400, `끊어서 일시정지 한도를 넘길 수는 없다: 월드는 계속 돈다 (${room2.world.tick - tick}틱)`);
+  unattended(room2, b.conn, 2);
+  assert.equal(room2.closed, true);
+});
+
+test('재접속(페어): 끊긴 사람의 캐릭터는 그 자리에 남아 계속 맞는다. 판은 멈추지 않고, 돌아오면 같은 캐릭터다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn], 2);
+  const key = keyOf(b.ws);
+  const pb = room.world.players.get(b.conn.pid)!;
+  room.onInput(b.conn, 800_000, 0, 1);
+  advance(100);
+  pb.hp = 60;
+  pb.level = 3;
+  let freed = 0;
+  assert.equal(hangUp(room, b, () => freed++), true);
+  assert.deepEqual([pb.dx, pb.dy], [0, 0]);
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.away, true, '동료에게 연결이 끊겼다고 알려준다');
+  assert.equal(last(a.ws, 'roster')!.players.length, 2);
+
+  // 판은 멈추지 않는다 (페어에서는 누구도 다른 사람의 게임을 멈출 수 없다)
+  const tick = room.world.tick;
+  const { x, y } = pb;
+  survive(room, [a.conn], 2);
+  assert.ok(room.world.tick > tick + 35);
+  assert.equal(a.ws.snaps.at(-1)!.paused, false);
+  assert.deepEqual([pb.x, pb.y], [x, y], '가만히 서 있다');
+  assert.ok(a.ws.snaps.at(-1)!.p.some((row) => row[0] === b.conn.pid), '동료의 화면에 그대로 보인다');
+
+  // 무적이 아니다: 붙어 있는 적에게 맞는다 (끊는 것으로 피해를 피할 수 없다)
+  room.world.enemies.push({ id: 990_001, type: 'bug', x: pb.x, y: pb.y, hp: 1e9, duckCd: 0, hit: false });
+  survive(room, [a.conn], 1);
+  assert.ok(pb.hp < 60, `체력 60 -> ${pb.hp}`);
+  const hurt = pb.hp;
+
+  // 끊긴 뒤에 코드로 들어온 사람은 관전한다 (끊긴 본인이 새 캐릭터로 들어올 수 없다)
+  const again = join(room, 'b');
+  assert.equal(room.world.players.get(again.conn.pid)!.alive, false);
+  room.leave(again.conn);
+
+  // 같은 열쇠로 돌아온다: 같은 캐릭터, 체력은 채워지지 않는다
+  room.world.enemies.length = 0;
+  const ws2 = socket();
+  assert.equal(rooms.resume(key, ws2 as unknown as WebSocket)?.conn, b.conn);
+  assert.equal(freed, 1);
+  assert.equal(last(ws2, 'welcome')!.id, b.conn.pid);
+  assert.equal(last(ws2, 'pause'), undefined, '페어에는 일시정지 상태가 없다');
+  assert.deepEqual([ws2.snaps.at(-1)!.me.hp, ws2.snaps.at(-1)!.me.level, ws2.snaps.at(-1)!.me.alive], [Math.ceil(hurt), 3, true]);
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.away, undefined, '동료에게 돌아왔다고 알려준다');
+  assert.equal(room.onInput(b.conn, 1, 1, 0), true);
+
+  // 다시 끊기고 2분 동안 돌아오지 않으면 자리를 비운다 (그 뒤에는 나간 것과 같다)
+  const b2 = { conn: b.conn, ws: ws2 };
+  hangUp(room, b2, () => freed++);
+  pb.hp = 1e9;
+  survive(room, [a.conn], 119);
+  assert.ok(room.world.players.has(b.conn.pid));
+  assert.equal(freed, 1);
+  survive(room, [a.conn], 2);
+  assert.equal(room.world.players.has(b.conn.pid), false);
+  assert.equal(freed, 2);
+  assert.equal(last(a.ws, 'roster')!.players.length, 1);
+  assert.equal(rooms.resume(key, socket() as unknown as WebSocket), null, '비워진 자리의 열쇠는 통하지 않는다');
+  assert.equal(room.closed, false);
+});
+
+test('재접속: 틀린 열쇠는 통하지 않고, 서버가 끊긴 줄 모르는 옛 연결이 남아 있으면 닫고 넘겨준다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const other = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  const c = join(other, 'c');
+  const key = keyOf(a.ws);
+  const ws = (): WebSocket => socket() as unknown as WebSocket;
+  assert.notEqual(key, keyOf(b.ws), '자리마다 열쇠가 다르다');
+  assert.equal(rooms.resume(`${key.slice(0, 9)}${'A'.repeat(32)}`, ws()), null, '비밀 값이 틀리다');
+  assert.equal(rooms.resume(`00000000${key.slice(8)}`, ws()), null, '없는 방');
+  assert.equal(rooms.resume(`${other.id}${key.slice(8)}`, ws()), null, '다른 방에서는 통하지 않는다');
+  assert.equal(rooms.resume(`${key.slice(0, 9)}short`, ws()), null, '길이가 다른 값도 예외 없이 거절한다');
+  assert.equal(rooms.resume('', ws()), null);
+  assert.equal(a.conn.ws, a.ws, '실패한 시도는 자리 주인에게 아무 영향이 없다');
+  assert.equal(a.ws.closed, null);
+
+  // 옛 연결이 아직 열려 있는 채로 이어받기: 옛 연결을 닫고 새 연결에 넘긴다 (한 자리는 한 연결만 쓴다)
+  const ws2 = socket();
+  assert.equal(rooms.resume(key, ws2 as unknown as WebSocket)?.conn, a.conn);
+  assert.deepEqual(a.ws.closed, [4009, 'replaced']);
+  assert.equal(last(ws2, 'welcome')!.resumed, true);
+  // 옛 연결의 close 가 뒤늦게 온다: 자리를 건드리지 않고, 지켜 둔 자리로 세지도 않는다
+  let freed = 0;
+  assert.equal(room.disconnect(a.conn, a.ws as unknown as WebSocket, true, () => freed++), false);
+  assert.equal(a.conn.away, false);
+  assert.equal(last(b.ws, 'roster')!.players.length, 2);
+  advance(5 * MIN);
+  assert.equal(last(b.ws, 'roster')!.players.length, 2, '옛 연결 때문에 자리가 만료되지 않는다');
+  assert.equal(freed, 0);
+  assert.equal(c.ws.closed, null);
+});
+
+test('재접속: 스스로 나갔거나 서버가 끊은 연결은 자리를 지켜 주지 않는다', () => {
+  const rooms = new RoomManager();
+  // 스스로 나감 / 쫓겨남: 연결 처리가 닫히기 전에 자리를 비운다
+  const solo = rooms.create('solo')!;
+  const a = join(solo, 'a');
+  const key = keyOf(a.ws);
+  solo.leave(a.conn);
+  assert.equal(solo.closed, true);
+  assert.equal(rooms.resume(key, socket() as unknown as WebSocket), null);
+  // 그 뒤에 소켓이 닫혀도 지켜 둔 자리로 세지 않는다
+  let freed = 0;
+  assert.equal(hangUp(solo, a, () => freed++), false);
+  assert.equal(freed, 0);
+
+  // 이 주소가 지켜 둔 자리가 이미 많을 때(hold = false)도 바로 비운다
+  const coop = rooms.create('coop')!;
+  const b = join(coop, 'b');
+  const c = join(coop, 'c');
+  b.ws.readyState = 3;
+  assert.equal(coop.disconnect(b.conn, b.ws as unknown as WebSocket, false), false);
+  assert.equal(last(c.ws, 'roster')!.players.length, 1);
+  assert.equal(rooms.resume(keyOf(b.ws), socket() as unknown as WebSocket), null);
+
+  // 방이 닫히면(방치 등) 지켜 두던 자리도 함께 풀린다
+  hangUp(coop, c, () => freed++);
+  assert.equal(coop.closed, false, '자리를 지키는 동안에는 방이 남아 있다');
+  advance(11 * MIN);
+  assert.equal(coop.closed, true);
+  assert.equal(freed, 1);
+  assert.equal(rooms.count, 0);
+});
+
+test('재접속(대기실): 끊긴 사람의 자리는 대기실이 닫힐 때까지 지킨다. 방장이 없는 동안에는 접속해 있는 사람이 시작할 수 있다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'host');
+  const key = keyOf(a.ws);
+  // 방장이 초대 링크를 보내러 다른 앱에 간 사이에 연결이 끊긴다. 그동안 친구가 들어온다
+  hangUp(room, a);
+  advance(3 * MIN);
+  assert.equal(room.closed, false, '2분이 지나도 대기실 자리는 그대로다');
+  const b = join(room, 'mate');
+  assert.equal(last(b.ws, 'roster')!.players.length, 2);
+  assert.equal(rosterOf(b.ws, a.conn.pid)?.away, true);
+  assert.equal(last(b.ws, 'roster')!.host, b.conn.pid, '방장이 없는 동안에는 접속해 있는 사람이 시작할 수 있다');
+
+  // 방장이 돌아오면 다시 방장이다
+  const ws2 = socket();
+  assert.equal(rooms.resume(key, ws2 as unknown as WebSocket)?.conn, a.conn);
+  assert.equal(last(ws2, 'roster')!.started, false);
+  assert.equal(last(ws2, 'roster')!.host, a.conn.pid);
+  assert.equal(last(b.ws, 'roster')!.host, a.conn.pid);
+  room.onStart(b.conn);
+  advance(200);
+  assert.equal(b.ws.snaps.length, 0, '방장이 있으면 방장만 시작한다');
+
+  // 방장이 다시 끊긴 사이에 친구가 시작하면: 자리를 비운 사람은 빼고 시작한다 (서 있기만 하는 캐릭터를 넣지 않는다)
+  hangUp(room, { conn: a.conn, ws: ws2 });
+  room.onStart(b.conn);
+  advance(200);
+  assert.ok(b.ws.snaps.length > 0);
+  assert.equal(room.world.players.size, 1);
+  assert.equal(last(b.ws, 'roster')!.players.length, 1);
+  assert.equal(rooms.resume(key, socket() as unknown as WebSocket), null);
+  // 빠진 사람은 방 코드로 다시 들어와 함께 한다 (아무도 쓰러지거나 나가지 않은 판이므로 관전이 아니다)
+  const back = join(room, 'host');
+  assert.equal(room.world.players.get(back.conn.pid)!.alive, true);
+});
+
+test('재접속: 판이 끝나는 순간 통신이 막혀 있던 사람은 돌아와서 결과를 받는다', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), 1));
+  // 페어: 끊긴 채로 판이 끝났다. 처음부터 함께 한 사람이므로 기록에 이름이 오르고, 돌아오면 결과를 본다
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn], 31);
+  const key = keyOf(b.ws);
+  hangUp(room, b);
+  down(room, a.conn);
+  down(room, b.conn);
+  advance(100);
+  assert.deepEqual([reports[0]!.board, [...reports[0]!.names].sort()], ['coop', ['a', 'b']]);
+  assert.equal(last(b.ws, 'over'), undefined, '닫힌 소켓으로는 가지 않았다');
+  const ws2 = socket();
+  rooms.resume(key, ws2 as unknown as WebSocket);
+  assert.deepEqual(
+    ws2.msgs.map((m) => m.t),
+    ['welcome', 'over', 'roster'],
+  );
+  assert.equal(last(ws2, 'over')!.result.name, 'b');
+  assert.deepEqual(last(ws2, 'over')!.place, { board: 'coop', rank: 1 });
+  assert.equal(last(ws2, 'roster')!.started, false);
+  // 다음 판이 시작된 뒤에는 지난 결과를 다시 주지 않는다
+  room.onStart(a.conn);
+  advance(100);
+  const ws3 = socket();
+  rooms.resume(key, ws3 as unknown as WebSocket);
+  assert.equal(last(ws3, 'over'), undefined);
+  assert.equal(last(ws3, 'roster')!.started, true);
+
+  // 솔로: 통신이 막힌 줄 서버가 알기 전에 쓰러져 방이 닫혔다. 열쇠가 맞는 사람에게만 2분 동안 결과를 다시 준다
+  const solo = rooms.create('solo')!;
+  const c = join(solo, 'c');
+  const ckey = keyOf(c.ws);
+  survive(solo, [c.conn], 2);
+  down(solo, c.conn);
+  advance(100);
+  assert.equal(solo.closed, true);
+  assert.equal(rooms.resume(ckey, socket() as unknown as WebSocket), null);
+  assert.deepEqual(rooms.resultFor(ckey), last(c.ws, 'over'));
+  assert.equal(rooms.resultFor(`${ckey.slice(0, 9)}${'B'.repeat(32)}`), null, '열쇠가 틀리면 주지 않는다');
+  assert.equal(rooms.resultFor(key), null, '다른 방의 열쇠로도 주지 않는다');
+  advance(2 * MIN + 1000);
+  assert.equal(rooms.resultFor(ckey), null, '2분이 지나면 지운다');
+});
+
+test('입력이 멈춘 연결: 4초 넘게 입력이 없으면 캐릭터를 세운다. 혼자 하는 판은 스스로 멈춘다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  advance(30_000);
+  room.onStart(a.conn);
+  advance(1000);
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.idle, undefined, '대기실에서 조용했던 시간은 세지 않는다');
+  room.onInput(b.conn, 1, 1, 0);
+  const pb = room.world.players.get(b.conn.pid)!;
+  survive(room, [a.conn], 3);
+  assert.equal(pb.dx, 1, '3초까지는 마지막 입력대로 움직인다');
+  survive(room, [a.conn], 2);
+  assert.deepEqual([pb.dx, pb.dy], [0, 0], '4초 넘게 조용하면 세운다 (하트비트가 끊긴 연결을 알아채기까지 달리게 두지 않는다)');
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.idle, true);
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.away, undefined, '연결이 끊긴 것과는 구분한다');
+  assert.equal(a.ws.snaps.at(-1)!.paused, false, '페어 판은 멈추지 않는다');
+  const rosters = a.ws.msgs.filter((m) => m.t === 'roster').length;
+  survive(room, [a.conn], 20);
+  assert.equal(a.ws.msgs.filter((m) => m.t === 'roster').length, rosters, '조용한 동안 명단을 되풀이해 보내지 않는다');
+  room.onInput(b.conn, 2, 0, 0);
+  assert.equal(rosterOf(a.ws, b.conn.pid)?.idle, undefined, '입력이 오면 풀린다');
+
+  // 솔로: 스스로 멈춘다 (일시정지와 같은 예산). 서버가 밀려 틱이 늦게 돈 것은 세지 않는다
+  const solo = rooms.create('solo')!;
+  const c = join(solo, 'c');
+  survive(solo, [c.conn], 2);
+  mock.timers.tick(6000); // 서버가 6초 동안 밀렸다: 그동안 온 입력을 아직 못 읽었을 뿐이다
+  assert.equal(last(c.ws, 'pause'), undefined);
+  survive(solo, [c.conn], 1);
+  const tick = solo.world.tick;
+  advance(4200);
+  assert.equal(last(c.ws, 'pause')?.on, true, '입력이 4초 넘게 끊기면 멈춘다');
+  assert.ok(solo.world.tick - tick <= 82, `멈추기 전까지 돈 틱 ${solo.world.tick - tick}`);
+  const frozen = solo.world.tick;
+  advance(30_000);
+  assert.equal(solo.world.tick, frozen);
+  solo.onPause(c.conn, false);
+  survive(solo, [c.conn], 1);
+  assert.ok(solo.world.tick > frozen + 15, '같은 연결로 이어서 한다');
 });

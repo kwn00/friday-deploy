@@ -134,6 +134,38 @@ test('parseClientMsg: 방 코드 · 시작 · 일시정지', () => {
   assert.deepEqual(parseClientMsg('{"t":"start","seed":1}'), { t: 'start' });
 });
 
+test('parseClientMsg: 이어받기(resume) · 나가기(leave)', () => {
+  const tok = 'a'.repeat(24);
+  const key = `0a1b2c3d.${'Ab-_'.repeat(8)}`;
+  const resume = (k: unknown, extra = ''): string => `{"t":"resume","v":6,"token":"${tok}","key":${JSON.stringify(k)}${extra}}`;
+  assert.deepEqual(parseClientMsg(resume(key)), { t: 'resume', v: 6, token: tok, key });
+  // 상태를 실어 보낼 자리는 없다: 모르는 필드는 버려진다
+  assert.deepEqual(parseClientMsg(resume(key, ',"hp":9999,"id":1,"name":"x","room":"ABC234"')), { t: 'resume', v: 6, token: tok, key });
+  const bad = [
+    resume(''),
+    resume('0a1b2c3d'),
+    resume(`0a1b2c3d.${'A'.repeat(31)}`), // 비밀 값이 짧다
+    resume(`0a1b2c3d.${'A'.repeat(33)}`),
+    resume(`0A1B2C3D.${'A'.repeat(32)}`), // 방 id 는 소문자 16진수
+    resume(`0a1b2c3.${'A'.repeat(32)}`),
+    resume(`0a1b2c3d.${'A'.repeat(31)}=`),
+    resume(`0a1b2c3d.${'A'.repeat(31)}/`),
+    resume(`__proto__.${'A'.repeat(32)}`),
+    resume(`0a1b2c3d.1.${'A'.repeat(32)}`),
+    resume(null),
+    resume(12345678),
+    resume({ $ne: '' }),
+    resume([key]),
+    `{"t":"resume","v":6,"key":"${key}"}`, // 세션 토큰 없이
+    `{"t":"resume","v":6,"token":"short","key":"${key}"}`,
+    `{"t":"resume","v":"6","token":"${tok}","key":"${key}"}`,
+    `{"t":"resume","token":"${tok}","key":"${key}"}`,
+  ];
+  for (const raw of bad) assert.equal(parseClientMsg(raw), null, raw);
+  assert.deepEqual(parseClientMsg('{"t":"leave"}'), { t: 'leave' });
+  assert.deepEqual(parseClientMsg('{"t":"leave","kick":2}'), { t: 'leave' }, '남을 내보내는 메시지가 아니다: 보낸 연결의 자리만 비운다');
+});
+
 test('normalizeRoomCode: 사람이 친 코드를 정리하고, 형식이 다르면 거부', () => {
   assert.equal(normalizeRoomCode(' abc-234 '), 'ABC234');
   assert.equal(normalizeRoomCode('ABC234'), 'ABC234');

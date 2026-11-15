@@ -9,12 +9,19 @@ export type GameMode = 'solo' | 'coop';
 export type ClientMsg =
   /** mode 가 coop 일 때: room 이 없으면 새 방을 만들고, 있으면 그 코드의 방에 참가한다. */
   | { t: 'hello'; v: number; token: string; name: string; mode: GameMode; room?: string }
+  /**
+   * 끊긴 연결을 이어받는다 (hello 대신 보내는 첫 메시지). key 는 서버가 welcome 에 실어 준 값 그대로다.
+   * 서버가 그 자리를 아직 지키고 있으면 같은 캐릭터로 돌아간다. 상태를 실어 보내는 것이 아니다: 자리를 가리킬 뿐이다.
+   */
+  | { t: 'resume'; v: number; token: string; key: string }
   | { t: 'input'; seq: number; dx: number; dy: number }
   | { t: 'pick'; choice: number }
   /** 페어 방의 호스트가 대기실에서 게임을 시작한다. */
   | { t: 'start' }
   /** 일시정지 요청. 서버는 솔로 방에서만 받아들인다 (페어에서는 다른 사람의 게임을 멈출 수 없다). */
   | { t: 'pause'; on: boolean }
+  /** 방을 나간다: 자리를 바로 비운다. 이 메시지 없이 연결만 끊기면 서버는 자리를 잠시 지켜 둔다. */
+  | { t: 'leave' }
   | { t: 'ping'; ts: number };
 
 /* ───────────── Server → Client ───────────── */
@@ -119,11 +126,27 @@ export interface Snapshot {
   i: [number, number, number, number, number][];
 }
 
+export interface RosterPlayer {
+  id: number;
+  name: string;
+  /** 연결이 끊겨 자리만 지키고 있다 (캐릭터는 그 자리에 서 있다). 돌아오면 이어서 한다 */
+  away?: boolean;
+  /** 연결은 있지만 한동안 입력이 없다 (화면을 떠났거나 통신이 막혔다) */
+  idle?: boolean;
+}
+
 export type ServerMsg =
-  /** code: 페어 방 코드 (솔로는 빈 문자열) */
-  | { t: 'welcome'; id: number; mode: GameMode; code: string; tickRate: number }
-  /** host: 방장 플레이어 id, started: 게임이 시작됐는지 (false 면 대기실) */
-  | { t: 'roster'; players: { id: number; name: string }[]; host: number; started: boolean }
+  /**
+   * code: 페어 방 코드 (솔로는 빈 문자열).
+   * key: 이 자리를 이어받는 열쇠. 연결이 끊겼을 때 resume 에 실어 보낸다 (남에게 보이면 안 되는 값이다).
+   * resumed: 끊겼던 자리를 이어받은 것이면 true
+   */
+  | { t: 'welcome'; id: number; mode: GameMode; code: string; tickRate: number; key: string; resumed?: boolean }
+  /**
+   * host: 지금 시작할 수 있는 사람의 플레이어 id (방장. 방장의 연결이 끊겨 있는 동안에는 접속해 있는 사람 중 가장 먼저 들어온 사람),
+   * started: 게임이 시작됐는지 (false 면 대기실)
+   */
+  | { t: 'roster'; players: RosterPlayer[]; host: number; started: boolean }
   | Snapshot
   /** 솔로 일시정지 상태가 바뀔 때마다 서버가 알려준다. max: 자동 재개까지 남은 최대 시간(초) */
   | { t: 'pause'; on: boolean; max: number }
@@ -151,6 +174,10 @@ export function sanitizeName(raw: unknown): string {
 }
 
 const ROOM_CODE_RE = new RegExp(`^[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LEN}}$`);
+/** 이어받기 키: 방 id(16진 8자) . 비밀 값(24바이트의 base64url = 32자) */
+const RESUME_KEY_RE = /^[0-9a-f]{8}\.[A-Za-z0-9_-]{32}$/;
+
+const isToken = (v: unknown): v is string => typeof v === 'string' && v.length >= 16 && v.length <= 256;
 
 /** 사람이 입력한 방 코드 정리: 공백·하이픈 제거, 대문자화. 형식이 맞지 않으면 null. */
 export function normalizeRoomCode(raw: unknown): string | null {
@@ -176,7 +203,7 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   switch (o.t) {
     case 'hello': {
       if (!isInt(o.v, 0, 1_000_000)) return null;
-      if (typeof o.token !== 'string' || o.token.length < 16 || o.token.length > 256) return null;
+      if (!isToken(o.token)) return null;
       if (typeof o.name !== 'string' || o.name.length > 64) return null;
       if (o.mode !== 'solo' && o.mode !== 'coop') return null;
       const hello: ClientMsg = { t: 'hello', v: o.v, token: o.token, name: sanitizeName(o.name), mode: o.mode };
@@ -187,6 +214,14 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       }
       return hello;
     }
+    case 'resume': {
+      if (!isInt(o.v, 0, 1_000_000)) return null;
+      if (!isToken(o.token)) return null;
+      if (typeof o.key !== 'string' || !RESUME_KEY_RE.test(o.key)) return null;
+      return { t: 'resume', v: o.v, token: o.token, key: o.key };
+    }
+    case 'leave':
+      return { t: 'leave' };
     case 'input': {
       if (!isInt(o.seq, 0, 0x7fffffff)) return null;
       if (!isFiniteNum(o.dx) || !isFiniteNum(o.dy)) return null;
