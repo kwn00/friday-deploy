@@ -87,8 +87,12 @@ export interface Player {
    */
   camX: number;
   camY: number;
-  /** 가지고 있는 부활(백업) 수. 쓰러질 때 하나를 써서 그 자리에서 되살아난다 */
+  /** 가지고 있는 부활 수 (백업 + 스냅샷). 쓰러질 때 하나를 써서 그 자리에서 되살아난다 */
   revives: number;
+  /** 그중 주운 백업의 수 (백업은 하나까지만 가질 수 있다. 스냅샷으로 받은 부활과 따로 센다) */
+  backups: number;
+  /** 아직 정수로 올리지 못한 경험치 (배율이 붙은 작은 경험치를 버리지 않게 쌓아 둔다) */
+  xpFrac: number;
   /** 피해를 받지 않는 남은 시간(초). 되살아난 직후에만 0 보다 크다 */
   shield: number;
   /** 2단계 인증으로 피해를 받지 않는 남은 시간(초) */
@@ -99,6 +103,9 @@ export interface Player {
   duckOn: number;
   /** 코드 프리즈가 다음에 쏠 방향 (시곗바늘 12칸 중 하나) */
   freezeDir: number;
+  /** 마지막으로 커밋 히스토리 발자국을 남긴 자리 */
+  trailX: number;
+  trailY: number;
   /** 소환물(카나리아·부엉이)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
   pets: Partial<Record<'canary' | 'night_owl', number>>;
   up: Partial<Record<UpgradeId, number>>;
@@ -222,6 +229,8 @@ export interface World {
   items: FieldItem[];
   /** 다음 필드 아이템이 놓이기까지 남은 시간(초) */
   itemCd: number;
+  /** 마지막 step 에서 틱이 실제로 진행됐는지 (멈춰 있으면 false) */
+  stepped: boolean;
   /** 다음 회복 아이템이 떨어질 수 있을 때까지 남은 시간(초) */
   healCd: number;
   spawnAcc: number;
@@ -261,6 +270,7 @@ export function createWorld(source: Seed | WorldRandom, secret?: Rand): World {
     healCd: HEAL_DROP_COOLDOWN,
     items: [],
     itemCd: fieldItemDelay(random.secret),
+    stepped: false,
     spawnAcc: 0,
     nextBossAt: BOSS_INTERVAL,
     events: [],
@@ -301,11 +311,15 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     camX: x,
     camY: y,
     revives: 0,
+    backups: 0,
+    xpFrac: 0,
     shield: 0,
     guard: 0,
     moveTime: 0,
     duckOn: 0,
     freezeDir: 0,
+    trailX: Number.NaN,
+    trailY: Number.NaN,
     pets: {},
     up: { console_log: 1 },
     cd: {},
@@ -384,8 +398,8 @@ function spawnFieldItem(world: World, alive: Player[]): void {
 function canTake(p: Player, kind: FieldItemKind): boolean {
   // 화면에 보이는 체력(올림)이 가득이면 회복 아이템을 써 버리지 않는다
   if (kind === 'heal') return Math.ceil(p.hp) < maxHpOf(p);
-  // 백업은 하나만 더 가질 수 있다 (스냅샷으로 받은 부활은 따로 센다)
-  if (kind === 'revive') return p.revives < MAX_REVIVES + lv(p, 'snapshot');
+  // 백업은 하나만 가질 수 있다 (스냅샷으로 받은 부활은 따로 센다)
+  if (kind === 'revive') return p.backups < MAX_REVIVES;
   return true;
 }
 
@@ -395,6 +409,7 @@ function takeItem(world: World, p: Player, kind: FieldItemKind): void {
     p.hp = Math.min(maxHp, p.hp + Math.ceil(maxHp * HEAL_FRACTION));
   } else if (kind === 'revive') {
     p.revives++;
+    p.backups++;
   } else {
     // 지금 레벨을 채우는 데 필요한 만큼을 통째로 준다: 정확히 한 레벨 오르고, 모으던 경험치는 그대로 남는다
     p.xp += p.xpNext;
@@ -405,6 +420,8 @@ function takeItem(world: World, p: Player, kind: FieldItemKind): void {
 /** 쓰러질 순간에 부활을 하나 써서 그 자리에서 되살아난다 */
 function revive(world: World, p: Player): void {
   p.revives--;
+  // 백업부터 쓴다 (다음 백업을 주울 수 있게)
+  if (p.backups > 0) p.backups--;
   p.hp = Math.ceil(maxHpOf(p) * REVIVE_HP_FRACTION);
   p.shield = REVIVE_SHIELD_SECONDS;
   // 주변의 적을 반경 밖으로 밀어낸다. 방향은 지금 있는 쪽 그대로 (겹쳐 있으면 적마다 다른 고정된 방향)
@@ -500,6 +517,7 @@ function spawnEnemies(world: World, alive: Player[], dt: number): void {
 }
 
 export function step(world: World, dt: number): void {
+  world.stepped = false;
   if (world.over) return;
   const players = [...world.players.values()];
 
@@ -523,6 +541,7 @@ export function step(world: World, dt: number): void {
   if (world.paused) return;
 
   world.tick++;
+  world.stepped = true;
   // 누적 덧셈 대신 틱에서 계산: 오차가 쌓이지 않고, 클라이언트가 tick 만으로 같은 시간을 구할 수 있다 (러버덕 각도)
   world.time = world.tick * dt;
   world.healCd -= dt;
@@ -701,8 +720,11 @@ export function step(world: World, dt: number): void {
     return true;
   });
   for (const [p, gained] of gains) {
-    // 사이드 프로젝트: 같은 경험치를 주워도 더 많이 오른다
-    p.xp += Math.round(gained * growthOf(p));
+    // 사이드 프로젝트: 같은 경험치를 주워도 더 많이 오른다. 소수는 쌓아 두었다가 정수만큼 올린다
+    p.xpFrac += gained * growthOf(p);
+    const whole = Math.floor(p.xpFrac + 1e-9);
+    p.xpFrac -= whole;
+    p.xp += whole;
     checkLevelUp(world, p);
   }
 
@@ -744,8 +766,12 @@ export function step(world: World, dt: number): void {
 
 const r1 = (n: number): number => Math.round(n * 10) / 10;
 
-/** 플레이어 한 명 시점의 스냅샷. 관심 영역(VIEW_RADIUS) 밖의 정보는 포함하지 않는다. */
-export function buildSnapshot(world: World, pid: number): Snapshot | null {
+/**
+ * 플레이어 한 명 시점의 스냅샷. 관심 영역(VIEW_RADIUS) 밖의 정보는 포함하지 않는다.
+ * zonesAfter: 이 틱 뒤에 생긴 바닥 영역만 싣는다. 방은 연결마다 마지막으로 보낸 틱을 넘겨, 영역이 한 번씩만 가게 한다.
+ * 주지 않으면 이번 틱에 새로 생긴 것만 (월드가 멈춰 틱이 그대로면 아무것도).
+ */
+export function buildSnapshot(world: World, pid: number, zonesAfter?: number): Snapshot | null {
   const me = world.players.get(pid);
   if (!me) return null;
   const v2 = VIEW_RADIUS * VIEW_RADIUS;
@@ -811,9 +837,10 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
       if (near(x, y)) snap.s.push([id, SHOT_KINDS.indexOf(w === 'canary' ? 'canary' : 'owl'), r1(x), r1(y)]);
     }
   }
-  // 바닥 영역: 이번 틱에 생긴 것 중 조금이라도 보이는 것 (크기만큼 넓게 본다). 생길 때 한 번만, 남는 시간과 함께 보낸다
+  // 바닥 영역: 아직 보내지 않은 것 중 조금이라도 보이는 것 (크기만큼 넓게 본다). 한 번만, 남는 시간과 함께 보낸다
+  const after = zonesAfter ?? (world.stepped ? world.tick - 1 : world.tick);
   for (const z of world.zones) {
-    if (z.born !== world.tick) continue;
+    if (z.born <= after || z.ttl <= 0) continue;
     const reach = VIEW_RADIUS + z.r;
     if ((z.x - cx) ** 2 + (z.y - cy) ** 2 <= reach * reach) {
       snap.z.push([z.id, ZONE_KINDS.indexOf(z.kind), r1(z.x), r1(z.y), Math.round(z.r), z.aux, Math.min(255, Math.ceil(z.ttl * TICK_RATE))]);

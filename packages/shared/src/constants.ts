@@ -77,8 +77,10 @@ export const MAX_ENEMIES_PER_EXTRA_PLAYER = 40;
 export const MAX_GEMS = 300;
 /** 투사체·소환물(고양이) 수의 상한. 넘으면 새로 쏘지 않는다 (서버 CPU 와 전송량을 묶어 둔다) */
 export const MAX_SHOTS = 320;
-/** 바닥 영역(웅덩이, 발자국, 폭발 등) 수의 상한 */
+/** 피해를 주는 바닥 영역(웅덩이, 발자국) 수의 상한 */
 export const MAX_ZONES = 200;
+/** 보이기만 하는 짧은 영역(베기, 번개, 폭발 등) 수의 상한. 피해는 생길 때 이미 줬다 */
+export const MAX_FLASHES = 200;
 
 /**
  * 회복 아이템(야근 피자): 처치 시 낮은 확률로 떨어지고, 한 번 떨어지면 한동안 다시 떨어지지 않는다.

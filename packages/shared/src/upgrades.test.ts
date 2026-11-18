@@ -145,7 +145,8 @@ test('무기: 피해를 주는 무기 21종은 저마다 혼자서 가까이 온
       return [p.x + Math.cos((k * Math.PI) / 4) * d, p.y + Math.sin((k * Math.PI) / 4) * d];
     };
     const ring = Array.from({ length: 16 }, (_, k) => enemy(9000 + k, ...at(k)));
-    setInput(w, p.id, 0.2, 0);
+    // 천천히 걷기 (0.3 이상이어야 걷는 것으로 친다)
+    setInput(w, p.id, 0.35, 0);
     let hurt = false;
     for (let i = 0; i < 20 * 70 && !hurt; i++) {
       p.hp = 1e9;
@@ -365,4 +366,81 @@ test('소환물: 카나리아와 부엉이는 주인 주위를 서로 반대로 
     assert.ok(['canary', 'owl'].includes(SHOT_KINDS[r[1]!]!));
     assert.ok(Math.abs(Math.hypot(r[2]! - p.x, r[3]! - p.y) - 64) < 0.2, '반경 64');
   }
+});
+
+test('검토 반영: 작은 경험치에 붙는 배율도 쌓여서 반영된다 (사이드 프로젝트, 운영 서버 직접 수정)', () => {
+  const { w, p } = quietWorld(91);
+  p.up = { console_log: 1, side_project: 1 };
+  for (let i = 0; i < 100; i++) {
+    w.gems.push({ id: w.nextId++, x: p.x, y: p.y, v: 1 });
+    tick(w, []);
+  }
+  assert.equal(p.xp, 108, '버그 경험치(1) 100개 × 1.08');
+  // 저주로 1.1배가 된 버그의 경험치는 반올림되지 않고 1.1 그대로 남는다
+  p.up = { console_log: 8 };
+  const cursed = { ...enemy(9700, p.x + 20, p.y, 'bug', 1), xpMult: 1.1 };
+  for (let i = 0; i < 40 && cursed.hp > 0; i++) tick(w, [cursed]);
+  const gem = w.gems.find((g) => Math.abs(g.v - 1.1) < 1e-9);
+  assert.ok(gem, `경험치 ${w.gems.map((g) => g.v).join(',')}`);
+});
+
+test('검토 반영: 거의 0 인 이동 입력으로는 달리는 것으로 치지 않는다 (스프린트·커밋 히스토리)', () => {
+  const { w, p } = quietWorld(92);
+  p.up = { sprint: 8, commit_history: 8 };
+  setInput(w, p.id, 1e-300, 0);
+  for (let i = 0; i < 20 * 5; i++) tick(w, []);
+  assert.equal(p.moveTime, 0, '제자리: 달린 시간이 쌓이지 않는다');
+  assert.equal(w.zones.filter((z) => z.kind === 'trail').length, 0, '제자리에는 발자국을 남기지 않는다');
+  // 진짜로 걸으면 발자국이 반경만큼 떨어져서 남는다
+  setInput(w, p.id, 1, 0);
+  for (let i = 0; i < 20 * 2; i++) tick(w, []);
+  const trails = w.zones.filter((z) => z.kind === 'trail').sort((a, b) => a.x - b.x);
+  assert.ok(trails.length >= 3, `발자국 ${trails.length}개`);
+  for (let i = 1; i < trails.length; i++) assert.ok(trails[i]!.x - trails[i - 1]!.x >= trails[i]!.r - 0.01, '겹쳐 쌓이지 않는다');
+  assert.ok(p.moveTime > 1.9);
+});
+
+test('검토 반영: 스냅샷 부활을 다 써도 백업은 하나까지만 주울 수 있다', () => {
+  const { w, p } = quietWorld(93);
+  p.offers = ['snapshot'];
+  pickOffer(w, p.id, 0);
+  p.offers = ['snapshot'];
+  pickOffer(w, p.id, 0);
+  assert.equal(p.revives, 2);
+  // 두 번 쓰러졌다 되살아난다
+  for (let k = 0; k < 2; k++) {
+    const e = enemy(9800 + k, p.x + 3, p.y, 'legacy_code');
+    p.hp = 0.01;
+    p.shield = 0;
+    tick(w, [e]);
+    assert.ok(p.alive, `${k + 1}번째`);
+  }
+  assert.equal(p.revives, 0);
+  for (let k = 0; k < 3; k++) w.items.push({ id: w.nextId++, kind: 'revive', x: p.x + 5, y: p.y, ttl: 90 });
+  for (let i = 0; i < 5; i++) tick(w, []);
+  assert.equal(p.revives, 1, '하나만 주웠다');
+  assert.equal(w.items.length, 2, '나머지는 남는다');
+});
+
+test('검토 반영: 월드가 멈춰 있는 동안(레벨업 선택 중)에는 같은 영역을 다시 싣지 않는다', () => {
+  const { w, p } = quietWorld(94);
+  p.up = { hotfix: 1 };
+  const e = enemy(9900, p.x + 60, p.y, 'merge_conflict');
+  let born = -1;
+  for (let i = 0; i < 20 * 6 && born < 0; i++) {
+    tick(w, [e]);
+    if (buildSnapshot(w, p.id)!.z.length > 0) born = w.tick;
+  }
+  assert.ok(born > 0);
+  // 다음 틱에 레벨업 선택으로 멈춘다
+  p.offers = ['coffee', 'cdn', 'work_life'];
+  for (let i = 0; i < 20; i++) {
+    tick(w, [e]);
+    assert.equal(w.tick, born, '멈춰 있다');
+    assert.equal(buildSnapshot(w, p.id)!.z.length, 0, '멈춘 동안에는 영역을 다시 싣지 않는다');
+  }
+  // 새 연결(이어받기)에게는 남아 있는 영역을 남은 시간으로 한 번 보낸다
+  const all = buildSnapshot(w, p.id, -1)!.z;
+  assert.equal(all.length, 1);
+  assert.ok(all[0]![6]! > 0 && all[0]![6]! < 40);
 });

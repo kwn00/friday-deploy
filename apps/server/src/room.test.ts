@@ -898,3 +898,36 @@ test('재접속: 판 도중에 끊긴 사람은, 판이 끝나 대기실로 돌�
   assert.equal(last(ws2, 'over')!.result.name, 'b', '놓친 판의 결과도 받는다');
   assert.equal(last(ws2, 'roster')!.started, false);
 });
+
+test('바닥 영역: 연결마다 한 번씩만 보낸다 (레벨업 선택으로 월드가 멈춰 있어도 같은 영역을 거듭 보내지 않는다)', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const p = room.world.players.get(a.conn.pid)!;
+  p.up = { console_log: 1, hotfix: 3 };
+  p.xpNext = 1e9;
+  room.world.itemCd = 1e9;
+  const seen = new Map<number, number>();
+  const count = (): void => {
+    for (const s of a.ws.snaps.splice(0)) for (const z of s.z) seen.set(z[0], (seen.get(z[0]) ?? 0) + 1);
+  };
+  for (let i = 0; i < 20 * 6; i++) {
+    p.hp = 1e9;
+    mock.timers.tick(50);
+  }
+  count();
+  assert.ok(seen.size > 0, '웅덩이가 생겼다');
+  // 레벨업 선택: 혼자라 월드가 멈춘다. 그동안 스냅샷은 계속 가지만 영역은 다시 실리지 않는다
+  p.offers = ['coffee', 'cdn', 'work_life'];
+  for (let i = 0; i < 20 * 3; i++) mock.timers.tick(50);
+  count();
+  assert.ok([...seen.values()].every((n) => n === 1), `같은 영역을 여러 번 보냈다: ${[...seen.entries()].filter(([, n]) => n > 1).length}개`);
+  room.onPick(a.conn, 0);
+  for (let i = 0; i < 20 * 5; i++) {
+    p.hp = 1e9;
+    mock.timers.tick(50);
+  }
+  count();
+  assert.ok([...seen.values()].every((n) => n === 1));
+  room.leave(a.conn);
+});

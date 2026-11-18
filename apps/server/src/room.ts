@@ -57,6 +57,11 @@ export interface Conn {
    * 끊긴 사람이 돌아오면 한 번 더 전해 준다. 다음 판이 시작되면 지운다.
    */
   lastOver?: OverMsg;
+  /**
+   * 이 연결에 바닥 영역을 어느 틱까지 보냈는지. 영역은 생길 때 한 번만 보내므로, 이 틱 뒤에 생긴 것만 싣는다
+   * (월드가 멈춰 같은 틱의 스냅샷을 여러 번 보낼 때 같은 영역을 거듭 보내지 않게, 건너뛴 스냅샷의 영역은 다음에 보내게).
+   */
+  zoneTick: number;
   /** 지키던 자리가 풀릴 때(이어받음·시간 초과·방 닫힘) 한 번 부른다 */
   onFree?: () => void;
 }
@@ -162,6 +167,8 @@ export class Room {
       awayUntil: 0,
       stalled: false,
       lastInput: now,
+      // 들어오는 순간 남아 있는 영역도 한 번 받는다
+      zoneTick: -1,
     };
     this.conns.set(p.id, conn);
     if (this.started) this.peak = Math.max(this.peak, this.conns.size);
@@ -253,6 +260,8 @@ export class Room {
     conn.stalled = false;
     conn.lastSeq = -1; // 새 연결의 입력 번호는 처음부터 다시 센다
     conn.lastInput = now;
+    // 새 연결은 아무것도 받지 못했다: 아직 남아 있는 영역을 (남은 시간으로) 한 번 다시 보낸다
+    conn.zoneTick = -1;
     this.release(conn);
     this.lastActivity = now;
     this.send(conn, { ...this.welcome(conn), resumed: true });
@@ -450,11 +459,13 @@ export class Room {
 
   private sendSnapshot(conn: Conn): void {
     if (conn.ws.bufferedAmount > MAX_BUFFERED) return;
-    const snap = buildSnapshot(this.world, conn.pid);
+    if (conn.ws.readyState !== conn.ws.OPEN) return;
+    const snap = buildSnapshot(this.world, conn.pid, conn.zoneTick);
     if (!snap) return;
     if (this.userPaused) snap.paused = true;
     // 스냅샷만 이진 프레임으로 보낸다 (JSON 의 약 1/3 크기). 나머지 메시지는 드물어서 JSON 그대로.
-    if (conn.ws.readyState === conn.ws.OPEN) conn.ws.send(encodeSnapshot(snap), { binary: true });
+    conn.ws.send(encodeSnapshot(snap), { binary: true });
+    conn.zoneTick = this.world.tick;
   }
 
   private kick(reason: string): void {
@@ -552,6 +563,7 @@ export class Room {
       conn.joinedAt = 0;
       conn.stalled = false;
       conn.lastInput = now;
+      conn.zoneTick = -1; // 새 월드는 틱이 0 부터 다시 센다
       // 판 도중에 끊긴 사람은 2분만 기다리기로 했었다. 이제 대기실이니 대기실 기준(닫힐 때까지)으로 기다린다
       if (conn.away) conn.awayUntil = Math.max(conn.awayUntil, now + LOBBY_IDLE_MS);
       this.conns.set(conn.pid, conn);

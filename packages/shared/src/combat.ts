@@ -4,7 +4,7 @@
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
  */
-import { HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES } from './constants';
+import { HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES } from './constants';
 import { ENEMIES, WEAPON_IDS, type ShotKind, type WeaponId, type WeaponStats, type ZoneKind } from './content';
 import type { Enemy, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, effectiveStats, lv } from './stats';
@@ -89,7 +89,8 @@ export function damage(world: World, e: Enemy, dmg: number, by: Player | undefin
   if (e.hp > 0) return;
   if (by) by.kills++;
   if (world.gems.length >= MAX_GEMS) world.gems.shift();
-  world.gems.push({ id: world.nextId++, x: e.x, y: e.y, v: Math.round(ENEMIES[e.type].xp * e.xpMult) });
+  // 소수 그대로 둔다: 줍는 쪽에서 쌓아 정수만큼 올린다 (작은 경험치에 붙는 배율이 반올림으로 사라지지 않게)
+  world.gems.push({ id: world.nextId++, x: e.x, y: e.y, v: ENEMIES[e.type].xp * e.xpMult });
   // 회복 아이템: 보스는 반드시, 그 외에는 쿨다운이 끝났을 때 낮은 확률로
   // 드롭 여부는 비밀 난수로 정한다 (보이는 난수를 쓰면 시드를 아는 사람이 드롭을 미리 알고 처치 순서로 조종할 수 있다)
   const boss = ENEMIES[e.type].boss === true;
@@ -108,7 +109,11 @@ function erase(e: Enemy, by: Player): void {
 }
 
 function addZone(world: World, z: Omit<Zone, 'id' | 'born'>): Zone | null {
-  if (world.zones.length >= MAX_ZONES) return null;
+  // 피해를 주는 영역과 보이기만 하는 영역은 따로 센다 (보이기만 하는 것이 웅덩이·발자국의 자리를 빼앗지 않게)
+  const hurts = z.dmg > 0;
+  let n = 0;
+  for (const other of world.zones) if (other.dmg > 0 === hurts) n++;
+  if (n >= (hurts ? MAX_ZONES : MAX_FLASHES)) return null;
   const zone = { id: world.nextId++, born: world.tick, ...z };
   world.zones.push(zone);
   return zone;
@@ -313,8 +318,11 @@ const AIM = 200;
  * 한 플레이어의 무기를 한 틱 돌린다.
  * 쿨다운이 끝난 무기는 쏜다. 겨눌 적이 없어 못 쏜 무기는 쿨다운을 다시 걸지 않고 다음 틱에 다시 본다.
  */
+/** 이만큼 이상 기울여야 "달리는 중"으로 친다 (거의 0 인 입력으로 제자리에서 달리는 척하지 못하게) */
+const RUNNING = 0.3;
+
 export function runWeapons(world: World, grid: Grid, p: Player, dt: number): void {
-  const moving = p.dx !== 0 || p.dy !== 0;
+  const moving = Math.hypot(p.dx, p.dy) >= RUNNING;
   p.moveTime = moving ? p.moveTime + dt : 0;
   const reach = AIM * areaMultOf(p);
 
@@ -349,7 +357,8 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
       p.cd[w] = cd;
       continue;
     }
-    if (w === 'commit_history' && !moving) {
+    // 커밋 히스토리: 실제로 움직여서 앞 발자국에서 충분히 떨어졌을 때만 남긴다 (한 자리에 겹쳐 쌓이지 않게)
+    if (w === 'commit_history' && (!moving || Math.hypot(p.x - p.trailX, p.y - p.trailY) < st.area)) {
       p.cd[w] = 0;
       continue;
     }
@@ -433,7 +442,8 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'rollback': {
-      const t = grid.nearest(p.x, p.y, reach * 1.2);
+      // 실제로 날아가는 거리(속도 × 지속 / 4) 안의 적만 겨눈다
+      const t = grid.nearest(p.x, p.y, (st.speed * st.dur) / 4 + 10);
       const base = t ? Math.atan2(t.y - p.y, t.x - p.x) : Math.atan2(p.fy, p.fx);
       for (let i = 0; i < n; i++) {
         fire(world, p, { kind: 'rollback', x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.35, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: 999, r: st.area, rehit: 0.5 });
@@ -528,6 +538,8 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     }
     case 'commit_history': {
       addZone(world, { kind: 'trail', owner: p.id, x: p.x, y: p.y + 4, r: st.area, aux: 0, ttl: st.dur, dmg: st.dmg, every: 0.5 });
+      p.trailX = p.x;
+      p.trailY = p.y;
       return true;
     }
     case 'code_freeze': {
