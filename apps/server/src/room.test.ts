@@ -642,7 +642,7 @@ test('재접속(페어): 끊긴 사람의 캐릭터는 그 자리에 남아 계�
   assert.ok(a.ws.snaps.at(-1)!.p.some((row) => row[0] === b.conn.pid), '동료의 화면에 그대로 보인다');
 
   // 무적이 아니다: 붙어 있는 적에게 맞는다 (끊는 것으로 피해를 피할 수 없다)
-  room.world.enemies.push({ id: 990_001, type: 'bug', x: pb.x, y: pb.y, hp: 1e9, duckCd: 0, hit: false });
+  room.world.enemies.push({ id: 990_001, type: 'bug', x: pb.x, y: pb.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
   survive(room, [a.conn], 1);
   assert.ok(pb.hp < 60, `체력 60 -> ${pb.hp}`);
   const hurt = pb.hp;

@@ -9,10 +9,10 @@
  * 서버 → 클라이언트 전용이다. 클라이언트가 보내는 메시지는 여전히 엄격히 검증하는 JSON 텍스트뿐이다.
  */
 import { DT } from './constants';
-import { FIELD_ITEM_KINDS, UPGRADE_IDS, type UpgradeId } from './content';
+import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 3;
+const VERSION = 4;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 
@@ -106,6 +106,8 @@ class Reader {
   }
 }
 
+const clampByte = (v: number): number => Math.max(0, Math.min(255, Math.round(v) || 0));
+
 /** 한 종류의 엔티티 목록에서 허용하는 최대 개수. 손상된 데이터로 거대한 배열을 만들지 않게 한다. */
 const MAX_LIST = 4096;
 
@@ -135,10 +137,12 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.varuint(p[0]);
     w.f32(p[1]);
     w.f32(p[2]);
-    // 방향(1) · 생존(2) · 러버덕 수(4,8,16) · 무적 중(32)
-    w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((p[6] & 7) << 2) | (p[7] ? 32 : 0));
+    // 방향(1) · 생존(2) · 러버덕 수(4,8,16) · 되살아난 직후 무적(32) · 2단계 인증 무적(64)
+    w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((Math.min(7, p[6]) & 7) << 2) | (p[7] ? 32 : 0) | (p[11] ? 64 : 0));
     w.u8(Math.max(0, Math.min(100, p[5])));
-    w.u8(Math.max(0, Math.min(255, p[8])));
+    w.u8(clampByte(p[8]));
+    w.u8(clampByte(p[9]));
+    w.u8(clampByte(p[10]));
   }
 
   const rel = (v: number, o: number): number => Math.round((v - o) * Q);
@@ -147,8 +151,8 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
   for (const e of s.e) {
     w.varint(e[0] - prev);
     prev = e[0];
-    // 종류(하위 7비트) + 피격 표시(최상위 비트): 피격 이펙트를 위해 바이트를 더 쓰지 않는다
-    w.u8((e[1] & 0x7f) | (e[4] ? 0x80 : 0));
+    // 종류(하위 6비트) + 얼어 있음(0x40) + 피격 표시(0x80): 표시를 위해 바이트를 더 쓰지 않는다
+    w.u8((e[1] & 0x3f) | (e[5] ? 0x40 : 0) | (e[4] ? 0x80 : 0));
     w.i16(rel(e[2], ox));
     w.i16(rel(e[3], oy));
   }
@@ -160,6 +164,18 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.u8(sh[1]);
     w.i16(rel(sh[2], ox));
     w.i16(rel(sh[3], oy));
+  }
+  prev = 0;
+  w.varuint(s.z.length);
+  for (const z of s.z) {
+    w.varint(z[0] - prev);
+    prev = z[0];
+    w.u8(z[1]);
+    w.i16(rel(z[2], ox));
+    w.i16(rel(z[3], oy));
+    w.varuint(Math.round(z[4]));
+    w.u8(clampByte(z[5]));
+    w.u8(clampByte(z[6]));
   }
   for (const list of [s.g, s.h]) {
     prev = 0;
@@ -218,26 +234,39 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   };
   const abs = (o: number): number => o + r.i16() / Q;
 
-  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], me, p: [], e: [], s: [], g: [], h: [], i: [] };
+  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], me, p: [], e: [], s: [], z: [], g: [], h: [], i: [] };
   const players = r.u8();
   for (let i = 0; i < players; i++) {
     const id = r.varuint();
     const x = r.f32();
     const y = r.f32();
     const bits = r.u8();
-    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, r.u8(), (bits >> 2) & 7, bits & 32 ? 1 : 0, r.u8()]);
+    const hp = r.u8();
+    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, hp, (bits >> 2) & 7, bits & 32 ? 1 : 0, r.u8(), r.u8(), r.u8(), bits & 64 ? 1 : 0]);
   }
   let id = 0;
   for (let i = count(); i > 0; i--) {
     id += r.varint();
     const type = r.u8();
-    snap.e.push([id, type & 0x7f, abs(ox), abs(oy), type >> 7]);
+    if ((type & 0x3f) >= ENEMY_IDS.length) throw new RangeError('unknown enemy type');
+    snap.e.push([id, type & 0x3f, abs(ox), abs(oy), type >> 7, (type >> 6) & 1]);
   }
   id = 0;
   for (let i = count(); i > 0; i--) {
     id += r.varint();
     const kind = r.u8();
     snap.s.push([id, kind, abs(ox), abs(oy)]);
+  }
+  id = 0;
+  for (let i = count(); i > 0; i--) {
+    id += r.varint();
+    const kind = r.u8();
+    if (kind >= ZONE_KINDS.length) throw new RangeError('unknown zone kind');
+    const x = abs(ox);
+    const y = abs(oy);
+    const size = r.varuint();
+    const aux = r.u8();
+    snap.z.push([id, kind, x, y, size, aux, r.u8()]);
   }
   for (const list of [snap.g, snap.h]) {
     id = 0;

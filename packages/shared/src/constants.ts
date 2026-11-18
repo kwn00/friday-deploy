@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -18,7 +18,7 @@ export const ROOM_CODE_LEN = 6;
  * 리더보드 시즌. 난이도가 달라지는 변경(무기·적·아이템 수치 등)을 하면 올린다.
  * 서로 다른 규칙에서 나온 기록이 한 순위표에 섞이지 않게 하기 위한 것이다.
  */
-export const LEADERBOARD_SEASON = 2;
+export const LEADERBOARD_SEASON = 3;
 /** 순위표에 보여주는 기록 수 */
 export const LEADERBOARD_SIZE = 50;
 /** 이보다 짧게 끝난 판은 기록하지 않는다 (시작하자마자 끝난 판으로 순위표가 채워지지 않게) */
@@ -48,7 +48,7 @@ export const PLAYER_BASE_PICKUP = 36;
 
 /**
  * 관전(페어 방에서 쓰러졌거나, 관전으로 합류한 경우): 입력으로 시점만 움직인다. 월드에는 아무 영향이 없다.
- * 살아 있는 캐릭터(최고 98px/s)보다 빨라서 동료를 따라다닐 수 있다.
+ * 살아 있는 캐릭터(최고 105px/s)보다 빨라서 동료를 따라다닐 수 있다.
  */
 export const SPECTATOR_SPEED = 160;
 /** 관전 시점은 가장 가까운 살아 있는 동료에게서 이 거리보다 멀어질 수 없다 (길을 잃지 않게, 먼 곳을 정찰하는 용도로 쓰지 못하게) */
@@ -58,7 +58,7 @@ export const SPECTATOR_PULL = 900;
 
 /**
  * 경험치(커밋)는 획득 범위 안에 들어오면 그 플레이어에게 끌려가고, 닿으면 획득된다.
- * 처음 속도는 가장 빠른 플레이어(커피 5단계 = 98px/s)보다 빨라서, 한번 끌리기 시작하면 달아나도 반드시 따라잡는다.
+ * 처음 속도는 가장 빠른 플레이어(아이스 아메리카노 5단계 = 105px/s)보다 빨라서, 한번 끌리기 시작하면 달아나도 반드시 따라잡는다.
  */
 export const GEM_PULL_SPEED = 120;
 /** 끌려오는 동안의 가속 (px/s²): 처음엔 천천히, 가까워질수록 빨려 들어오는 느낌 */
@@ -67,9 +67,7 @@ export const GEM_PULL_MAX = 360;
 /** 이 거리 안에 들어오면 닿은 것으로 본다 (px) */
 export const GEM_CONTACT = 6;
 
-export const MAX_UPGRADE_LEVEL = 5;
-/** 듀얼 모니터(공격 범위 강화) 한 단계마다 넓어지는 비율. 조준 거리, 탄이 날아가는 거리, 러버덕이 도는 반경에 적용된다 */
-export const RANGE_PER_LEVEL = 0.12;
+/** 레벨업 선택지 수 (배포 기도로 가끔 하나 더) */
 export const OFFER_COUNT = 3;
 /** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. */
 export const OFFER_TIMEOUT = 20;
@@ -77,11 +75,10 @@ export const OFFER_TIMEOUT = 20;
 export const MAX_ENEMIES_BASE = 140;
 export const MAX_ENEMIES_PER_EXTRA_PLAYER = 40;
 export const MAX_GEMS = 300;
-export const MAX_SHOTS = 200;
-
-/** 러버덕 공전 반경 / 각속도(rad/s). 서버 판정과 클라이언트 그리기가 같은 값을 쓴다. */
-export const DUCK_ORBIT_RADIUS = 36;
-export const DUCK_ORBIT_SPEED = 2.6;
+/** 투사체·소환물(고양이) 수의 상한. 넘으면 새로 쏘지 않는다 (서버 CPU 와 전송량을 묶어 둔다) */
+export const MAX_SHOTS = 320;
+/** 바닥 영역(웅덩이, 발자국, 폭발 등) 수의 상한 */
+export const MAX_ZONES = 200;
 
 /**
  * 회복 아이템(야근 피자): 처치 시 낮은 확률로 떨어지고, 한 번 떨어지면 한동안 다시 떨어지지 않는다.
