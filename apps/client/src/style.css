@@ -399,6 +399,13 @@ body {
 .players__item em.me {
   color: var(--green);
 }
+/* 연결이 끊겨 자리만 지키고 있는 사람 */
+.players__item em.away {
+  color: var(--yellow);
+}
+.players__item--away {
+  color: var(--muted);
+}
 
 /* 메뉴 패널은 작게. 페어 모드에서는 게임이 계속되므로 뒤가 보이게 배경을 옅게 한다 */
 .panel--menu {
@@ -500,6 +507,13 @@ body {
 }
 .panel__title--danger {
   color: var(--red);
+}
+.panel__title--warn {
+  color: var(--yellow);
+}
+/* 두세 줄짜리 안내: 줄 사이를 조금 띄운다 */
+.panel__sub--wide {
+  line-height: 1.7;
 }
 .panel__sub {
   margin: 4px 0 12px;

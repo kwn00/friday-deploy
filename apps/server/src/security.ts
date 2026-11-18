@@ -21,7 +21,8 @@ export function sign(payload: string): string {
   return createHmac('sha256', SECRET).update(payload).digest('base64url');
 }
 
-function safeEqual(a: string, b: string): boolean {
+/** 길이가 다르면 바로 false, 같으면 걸리는 시간이 내용에 따라 달라지지 않게 비교한다 */
+export function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual(ab, bb);

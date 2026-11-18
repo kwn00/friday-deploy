@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -26,6 +26,17 @@ export const LEADERBOARD_MIN_SECONDS = 30;
 
 /** 솔로 일시정지 한 번의 최대 길이(초). 넘으면 서버가 자동으로 재개한다. */
 export const MAX_PAUSE_SECONDS = 600;
+
+/**
+ * 연결이 끊긴 사람의 자리를 지켜 두는 시간(초). 이 안에 돌아오면 하던 그대로 이어서 한다.
+ * 혼자 하는 판은 월드를 멈춰 두므로 일시정지가 끝날 때까지(최대 MAX_PAUSE_SECONDS) 더 기다린다.
+ */
+export const SEAT_HOLD_SECONDS = 120;
+/**
+ * 클라이언트가 연결이 살아 있는지 확인하려고 ping 을 보내는 간격(ms).
+ * 서버는 이보다 넉넉한 시간(STALL) 동안 아무것도 오지 않으면 그 연결이 멈춘 것으로 본다.
+ */
+export const PING_INTERVAL_MS = 2000;
 
 /** 서버가 각 플레이어에게 보내주는 관심 영역 반경 (그 밖의 정보는 아예 전송하지 않는다) */
 export const VIEW_RADIUS = 420;

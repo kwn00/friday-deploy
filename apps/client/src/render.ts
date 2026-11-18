@@ -1,4 +1,4 @@
-import { DT, DUCK_ORBIT_RADIUS, ENEMY_IDS, FIELD_ITEM_KINDS, duckOffset, rangeMult, type FieldItemKind, type Snapshot } from '@friday-deploy/shared';
+import { DT, DUCK_ORBIT_RADIUS, ENEMY_IDS, FIELD_ITEM_KINDS, duckOffset, rangeMult, type FieldItemKind, type RosterPlayer, type Snapshot } from '@friday-deploy/shared';
 import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
@@ -122,8 +122,9 @@ export class Renderer {
     this.ctx.imageSmoothingEnabled = false;
   }
 
-  setRoster(players: { id: number; name: string }[]): void {
-    this.names = new Map(players.map((p) => [p.id, p.name]));
+  /** 연결이 끊겼거나 화면을 떠난 사람(가만히 서 있다)은 이름 옆에 표시한다 */
+  setRoster(players: RosterPlayer[]): void {
+    this.names = new Map(players.map((p) => [p.id, p.away || p.idle ? `${p.name} 💤` : p.name]));
   }
 
   reset(): void {
