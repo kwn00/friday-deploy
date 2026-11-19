@@ -266,6 +266,8 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   room.world.players.get(a.conn.pid)!.kills = 30;
   room.world.players.get(b.conn.pid)!.kills = 12;
   room.world.players.get(late.conn.pid)!.kills = 99;
+  room.world.players.get(a.conn.pid)!.up = { console_log: 3, coffee: 2 };
+  room.world.players.get(b.conn.pid)!.up = { rubber_duck: 1 };
   down(room, a.conn);
   down(room, b.conn);
   down(room, late.conn);
@@ -274,6 +276,11 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   assert.deepEqual([reports[0]!.board, reports[0]!.names, reports[0]!.kills], ['coop', ['host', 'mate'], 42]);
   assert.deepEqual(reports[0]!.killsBy, [30, 12], '이름이 오르는 사람의 개인별 처치 수 (도중에 들어온 사람의 99 는 없다)');
   assert.deepEqual([lb.top('coop')[0]!.names, lb.top('coop')[0]!.killsBy], [['host', 'mate'], [30, 12]]);
+  assert.deepEqual(reports[0]!.itemsBy, [
+    [{ id: 'console_log', level: 3 }, { id: 'coffee', level: 2 }],
+    [{ id: 'rubber_duck', level: 1 }],
+  ], '쓰러질 때 가지고 있던 무기·패시브 (서버가 가진 값)');
+  assert.deepEqual(lb.top('coop')[0]!.itemsBy, reports[0]!.itemsBy);
   assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.deepEqual(last(b.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.equal(last(late.ws, 'over')!.place, undefined, '도중에 들어온 사람에게는 순위를 주지 않는다');

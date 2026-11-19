@@ -795,7 +795,7 @@ body {
   border: var(--px) solid var(--line);
 }
 .row__rank {
-  grid-row: 1 / 3;
+  grid-row: 1 / span 10; /* 이름 · 사람별 아이템 줄(최대 8) · 기록 줄을 모두 덮는다 */
   text-align: center;
   font-size: 16px;
   color: var(--muted);
@@ -831,6 +831,40 @@ body {
   font-style: normal;
   font-size: 10px;
   color: var(--green);
+}
+.row__items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px;
+  margin: 2px 0;
+  font-size: 11px;
+  line-height: 15px;
+}
+.row__who {
+  max-width: 7em;
+  margin-right: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--muted);
+}
+.row__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  padding: 0 2px;
+  white-space: nowrap;
+  background: var(--bg);
+}
+.row__item b {
+  font-weight: normal;
+  font-size: 10px;
+  color: var(--yellow);
+}
+.row__item--passive {
+  background: rgba(69, 71, 90, 0.85);
 }
 .row__meta {
   display: flex;

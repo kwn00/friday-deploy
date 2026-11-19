@@ -20,6 +20,7 @@ import {
   removePlayer,
   setInput,
   step,
+  upgradesOf,
   type BoardId,
   type GameMode,
   type RosterPlayer,
@@ -502,6 +503,9 @@ export class Room {
         names: players.map((p) => p.name),
         // 개인별 처치 수 = 기여도. 리더보드가 이 값이 큰 순서로 이름을 적는다
         killsBy: players.map((p) => p.kills),
+        // 판이 끝날 때 가진 무기·패시브. 쓰러진 뒤에는 경험치를 얻지 못하므로 쓰러질 때의 것이다
+        // (쓰러지기 전에 뜬 선택지를 쓰러진 뒤에 고르면 그 하나는 들어간다)
+        itemsBy: players.map((p) => upgradesOf(p.up)),
         time: Math.floor(this.world.time),
         kills: players.reduce((sum, p) => sum + p.kills, 0),
         level: Math.max(...players.map((p) => p.level)),

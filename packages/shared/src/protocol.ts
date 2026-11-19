@@ -1,5 +1,5 @@
 import { NAME_MAX_LEN, ROOM_CODE_ALPHABET, ROOM_CODE_LEN } from './constants';
-import type { UpgradeId } from './content';
+import type { OwnedUpgrade, UpgradeId } from './content';
 
 /* ───────────── Client → Server ─────────────
  * 클라이언트는 "의도(intent)"만 보낸다. 좌표·체력·경험치·점수 같은 상태는 절대 받지 않는다. */
@@ -46,6 +46,9 @@ export interface RunResult {
 /** 순위표 종류: 혼자 한 판 / 둘 이상이 함께 한 판 */
 export type BoardId = 'solo' | 'coop';
 
+/** 순위표에 남는 아이템 하나: 무기나 패시브와 그 단계 (1 부터) */
+export type LeaderboardItem = OwnedUpgrade;
+
 /** 순위표의 한 줄. 서버가 판이 끝날 때 직접 기록한 것만 있다 (클라이언트가 점수를 올리는 통로는 없다). */
 export interface LeaderboardEntry {
   rank: number;
@@ -53,6 +56,8 @@ export interface LeaderboardEntry {
   names: string[];
   /** names 와 같은 순서의 개인별 처치 수 (기여도). 이 값을 남기기 전의 기록에는 없다 */
   killsBy?: number[];
+  /** names 와 같은 순서의 개인별 아이템(무기·패시브와 그 단계). 판이 끝났을 때(쓰러졌으면 쓰러질 때) 가지고 있던 것. 이 값을 남기기 전의 기록에는 없다 */
+  itemsBy?: LeaderboardItem[][];
   /** 생존 시간(초) */
   time: number;
   kills: number;

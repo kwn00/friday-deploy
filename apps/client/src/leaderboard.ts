@@ -1,4 +1,4 @@
-import { LEADERBOARD_SIZE, type BoardId, type LeaderboardResponse } from '@friday-deploy/shared';
+import { LEADERBOARD_SIZE, UPGRADES, type BoardId, type LeaderboardItem, type LeaderboardResponse } from '@friday-deploy/shared';
 import { LeaderboardError, fetchLeaderboard } from './net';
 import { findMine, type MyPlace } from './mine';
 import { sharesOf } from './shares';
@@ -27,6 +27,23 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?:
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
   return n;
+}
+
+/** 한 사람이 가졌던 무기·패시브를 아이콘과 단계로 늘어놓는다. 이름은 서버가 보낸 값이라 텍스트 노드로만 넣는다 */
+function itemLine(items: LeaderboardItem[], who: string | null): HTMLElement {
+  const line = node('span', 'row__items');
+  const label = items.map((it) => `${UPGRADES[it.id].name} ${it.level}단계`).join(', ');
+  line.setAttribute('aria-label', who ? `${who}의 아이템: ${label}` : `아이템: ${label}`);
+  if (who) line.append(node('small', 'row__who', who));
+  for (const it of items) {
+    const def = UPGRADES[it.id];
+    const item = node('span', `row__item row__item--${def.kind}`);
+    item.title = `${def.name} Lv.${it.level}`;
+    item.setAttribute('aria-hidden', 'true');
+    item.append(node('span', 'chip__icon', def.icon), node('b', '', String(it.level)));
+    line.append(item);
+  }
+  return line;
 }
 
 export class Leaderboard {
@@ -178,6 +195,7 @@ export class Leaderboard {
     const mineRank = m && m.board === data.board ? findMine(data.entries, m) : -1;
     let mineRow: HTMLElement | null = null;
     let hasShares = false;
+    let hasItems = false;
     for (const e of data.entries.slice(0, LEADERBOARD_SIZE)) {
       const li = node('li', 'row');
       const rank = node('span', `row__rank${e.rank <= 3 ? ` row__rank--${e.rank}` : ''}`, String(e.rank));
@@ -190,9 +208,18 @@ export class Leaderboard {
         names.append(name);
         if (shares) names.append(node('small', 'row__share', ` ${shares[i]}%`));
       });
+      // 판이 끝날 때(쓰러졌으면 쓰러질 때) 가진 아이템. 이 값을 남기기 전의 기록에는 없어서 비워 둔다
+      const items: HTMLElement[] = [];
+      if (e.itemsBy && e.itemsBy.length === e.names.length) {
+        e.itemsBy.forEach((list, i) => {
+          if (list.length === 0) return;
+          hasItems = true;
+          items.push(itemLine(list, e.names.length > 1 ? e.names[i]! : null));
+        });
+      }
       const meta = node('span', 'row__meta');
       for (const t of [`⏱ ${mmss(e.time)}`, `🐛 ${e.kills}`, `Lv.${e.level}`, shortDate(e.at)]) if (t) meta.append(node('span', '', t));
-      li.append(rank, names, meta);
+      li.append(rank, names, ...items, meta);
       if (e.rank === mineRank) {
         li.classList.add('row--mine');
         names.append(node('em', '', '내 기록'));
@@ -201,7 +228,11 @@ export class Leaderboard {
       list.append(li);
     }
     this.body.replaceChildren(list);
-    if (hasShares) this.body.append(node('p', 'board__legend', '이름 옆 % 는 처치 기여도예요 (기여도가 큰 사람부터)'));
+    const legend = [
+      hasShares ? '이름 옆 % 는 처치 기여도예요 (기여도가 큰 사람부터)' : '',
+      hasItems ? '아이콘은 끝날 때 가진 무기·패시브, 숫자는 단계예요' : '',
+    ].filter(Boolean);
+    if (legend.length > 0) this.body.append(node('p', 'board__legend', legend.join(' · ')));
     this.body.scrollTop = 0;
     // 내 기록이 아래쪽 순위라면 보이는 곳으로 가져온다 (스크롤은 목록 안에서만)
     mineRow?.scrollIntoView({ block: 'nearest' });

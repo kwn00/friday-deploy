@@ -3,6 +3,7 @@ import {
   PING_INTERVAL_MS,
   PROTOCOL_VERSION,
   decodeSnapshot,
+  ownedUpgrades,
   type BoardId,
   type ClientMsg,
   type GameMode,
@@ -346,7 +347,10 @@ function parseEntries(raw: unknown): LeaderboardEntry[] | null {
     // 개인별 처치 수: 이름과 개수가 맞고 전부 0 이상의 수일 때만 쓴다 (예전 기록에는 없다)
     const by = o.killsBy;
     const killsBy = Array.isArray(by) && by.length === names.length && by.every((k) => isNum(k) && k >= 0) ? (by as number[]) : undefined;
-    out.push({ rank: o.rank, names, ...(killsBy ? { killsBy } : {}), time: o.time, kills: o.kills, level: o.level, at: o.at });
+    // 개인별 아이템: 이름과 개수가 맞을 때만 쓰고, 각 목록은 아는 아이템·단계만 남긴다 (예전 기록에는 없다)
+    const items = o.itemsBy;
+    const itemsBy = Array.isArray(items) && items.length === names.length ? items.map((list) => ownedUpgrades(list) ?? []) : undefined;
+    out.push({ rank: o.rank, names, ...(killsBy ? { killsBy } : {}), ...(itemsBy ? { itemsBy } : {}), time: o.time, kills: o.kills, level: o.level, at: o.at });
   }
   return out;
 }
