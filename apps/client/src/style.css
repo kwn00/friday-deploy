@@ -6,8 +6,8 @@
  *   lg  ≥ 1024px 데스크톱
  *   xl  ≥ 1440px 와이드
  * 캔버스(게임 월드)는 JS 에서 정수 배율로 적응형 스케일링한다 (view.ts).
- * HUD 배치: 손가락이 화면 아래쪽에 있는 터치 기기는 정보를 위쪽에 모으고,
- * 데스크톱은 미니맵을 익숙한 오른쪽 아래에 둔다.
+ * HUD 배치: 손가락이 화면 아래쪽에 있는 터치 기기는 정보를 위쪽에 모으고 (가진 무기·패시브도 체력바 아래에),
+ * 데스크톱은 미니맵을 익숙한 오른쪽 아래에, 가진 무기·패시브를 왼쪽 아래에 둔다.
  * ───────────────────────────────────────────── */
 
 :root {
@@ -80,11 +80,11 @@ body {
   pointer-events: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
+  /* 가진 무기·패시브는 체력바 아래 (손가락과 조이스틱이 있는 화면 아래쪽을 비워 둔다) */
   grid-template-areas:
     'bars top'
-    '. map'
-    'load load';
+    'load map';
   gap: 6px 10px;
   align-items: start;
 }
@@ -210,20 +210,63 @@ body {
 
 .hud__loadout {
   grid-area: load;
-  align-self: end;
+  align-self: start;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  align-content: flex-start;
+  gap: 3px 8px; /* 무기 묶음과 패시브 묶음 사이는 조금 더 띄운다 */
+  min-width: 0;
+}
+/* 무기 묶음 / 패시브 묶음 (각각 최대 6개). 한 줄에 다 들어가지 않으면 묶음 안에서 줄을 바꾼다 */
+.loadout__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
 }
 .chip {
-  padding: 1px 5px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  padding: 1px 3px;
   font-size: 11px;
+  line-height: 15px;
+  white-space: nowrap;
   background: rgba(24, 24, 37, 0.8);
   border: var(--px) solid var(--line);
 }
 .chip b {
   color: var(--yellow);
   font-weight: normal;
+}
+/* 아이콘은 컬러 이모지 글꼴로 (☕ 처럼 글자 글꼴에도 있는 기호가 흑백 글자로 나오지 않게) */
+.chip__icon,
+.offer__icon {
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', var(--font);
+}
+/* 패시브는 조금 밝은 바탕으로 무기와 구별한다 */
+.chip--passive {
+  background: rgba(69, 71, 90, 0.85);
+}
+/* 좁은 세로 화면: 단계 숫자를 아이콘 오른쪽 아래 모서리에 겹쳐 칩을 좁힌다.
+ * 무기 6개가 한 줄, 패시브 6개와 백업이 한 줄에 들어간다 (320px 에서 두 줄) */
+@media (max-width: 479px) {
+  .chip {
+    position: relative;
+    padding: 1px 2px;
+  }
+  .chip b {
+    position: absolute;
+    right: -1px;
+    bottom: -3px;
+    font-size: 10px;
+    line-height: 10px;
+    text-shadow:
+      1px 0 0 var(--line),
+      -1px 0 0 var(--line),
+      0 1px 0 var(--line),
+      0 -1px 0 var(--line);
+  }
 }
 /* 가지고 있는 백업(부활) */
 .chip--revive {
@@ -522,17 +565,27 @@ body {
   word-break: keep-all;
 }
 
+/* 레벨업 창: 무기·패시브 칸이 몇 개 찼는지 */
+.slots {
+  margin: -6px 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.slots__full {
+  color: var(--yellow);
+}
+
 .offers {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 .offer {
   display: grid;
-  grid-template-columns: 40px 1fr;
-  gap: 2px 10px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 1px 8px;
   align-items: center;
-  min-height: 64px;
-  padding: 8px 10px;
+  min-height: 56px;
+  padding: 6px 8px;
   font: inherit;
   color: var(--text);
   text-align: left;
@@ -547,22 +600,30 @@ body {
 }
 .offer__icon {
   grid-row: 1 / 3;
-  font-size: 26px;
+  font-size: 24px;
   text-align: center;
 }
 .offer__name {
   color: var(--yellow);
   font-size: 14px;
+  word-break: keep-all;
 }
 .offer__name em {
   font-style: normal;
   font-size: 10px;
   color: var(--green);
-  margin-left: 6px;
+  margin-left: 2px;
+  white-space: nowrap;
+}
+/* 이번에 고르면 최대 단계 */
+.offer__name em.offer__max {
+  color: var(--purple);
 }
 .offer__desc {
   font-size: 11px;
+  line-height: 1.45;
   color: var(--muted);
+  word-break: keep-all;
 }
 
 .result {
@@ -821,8 +882,21 @@ body {
     max-width: 560px;
     padding: 28px 26px;
   }
+  /* 선택지 수(보통 3, 배포 기도로 4, 거의 다 최대면 1~2)만큼 나란히 */
   .offers {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .offers[data-n='1'] {
+    grid-template-columns: minmax(0, 240px);
+    justify-content: center;
+  }
+  .offers[data-n='2'] {
+    grid-template-columns: repeat(2, minmax(0, 240px));
+    justify-content: center;
+  }
+  .offers[data-n='4'] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .offer {
     grid-template-columns: 1fr;
@@ -833,6 +907,10 @@ body {
   .offer__icon {
     grid-row: auto;
     font-size: 34px;
+  }
+  .slots {
+    margin: -8px 0 14px;
+    font-size: 12px;
   }
   .panel:has(.offers) {
     max-width: 720px;
@@ -847,6 +925,7 @@ body {
   /* 데스크톱: 미니맵은 오른쪽 아래 (장비 목록은 왼쪽 아래) */
   .hud {
     --map: 152px;
+    grid-template-rows: auto 1fr auto;
     grid-template-areas:
       'bars top'
       '. .'
@@ -854,6 +933,13 @@ body {
   }
   .hud__map {
     align-self: end;
+  }
+  .hud__loadout {
+    align-self: end;
+    gap: 4px 12px;
+  }
+  .loadout__group {
+    gap: 4px;
   }
   .hud__btn:hover {
     filter: brightness(1.3);
@@ -875,8 +961,10 @@ body {
     font-size: 28px;
   }
   .chip {
+    gap: 2px;
     font-size: 15px;
-    padding: 2px 8px;
+    line-height: 20px;
+    padding: 2px 6px;
   }
   .btn:hover:not(:disabled),
   .offer:hover {
@@ -947,15 +1035,47 @@ body {
   .buttons {
     grid-template-columns: 1fr 1fr;
   }
-  .offers {
-    grid-template-columns: repeat(3, 1fr);
+  /* 레벨업: 세로가 모자라니 제목 둘레를 줄이고, 선택지는 나란히 (4개면 2×2 로, 아이콘은 왼쪽에) */
+  .panel--levelup .panel__title {
+    font-size: 18px;
+  }
+  .panel--levelup .panel__sub {
+    margin: 2px 0 4px;
+  }
+  .slots {
+    margin: 0 0 6px;
+  }
+  .offers,
+  .offers[data-n='4'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .offers[data-n='4'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .offers[data-n='1'] {
+    grid-template-columns: minmax(0, 240px);
+    justify-content: center;
+  }
+  .offers[data-n='2'] {
+    grid-template-columns: repeat(2, minmax(0, 240px));
+    justify-content: center;
   }
   .offer {
     grid-template-columns: 1fr;
     text-align: center;
+    padding: 6px 8px;
   }
   .offer__icon {
     grid-row: auto;
+    font-size: 24px;
+  }
+  .offers[data-n='4'] .offer {
+    grid-template-columns: 32px minmax(0, 1fr);
+    text-align: left;
+  }
+  .offers[data-n='4'] .offer__icon {
+    grid-row: 1 / 3;
   }
   .hint {
     margin-top: 6px;

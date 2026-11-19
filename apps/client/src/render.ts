@@ -1,4 +1,15 @@
-import { DT, DUCK_ORBIT_RADIUS, ENEMY_IDS, FIELD_ITEM_KINDS, duckOffset, rangeMult, type FieldItemKind, type RosterPlayer, type Snapshot } from '@friday-deploy/shared';
+import {
+  DT,
+  ENEMY_IDS,
+  FIELD_ITEM_KINDS,
+  SHOT_KINDS,
+  ZONE_KINDS,
+  duckOffset,
+  type FieldItemKind,
+  type RosterPlayer,
+  type Snapshot,
+  type ZoneKind,
+} from '@friday-deploy/shared';
 import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
@@ -41,6 +52,33 @@ interface NameLabel {
   bottom: number;
 }
 
+/**
+ * 화면에 남아 있는 공격 영역. 서버는 영역을 연결마다 한 번만, 남는 틱 수와 함께 보내므로(전송량을 아끼려고)
+ * 여기서 기억해 두고 그 시간 동안 그린다. 보통은 생긴 틱의 스냅샷에 오고, 건너뛴 스냅샷이 있었거나 다시 붙은 연결이면
+ * 다음 스냅샷에 그때 남은 시간으로 온다. 영역은 움직이지 않는다.
+ */
+interface LiveZone {
+  id: number;
+  kind: ZoneKind;
+  x: number;
+  y: number;
+  size: number;
+  aux: number;
+  /** 보이기 시작하는 재생 틱 (그 스냅샷이 화면에 나오기 시작하는 때 = 직전 틱) */
+  from: number;
+  /** 사라지는 재생 틱 */
+  to: number;
+}
+
+/** 기억해 두는 영역 수의 상한 (서버는 한 방에 최대 200개를 둔다. 화면이 멈춰 있는 동안 쌓이지 않게) */
+const MAX_LIVE_ZONES = 400;
+/** 캐릭터 아래(바닥)에 그리는 영역. 나머지는 적과 캐릭터 위에 그린다 */
+const GROUND: ReadonlySet<ZoneKind> = new Set<ZoneKind>(['pool', 'trail']);
+/** 오래 남는 영역이 사라지기 전에 흐려지는 시간 (틱) */
+const ZONE_FADE = 6;
+/** 웅덩이가 처음에 퍼지는 시간 (틱) */
+const POOL_GROW = 3;
+
 type Row = number[];
 interface Index {
   e: Map<number, Row>;
@@ -60,6 +98,27 @@ function hash(x: number, y: number): number {
 }
 
 const byId = (rows: Row[]): Map<number, Row> => new Map(rows.map((r) => [r[0]!, r]));
+
+/** 영역을 그릴 때 필요한 이번 프레임의 값들 */
+interface ZoneCtx {
+  /** 지금 보이는 재생 틱 (소수) */
+  t: number;
+  now: number;
+  /** 논리 픽셀 하나 = 기기 픽셀 S 개 */
+  S: number;
+  sx: (x: number) => number;
+  sy: (y: number) => number;
+  /** 화면 중심과 화면 반쪽 크기 (월드 단위) */
+  cx: number;
+  cy: number;
+  viewW: number;
+  viewH: number;
+}
+
+/** 영역이 화면에 걸칠 수 있는 가장 먼 거리 (월드 단위, 중심에서) */
+function zoneReach(z: LiveZone): number {
+  return z.kind === 'band' ? Math.max(z.size / 2, z.aux * 2) : z.size;
+}
 
 /**
  * 적응형 캔버스 렌더러.
@@ -89,6 +148,10 @@ export class Renderer {
   private idleCam = 0;
   /** 관전 중일 때 유령이 바라보는 방향 (마지막으로 움직인 좌우) */
   private ghostFace: 'l' | 'r' = 'r';
+  /** 화면에 남아 있는 공격 영역 (id → 영역). 삽입 순서 = 생긴 순서 */
+  private zones = new Map<number, LiveZone>();
+  /** 카나리아가 왼쪽으로 날고 있는지 (id → 왼쪽). 멈칫할 때 좌우가 떨리지 않게 마지막 방향을 기억한다 */
+  private facingLeft = new Map<number, boolean>();
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -133,10 +196,37 @@ export class Renderer {
     this.shown = null;
     this.particles = [];
     this.hits.clear();
+    this.zones.clear();
+    this.facingLeft.clear();
   }
 
   push(snap: Snapshot): void {
+    const newest = this.timeline.newest;
+    // 틱이 거꾸로 가면 새 판이다 (재생 버퍼도 처음부터 다시 쌓는다): 지난 판의 영역은 버린다
+    if (newest && snap.tick < newest.tick) this.zones.clear();
     this.timeline.push(snap, performance.now());
+    this.rememberZones(snap);
+  }
+
+  /**
+   * 새로 받은 공격 영역을 기억한다. 받은 순간이 아니라 재생 시간축(틱)에 맞춰 보이고 사라진다:
+   * 그 스냅샷이 화면에 나오기 시작할 때(직전 틱을 지나면) 보이고, 남는 틱 수가 지나면 사라진다.
+   * 같은 영역이 두 번 와도(서버가 바뀌거나 겹쳐 보내도) id 로 한 번만 넣는다.
+   */
+  private rememberZones(snap: Snapshot): void {
+    for (const z of snap.z) {
+      const kind = ZONE_KINDS[z[1]];
+      if (!kind || this.zones.has(z[0])) continue;
+      this.zones.set(z[0], { id: z[0], kind, x: z[2], y: z[3], size: z[4], aux: z[5], from: snap.tick - 1, to: snap.tick + z[6] + 1 });
+    }
+    // 화면이 그려지지 않는 동안(탭이 가려짐 등)에도 끝없이 쌓이지 않게: 재생 버퍼보다 오래된 것, 그래도 많으면 오래된 것부터 버린다
+    if (this.zones.size > MAX_LIVE_ZONES) {
+      for (const [id, z] of this.zones) if (z.to < snap.tick - 40) this.zones.delete(id);
+      for (const id of this.zones.keys()) {
+        if (this.zones.size <= MAX_LIVE_ZONES) break;
+        this.zones.delete(id);
+      }
+    }
   }
 
   private indexOf(snap: Snapshot): Index {
@@ -252,6 +342,20 @@ export class Renderer {
 
     this.drawBackground(cx, cy);
 
+    // 화면에 보이는 월드 범위 (영역이 화면 밖이면 그리지 않는다)
+    const viewW = pxW / S / 2;
+    const viewH = pxH / S / 2;
+    const zoneCtx: ZoneCtx = { t: sample.tick, now, S, sx, sy, cx, cy, viewW, viewH };
+    // 바닥에 고이는 것들(핫픽스 웅덩이, 커밋 발자국)은 경험치·적·캐릭터 아래에
+    this.drawZones(zoneCtx, true);
+
+    // 방화벽: 주인 둘레의 따뜻한 고리 (캐릭터 아래)
+    for (const p of curr.p) {
+      if (!p[4] || !p[10]) continue;
+      const q = was.p.get(p[0]);
+      this.drawAura(sx(mix(q?.[1], p[1])), sy(mix(q?.[2], p[2])), p[10] * S, now);
+    }
+
     // 경험치: 끌려오는 동안 서버가 위치를 옮기므로 다른 것들처럼 두 스냅샷 사이를 보간한다
     for (const g of curr.g) {
       const q = was.g.get(g[0]);
@@ -285,10 +389,12 @@ export class Renderer {
       const id = ENEMY_IDS[e[1]];
       if (!id) continue;
       const p = was.e.get(e[0]);
-      const wob = id === 'null_ptr' ? Math.sin(now / 250 + e[0]) * 2 : 0;
+      // 얼어 있으면 흔들리지도 않는다
+      const frozen = e[5] === 1;
+      const wob = id === 'null_ptr' && !frozen ? Math.sin(now / 250 + e[0]) * 2 : 0;
       let ex = mix(p?.[2], e[2]);
       let ey = mix(p?.[3], e[3]) + wob;
-      let sprite = this.spr.enemy[id];
+      let sprite = frozen ? this.spr.enemyFrozen[id] : this.spr.enemy[id];
       const hitAt = this.hits.get(e[0]);
       if (hitAt !== undefined) {
         const age = now - hitAt;
@@ -344,6 +450,8 @@ export class Renderer {
       if (p[7]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 90) % 2 ? 0.35 : 0.9;
       blit(this.spr.dev[p[3] < 0 ? 'l' : 'r'][frame], x, y);
       ctx.globalAlpha = 1;
+      // 2단계 인증: 피해를 받지 않는 동안 둘러싸는 옅은 방울
+      if (p[11]) this.drawGuard(px, py, S, now);
       // 머리 위 체력바 / 이름
       const bx = px - 7 * S;
       const by = py - 11 * S;
@@ -352,19 +460,30 @@ export class Renderer {
       ctx.fillStyle = p[0] === curr.me.id ? '#a6e3a1' : '#89b4fa';
       ctx.fillRect(bx, by, Math.round((14 * S * p[5]) / 100), 2 * S);
       labels.push({ id: p[0], color: p[0] === curr.me.id ? NAME_COLOR.me : NAME_COLOR.mate, px, bottom: by });
+      // 러버덕은 잠깐씩 돌고 쉰다 (쉬는 동안 p[6] = 0). 반경·각속도는 서버가 판정에 쓰는 값 그대로 온다
       for (let i = 0; i < p[6]; i++) {
-        // 반경은 주인의 공격 범위 강화에 따라 넓어진다 (서버 판정과 같은 식)
-        const [ox, oy] = duckOffset(duckTime, i, p[6], DUCK_ORBIT_RADIUS * rangeMult(p[8]));
+        const [ox, oy] = duckOffset(duckTime, i, p[6], p[8], p[9] / 10);
         blit(this.spr.duck, x + ox, y + oy);
       }
     }
 
     for (const s of curr.s) {
-      const spr = this.spr.shots[s[1] as 0 | 1 | 2];
-      if (!spr) continue;
+      const kind = SHOT_KINDS[s[1]];
+      if (!kind) continue;
       const p = was.s.get(s[0]);
+      let spr = this.spr.shots[kind];
+      if (kind === 'canary' && p) {
+        // 나는 쪽을 바라본다 (좌우로 거의 안 움직일 때는 바라보던 쪽 그대로)
+        const dx = s[2] - p[2]!;
+        if (Math.abs(dx) > 0.05) this.facingLeft.set(s[0], dx < 0);
+        if (this.facingLeft.get(s[0])) spr = this.spr.canaryL;
+      }
       blit(spr, mix(p?.[2], s[2]), mix(p?.[3], s[3]));
     }
+    if (this.facingLeft.size > 32) this.facingLeft.clear();
+
+    // 베기·번개·폭발·광선·지우기는 적과 캐릭터 위에
+    this.drawZones(zoneCtx, false);
 
     // 관전 중인 나: 시점 자리에 반투명한 유령으로 그린다 (내 화면에만 보인다. 다른 사람에게는 보내지 않는다)
     if (!curr.me.alive) {
@@ -391,6 +510,291 @@ export class Renderer {
     }
 
     this.drawStick();
+  }
+
+  /**
+   * 공격 영역을 그린다. ground 가 true 면 바닥에 남는 것(웅덩이, 커밋 발자국), false 면 나머지(베기, 번개, 폭발, 광선, 지우기, 세로 띠).
+   * 휴대폰에서 영역이 150개쯤 있어도 부드럽도록 사각형·원·선만 쓴다 (그라디언트·그림자 없음).
+   * 동작 줄이기 설정(calm)에서는 커지거나 쓸고 지나가는 움직임 없이 옅게 나타났다 흐려지기만 한다.
+   */
+  private drawZones(c: ZoneCtx, ground: boolean): void {
+    const { ctx } = this;
+    let prevTrail: LiveZone | null = null;
+    // 다 퍼졌고 아직 흐려지기 전인 웅덩이들은 한 경로로 모아 한 번에 칠한다 (겹친 곳을 두 번 칠하지 않고, 칠하는 횟수도 준다)
+    let pools: Path2D | null = null;
+    const steady: LiveZone[] = [];
+    for (const z of this.zones.values()) {
+      if (z.to <= c.t) {
+        // 시간이 다 된 것은 버린다 (바닥 그리기가 매 프레임 먼저 돈다)
+        if (ground) this.zones.delete(z.id);
+        continue;
+      }
+      if (GROUND.has(z.kind) !== ground || z.from > c.t) continue;
+      const reach = zoneReach(z);
+      if (Math.abs(z.x - c.cx) > c.viewW + reach || Math.abs(z.y - c.cy) > c.viewH + reach) continue;
+      if (z.kind === 'trail') {
+        // 커밋 발자국은 가까운 앞 발자국과 선으로 잇는다 (git 그래프처럼). 멀면(다른 사람의 것, 멈췄다 다시 걸음) 잇지 않는다
+        if (prevTrail && Math.abs(prevTrail.x - z.x) + Math.abs(prevTrail.y - z.y) < 56) {
+          ctx.globalAlpha = 0.35 * this.zoneFade(prevTrail, c.t);
+          ctx.strokeStyle = '#a6e3a1';
+          ctx.lineWidth = c.S;
+          ctx.beginPath();
+          ctx.moveTo(c.sx(prevTrail.x), c.sy(prevTrail.y));
+          ctx.lineTo(c.sx(z.x), c.sy(z.y));
+          ctx.stroke();
+        }
+        prevTrail = z;
+      }
+      if (z.kind === 'pool' && this.poolSteady(z, c.t)) {
+        const X = c.sx(z.x);
+        const Y = c.sy(z.y);
+        const R = z.size * c.S;
+        pools ??= new Path2D();
+        pools.moveTo(X + R, Y);
+        pools.arc(X, Y, R, 0, Math.PI * 2);
+        steady.push(z);
+        continue;
+      }
+      this.drawZone(z, c);
+    }
+    if (pools) {
+      ctx.globalAlpha = 0.24;
+      ctx.fillStyle = '#74c7ec';
+      ctx.fill(pools);
+      ctx.globalAlpha = 0.6;
+      ctx.strokeStyle = '#89dceb';
+      ctx.lineWidth = c.S;
+      ctx.stroke(pools);
+      for (const z of steady) this.drawBubbles(z, c, c.sx(z.x), c.sy(z.y), z.size * c.S, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** 웅덩이가 다 퍼졌고 아직 흐려지기 전인지 (그동안은 모양과 색이 변하지 않는다) */
+  private poolSteady(z: LiveZone, t: number): boolean {
+    return (this.calm || t - z.from >= POOL_GROW) && this.zoneFade(z, t) >= 1;
+  }
+
+  /** 웅덩이 안에서 천천히 떠오르는 작은 거품 두 개 (동작 줄이기 설정에서는 가만히) */
+  private drawBubbles(z: LiveZone, c: ZoneCtx, X: number, Y: number, r: number, tail: number): void {
+    const { ctx } = this;
+    ctx.globalAlpha = 0.7 * tail;
+    ctx.fillStyle = '#eff1f5';
+    for (let i = 0; i < 2; i++) {
+      const a = z.id * 2.4 + i * 2.6;
+      const rise = this.calm ? 0.5 : (c.now / 900 + i * 0.5 + z.id * 0.37) % 1;
+      ctx.fillRect(X + Math.round(Math.cos(a) * r * 0.45), Y + Math.round((0.35 - rise * 0.7) * r), c.S, c.S);
+    }
+  }
+
+  /** 오래 남는 영역이 끝나기 전에 흐려지는 정도 (1 → 0) */
+  private zoneFade(z: LiveZone, t: number): number {
+    return Math.max(0, Math.min(1, (z.to - t) / Math.min(ZONE_FADE, z.to - z.from)));
+  }
+
+  private circle(x: number, y: number, r: number): void {
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, Math.max(0, r), 0, Math.PI * 2);
+  }
+
+  private drawZone(z: LiveZone, c: ZoneCtx): void {
+    const { ctx, calm } = this;
+    const { S } = c;
+    const age = Math.max(0, c.t - z.from);
+    /** 0 → 1: 생겨서 사라질 때까지 */
+    const p = Math.min(1, age / (z.to - z.from));
+    /** 짧은 것(베기·번개·폭발·광선·지우기·띠)은 처음부터 끝까지 흐려진다 */
+    const fade = 1 - p;
+    const X = c.sx(z.x);
+    const Y = c.sy(z.y);
+    const R = z.size * S;
+    switch (z.kind) {
+      case 'pool': {
+        // 핫픽스 웅덩이: 옅은 하늘색. 처음에 퍼지듯 커지고, 안에서 작은 거품이 올라온다
+        // (다 퍼진 뒤에는 drawZones 가 모아서 한 번에 그린다. 여기는 퍼지는 중이거나 흐려지는 중인 것)
+        const tail = this.zoneFade(z, c.t);
+        const r = calm ? R : R * Math.min(1, 0.6 + (0.4 * age) / POOL_GROW);
+        ctx.globalAlpha = 0.24 * tail;
+        ctx.fillStyle = '#74c7ec';
+        this.circle(X, Y, r);
+        ctx.fill();
+        ctx.globalAlpha = 0.6 * tail;
+        ctx.strokeStyle = '#89dceb';
+        ctx.lineWidth = S;
+        ctx.stroke();
+        this.drawBubbles(z, c, X, Y, r, tail);
+        break;
+      }
+      case 'trail': {
+        // 커밋 발자국: 속이 빈 작은 초록 고리 (경험치처럼 보이지 않게 납작하고 옅게).
+        // 한 사람이 걸으면 수십 개가 깔리므로 넓은 원은 칠하지 않는다 (휴대폰에서 그리기 비용이 크다)
+        const tail = this.zoneFade(z, c.t);
+        ctx.globalAlpha = 0.75 * tail;
+        ctx.strokeStyle = '#a6e3a1';
+        ctx.lineWidth = S;
+        this.circle(X, Y, 2.5 * S);
+        ctx.stroke();
+        break;
+      }
+      case 'slash': {
+        // 베기: 방향으로 뻗는 흰 초승달. 직사각형 판정의 가운데가 (x, y) 다
+        const a = (z.aux / 256) * Math.PI * 2;
+        const L = R / 2;
+        const T = R * 0.42;
+        ctx.setTransform(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), X, Y);
+        ctx.beginPath();
+        ctx.moveTo(-L, T * 0.25);
+        ctx.quadraticCurveTo(0, -T * 0.95, L, T * 0.25);
+        ctx.quadraticCurveTo(0, -T * 0.15, -L, T * 0.25);
+        ctx.closePath();
+        ctx.globalAlpha = (calm ? 0.4 : 0.7) * (1 - p * p);
+        ctx.fillStyle = '#eff1f5';
+        ctx.fill();
+        ctx.globalAlpha *= 0.8;
+        ctx.strokeStyle = '#f9e2af';
+        ctx.lineWidth = S;
+        ctx.stroke();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        break;
+      }
+      case 'bolt': {
+        // 번개: 위에서 내리꽂는 노란 지그재그 + 맞은 자리의 둥근 빛. 모양은 id 로 정해서 프레임마다 바뀌지 않는다
+        // (여러 개가 겹치면 진해지므로 속은 옅게, 테두리로 맞은 범위를 보여준다)
+        ctx.globalAlpha = (calm ? 0.1 : 0.18) * fade;
+        ctx.fillStyle = '#f9e2af';
+        this.circle(X, Y, R);
+        ctx.fill();
+        ctx.globalAlpha = (calm ? 0.3 : 0.5) * fade;
+        ctx.strokeStyle = '#f9e2af';
+        ctx.lineWidth = S;
+        ctx.stroke();
+        const h = hash(z.id, 7);
+        const top = 80 * S;
+        ctx.beginPath();
+        ctx.moveTo(X + (((h & 15) - 7) * S), Y - top);
+        for (let i = 1; i <= 4; i++) {
+          const off = i === 4 ? 0 : (((h >>> (i * 5)) % 13) - 6) * S;
+          ctx.lineTo(X + off, Y - top + (top * i) / 4);
+        }
+        ctx.globalAlpha = (calm ? 0.5 : 1) * fade;
+        ctx.strokeStyle = '#f9e2af';
+        ctx.lineWidth = 3 * S;
+        ctx.lineJoin = 'miter';
+        ctx.stroke();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = S;
+        ctx.stroke();
+        break;
+      }
+      case 'wipe': {
+        // git clean: 주인에게서 퍼져 나가는 얇은 흰·보라 고리 (화면 전체를 번쩍이지 않는다)
+        const r = calm ? R : R * (0.15 + 0.85 * (1 - (1 - p) * (1 - p)));
+        ctx.globalAlpha = (calm ? 0.45 : 0.85) * fade;
+        ctx.strokeStyle = '#eff1f5';
+        ctx.lineWidth = 3 * S;
+        this.circle(X, Y, r);
+        ctx.stroke();
+        ctx.globalAlpha *= 0.7;
+        ctx.strokeStyle = '#cba6f7';
+        ctx.lineWidth = 2 * S;
+        this.circle(X, Y, r * 0.9);
+        ctx.stroke();
+        break;
+      }
+      case 'blast': {
+        // 폭발: 주황 원 + 노란 속. 순간 커졌다가 흐려진다
+        const r = calm ? R : R * (0.55 + 0.45 * Math.min(1, p * 2.5));
+        ctx.globalAlpha = (calm ? 0.2 : 0.32) * fade;
+        ctx.fillStyle = '#fab387';
+        this.circle(X, Y, r);
+        ctx.fill();
+        ctx.globalAlpha = (calm ? 0.4 : 0.8) * fade;
+        ctx.strokeStyle = '#fab387';
+        ctx.lineWidth = S;
+        ctx.stroke();
+        ctx.globalAlpha = (calm ? 0.25 : 0.5) * fade;
+        ctx.fillStyle = '#f9e2af';
+        this.circle(X, Y, r * 0.5);
+        ctx.fill();
+        break;
+      }
+      case 'band': {
+        // 무한 스크롤: 보라색 세로 띠. 밝은 줄이 위에서 아래로 쓸고 지나간다
+        const W = R;
+        const H = z.aux * 4 * S;
+        const left = X - W / 2;
+        const top = Y - H / 2;
+        ctx.globalAlpha = (calm ? 0.14 : 0.2) * fade;
+        ctx.fillStyle = '#cba6f7';
+        ctx.fillRect(left, top, W, H);
+        ctx.globalAlpha = (calm ? 0.4 : 0.7) * fade;
+        ctx.fillRect(left, top, S, H);
+        ctx.fillRect(left + W - S, top, S, H);
+        if (!calm) {
+          ctx.globalAlpha = 0.8 * fade;
+          ctx.fillStyle = '#eff1f5';
+          ctx.fillRect(left, top + Math.round(H * p) - S, W, 2 * S);
+        }
+        break;
+      }
+      case 'beam': {
+        // 코드 프리즈: 주인에게서 뻗는 얼음빛 광선 (판정 폭 10px)
+        const a = (z.aux / 256) * Math.PI * 2;
+        ctx.setTransform(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), X, Y);
+        ctx.globalAlpha = (calm ? 0.2 : 0.35) * fade;
+        ctx.fillStyle = '#89dceb';
+        ctx.fillRect(0, -5 * S, R, 10 * S);
+        ctx.globalAlpha = (calm ? 0.55 : 0.9) * fade;
+        ctx.fillStyle = '#eff1f5';
+        ctx.fillRect(0, -S, R, 2 * S);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        break;
+      }
+    }
+  }
+
+  /**
+   * 방화벽: 주인 둘레의 옅은 주황 고리와 천천히 도는 점들 (R 은 기기 픽셀).
+   * 원 안을 칠하지 않는다: 반경이 화면의 절반 가까이 되면 휴대폰에서 그리는 비용이 크다
+   */
+  private drawAura(X: number, Y: number, R: number, now: number): void {
+    const { ctx } = this;
+    const S = this.scale;
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = '#fab387';
+    ctx.lineWidth = 3 * S;
+    this.circle(X, Y, R);
+    ctx.stroke();
+    const n = Math.max(12, Math.min(48, Math.round((Math.PI * 2 * R) / (8 * S))));
+    const spin = this.calm ? 0 : now / 1600;
+    const d = Math.max(2, Math.round(S * 1.5));
+    ctx.globalAlpha = 0.55;
+    for (let i = 0; i < n; i++) {
+      const a = spin + (i / n) * Math.PI * 2;
+      ctx.fillStyle = i % 2 ? '#fab387' : '#f38ba8';
+      ctx.fillRect(Math.round(X + Math.cos(a) * R - d / 2), Math.round(Y + Math.sin(a) * R - d / 2), d, d);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** 2단계 인증: 캐릭터를 감싸는 옅은 파란 방울과 작은 반짝임 (px, py 는 캐릭터 가운데, 기기 픽셀) */
+  private drawGuard(px: number, py: number, S: number, now: number): void {
+    const { ctx } = this;
+    // 아주 천천히 숨 쉬듯 (깜빡이지 않는다). 동작 줄이기 설정에서는 그대로
+    const r = (10 + (this.calm ? 0 : Math.sin(now / 400) * 0.5)) * S;
+    ctx.globalAlpha = 0.16;
+    ctx.fillStyle = '#89b4fa';
+    this.circle(px, py, r);
+    ctx.fill();
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = '#b4befe';
+    ctx.lineWidth = S;
+    ctx.stroke();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#eff1f5';
+    ctx.fillRect(Math.round(px - r * 0.55), Math.round(py - r * 0.6), 2 * S, S);
+    ctx.fillRect(Math.round(px - r * 0.65), Math.round(py - r * 0.6) + S, S, S);
+    ctx.globalAlpha = 1;
   }
 
   private drawBackground(cx: number, cy: number): void {

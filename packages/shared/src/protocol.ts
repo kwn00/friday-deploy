@@ -105,16 +105,23 @@ export interface Snapshot {
     up: Partial<Record<UpgradeId, number>>;
   };
   /**
-   * [id, x, y, face, alive(0|1), hp 비율(0..100), 러버덕 개수]. 같은 방의 플레이어는 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다).
+   * 같은 방의 플레이어. 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다).
+   * [id, x, y, face, alive(0|1), hp 비율(0..100), 돌고 있는 러버덕 수, 되살아난 직후 무적(0|1),
+   *  러버덕 반경(px), 러버덕 각속도(×10 rad/s), 방화벽 반경(px, 없으면 0), 2단계 인증 무적(0|1)].
    * alive 가 0 이면 그 자리에 묘비가 있다. 관전으로 합류해 몸이 없는 사람은 들어 있지 않다 (나 자신이라도).
-   * 여덟째 값은 방금 되살아나 피해를 받지 않는 중인지 (0|1). 화면에서 깜빡인다.
-   * 아홉째 값은 공격 범위 강화(듀얼 모니터) 단계. 러버덕이 도는 반경을 화면에서 서버와 똑같이 그리는 데 쓴다.
+   * 러버덕은 서버가 위치를 보내지 않는다: 클라이언트가 같은 반경·각속도·시간으로 같은 자리를 계산해 매끄럽게 그린다.
    */
-  p: [number, number, number, number, number, number, number, number, number][];
-  /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1)] */
-  e: [number, number, number, number, number][];
-  /** [id, shotKindIndex, x, y] */
+  p: [number, number, number, number, number, number, number, number, number, number, number, number][];
+  /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1), 얼어 있는지(0|1)] */
+  e: [number, number, number, number, number, number][];
+  /** 투사체·소환물 [id, 종류 번호(SHOT_KINDS 의 순서), x, y] */
   s: [number, number, number, number][];
+  /**
+   * 이번 틱에 새로 생긴 공격 영역 [id, 종류 번호(ZONE_KINDS 의 순서), x, y, 크기(px), 추가 값(0~255), 남는 틱 수].
+   * 추가 값: 베기·광선은 방향(256 = 한 바퀴), 세로 띠는 높이/4. 나머지는 0.
+   * 영역은 생길 때 한 번만 보낸다 (전송량을 아끼려고). 클라이언트가 남는 틱 수만큼 그린다.
+   */
+  z: [number, number, number, number, number, number, number][];
   /** [id, x, y] */
   g: [number, number, number][];
   /** 회복 아이템 [id, x, y] */

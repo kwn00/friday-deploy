@@ -3,8 +3,6 @@
  * (shared 에 둔 이유: 추후 클라이언트 예측/리플레이 검증에 동일 코드를 재사용하기 위함)
  */
 import {
-  DUCK_ORBIT_RADIUS,
-  DUCK_ORBIT_SPEED,
   FIELD_ITEM_FADE,
   FIELD_ITEM_INTERVAL,
   FIELD_ITEM_JITTER,
@@ -16,7 +14,6 @@ import {
   REVIVE_BLAST_RADIUS,
   REVIVE_HP_FRACTION,
   REVIVE_SHIELD_SECONDS,
-  HEAL_DROP_CHANCE,
   HEAL_DROP_COOLDOWN,
   GEM_CONTACT,
   GEM_PULL_ACCEL,
@@ -25,20 +22,14 @@ import {
   HEAL_FRACTION,
   MAX_ENEMIES_BASE,
   MAX_ENEMIES_PER_EXTRA_PLAYER,
-  MAX_GEMS,
-  MAX_HEALS,
-  MAX_SHOTS,
-  MAX_UPGRADE_LEVEL,
   OFFER_COUNT,
   OFFER_TIMEOUT,
   PLAYER_BASE_HP,
-  PLAYER_BASE_PICKUP,
-  PLAYER_BASE_SPEED,
   PLAYER_RADIUS,
-  RANGE_PER_LEVEL,
   SPECTATOR_LEASH,
   SPECTATOR_PULL,
   SPECTATOR_SPEED,
+  TICK_RATE,
   VIEW_RADIUS,
 } from './constants';
 import {
@@ -47,15 +38,23 @@ import {
   ENEMY_IDS,
   FIELD_ITEMS,
   FIELD_ITEM_KINDS,
+  PASSIVE_IDS,
+  PASSIVE_SLOTS,
   SHOT_KINDS,
+  UPGRADES,
   UPGRADE_IDS,
   WEAPON_IDS,
+  WEAPON_SLOTS,
+  ZONE_KINDS,
   isWeapon,
   type EnemyId,
   type FieldItemKind,
   type ShotKind,
   type UpgradeId,
+  type ZoneKind,
 } from './content';
+import { Grid, auraRadius, duckState, petPosition, runWeapons, updateShots, updateZones } from './combat';
+import { DARK_MODE_HP, contactDps, curseOf, extraOfferChanceOf, growthOf, lv, maxHpOf, moveSpeedOf, pickupOf, recoveryOf } from './stats';
 import type { Offer, Snapshot } from './protocol';
 import { derivedSecret, sfc32, type Rand, type Seed } from './rng';
 
@@ -88,10 +87,27 @@ export interface Player {
    */
   camX: number;
   camY: number;
-  /** 가지고 있는 부활(백업) 수. 쓰러질 때 하나를 써서 그 자리에서 되살아난다 */
+  /** 가지고 있는 부활 수 (백업 + 스냅샷). 쓰러질 때 하나를 써서 그 자리에서 되살아난다 */
   revives: number;
+  /** 그중 주운 백업의 수 (백업은 하나까지만 가질 수 있다. 스냅샷으로 받은 부활과 따로 센다) */
+  backups: number;
+  /** 아직 정수로 올리지 못한 경험치 (배율이 붙은 작은 경험치를 버리지 않게 쌓아 둔다) */
+  xpFrac: number;
   /** 피해를 받지 않는 남은 시간(초). 되살아난 직후에만 0 보다 크다 */
   shield: number;
+  /** 2단계 인증으로 피해를 받지 않는 남은 시간(초) */
+  guard: number;
+  /** 쉬지 않고 움직인 시간(초). 스프린트가 세지는 데 쓴다 */
+  moveTime: number;
+  /** 러버덕이 돌고 있는 남은 시간(초). 0 이면 쉬는 중 */
+  duckOn: number;
+  /** 코드 프리즈가 다음에 쏠 방향 (시곗바늘 12칸 중 하나) */
+  freezeDir: number;
+  /** 마지막으로 커밋 히스토리 발자국을 남긴 자리 */
+  trailX: number;
+  trailY: number;
+  /** 소환물(카나리아·부엉이)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
+  pets: Partial<Record<'canary' | 'night_owl', number>>;
   up: Partial<Record<UpgradeId, number>>;
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
@@ -104,7 +120,14 @@ export interface Enemy {
   x: number;
   y: number;
   hp: number;
-  duckCd: number;
+  /** 이동 속도 배율 (운영 서버 직접 수정으로 빨라진다) */
+  spd: number;
+  /** 경험치 배율 (운영 서버 직접 수정으로 늘어난다) */
+  xpMult: number;
+  /** 얼어 있는 남은 시간(초). 얼어 있으면 움직이지도 때리지도 못한다 */
+  frozen: number;
+  /** 공격별로 다음에 다시 맞을 수 있는 시각 (같은 공격에 너무 자주 맞지 않게) */
+  lock?: Map<number, number>;
   /** 이번 틱에 피해를 입고 살아남았는지. 클라이언트가 피격 이펙트를 그리는 데만 쓴다 (체력은 보내지 않는다) */
   hit: boolean;
 }
@@ -118,10 +141,36 @@ export interface Shot {
   vx: number;
   vy: number;
   ttl: number;
+  /** 처음 수명 (롤백이 돌아오는 때를 계산한다) */
+  life: number;
   dmg: number;
   pierce: number;
   r: number;
+  /** 같은 적을 다시 맞힐 수 있는 간격(초). 0 이면 적마다 한 번만 (hit 에 기록) */
+  rehit: number;
   hit: Set<number>;
+  /** 0 보다 크면 닿거나 수명이 다할 때 이 반경으로 터진다 */
+  boom: number;
+  /** 고양이가 방향을 바꾸기까지 남은 시간 */
+  turn: number;
+}
+
+/** 바닥에 생기는 공격 영역. dmg 가 0 이면 보이기만 한다 (피해는 만들 때 이미 줬다) */
+export interface Zone {
+  id: number;
+  kind: ZoneKind;
+  owner: number;
+  x: number;
+  y: number;
+  r: number;
+  /** 종류별 추가 값(0~255): 베기·광선은 각도, 세로 띠는 높이/4 */
+  aux: number;
+  ttl: number;
+  dmg: number;
+  /** 같은 적을 다시 다치게 하는 간격(초) */
+  every: number;
+  /** 생긴 틱 (스냅샷에는 생긴 틱에만 싣는다) */
+  born: number;
 }
 
 export interface Gem {
@@ -174,11 +223,14 @@ export interface World {
   players: Map<number, Player>;
   enemies: Enemy[];
   shots: Shot[];
+  zones: Zone[];
   gems: Gem[];
   heals: Heal[];
   items: FieldItem[];
   /** 다음 필드 아이템이 놓이기까지 남은 시간(초) */
   itemCd: number;
+  /** 마지막 step 에서 틱이 실제로 진행됐는지 (멈춰 있으면 false) */
+  stepped: boolean;
   /** 다음 회복 아이템이 떨어질 수 있을 때까지 남은 시간(초) */
   healCd: number;
   spawnAcc: number;
@@ -212,29 +264,20 @@ export function createWorld(source: Seed | WorldRandom, secret?: Rand): World {
     players: new Map(),
     enemies: [],
     shots: [],
+    zones: [],
     gems: [],
     heals: [],
     healCd: HEAL_DROP_COOLDOWN,
     items: [],
     itemCd: fieldItemDelay(random.secret),
+    stepped: false,
     spawnAcc: 0,
     nextBossAt: BOSS_INTERVAL,
     events: [],
   };
 }
 
-const lv = (p: Player, id: UpgradeId): number => p.up[id] ?? 0;
-export const maxHpOf = (p: Player): number => PLAYER_BASE_HP + 20 * lv(p, 'dark_mode');
-const speedOf = (p: Player): number => PLAYER_BASE_SPEED * (1 + 0.08 * lv(p, 'coffee'));
-const cdMultOf = (p: Player): number => Math.pow(0.92, lv(p, 'mech_keyboard'));
-const dmgMultOf = (p: Player): number => 1 + 0.15 * lv(p, 'stack_overflow');
-/**
- * 공격 범위 배율 (듀얼 모니터 단계 → 배율). 조준 거리, 탄이 날아가는 거리, 러버덕이 도는 반경에 곱한다.
- * 러버덕은 서버 판정과 클라이언트 그리기가 같은 반경을 써야 하므로 밖에서도 쓸 수 있게 내보낸다.
- */
-export const rangeMult = (level: number): number => 1 + RANGE_PER_LEVEL * Math.max(0, Math.min(MAX_UPGRADE_LEVEL, Math.floor(level) || 0));
-const rangeMultOf = (p: Player): number => rangeMult(lv(p, 'dual_monitor'));
-const pickupOf = (p: Player): number => PLAYER_BASE_PICKUP * (1 + 0.3 * lv(p, 'npm_install'));
+export { maxHpOf };
 const xpForLevel = (level: number): number => 3 + level * 3 + Math.floor(level * level * 0.4);
 
 /**
@@ -268,7 +311,16 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     camX: x,
     camY: y,
     revives: 0,
+    backups: 0,
+    xpFrac: 0,
     shield: 0,
+    guard: 0,
+    moveTime: 0,
+    duckOn: 0,
+    freezeDir: 0,
+    trailX: Number.NaN,
+    trailY: Number.NaN,
+    pets: {},
     up: { console_log: 1 },
     cd: {},
     offers: null,
@@ -301,8 +353,11 @@ export function pickOffer(world: World, id: number, choice: number): boolean {
   if (!p || !p.offers) return false;
   const up = p.offers[choice];
   if (up === undefined) return false;
-  p.up[up] = Math.min(MAX_UPGRADE_LEVEL, lv(p, up) + 1);
-  if (up === 'dark_mode') p.hp = Math.min(maxHpOf(p), p.hp + 40);
+  p.up[up] = Math.min(UPGRADES[up].max, lv(p, up) + 1);
+  // 다크 모드는 늘어난 만큼 회복한다 (체력바가 갑자기 비어 보이지 않게)
+  if (up === 'dark_mode') p.hp = Math.min(maxHpOf(p), p.hp + DARK_MODE_HP);
+  // 스냅샷: 고를 때마다 부활을 하나 준다
+  if (up === 'snapshot') p.revives++;
   p.offers = null;
   p.offerTimer = 0;
   checkLevelUp(world, p);
@@ -343,7 +398,8 @@ function spawnFieldItem(world: World, alive: Player[]): void {
 function canTake(p: Player, kind: FieldItemKind): boolean {
   // 화면에 보이는 체력(올림)이 가득이면 회복 아이템을 써 버리지 않는다
   if (kind === 'heal') return Math.ceil(p.hp) < maxHpOf(p);
-  if (kind === 'revive') return p.revives < MAX_REVIVES;
+  // 백업은 하나만 가질 수 있다 (스냅샷으로 받은 부활은 따로 센다)
+  if (kind === 'revive') return p.backups < MAX_REVIVES;
   return true;
 }
 
@@ -353,6 +409,7 @@ function takeItem(world: World, p: Player, kind: FieldItemKind): void {
     p.hp = Math.min(maxHp, p.hp + Math.ceil(maxHp * HEAL_FRACTION));
   } else if (kind === 'revive') {
     p.revives++;
+    p.backups++;
   } else {
     // 지금 레벨을 채우는 데 필요한 만큼을 통째로 준다: 정확히 한 레벨 오르고, 모으던 경험치는 그대로 남는다
     p.xp += p.xpNext;
@@ -363,6 +420,8 @@ function takeItem(world: World, p: Player, kind: FieldItemKind): void {
 /** 쓰러질 순간에 부활을 하나 써서 그 자리에서 되살아난다 */
 function revive(world: World, p: Player): void {
   p.revives--;
+  // 백업부터 쓴다 (다음 백업을 주울 수 있게)
+  if (p.backups > 0) p.backups--;
   p.hp = Math.ceil(maxHpOf(p) * REVIVE_HP_FRACTION);
   p.shield = REVIVE_SHIELD_SECONDS;
   // 주변의 적을 반경 밖으로 밀어낸다. 방향은 지금 있는 쪽 그대로 (겹쳐 있으면 적마다 다른 고정된 방향)
@@ -382,7 +441,15 @@ function checkLevelUp(world: World, p: Player): void {
     p.xp -= p.xpNext;
     p.level++;
     p.xpNext = xpForLevel(p.level);
-    const pool = UPGRADE_IDS.filter((u) => lv(p, u) < MAX_UPGRADE_LEVEL);
+    // 가진 것은 최대 단계 전까지, 새 것은 칸이 남아 있을 때만 (무기 6칸, 패시브 6칸)
+    const weapons = WEAPON_IDS.filter((u) => lv(p, u) > 0).length;
+    const passives = PASSIVE_IDS.filter((u) => lv(p, u) > 0).length;
+    const pool = UPGRADE_IDS.filter((u) => {
+      const l = lv(p, u);
+      if (l >= UPGRADES[u].max) return false;
+      if (l > 0) return true;
+      return isWeapon(u) ? weapons < WEAPON_SLOTS : passives < PASSIVE_SLOTS;
+    });
     if (pool.length === 0) {
       p.hp = Math.min(maxHpOf(p), p.hp + 20);
       continue;
@@ -394,127 +461,11 @@ function checkLevelUp(world: World, p: Player): void {
       pool[i] = pool[j]!;
       pool[j] = tmp;
     }
-    p.offers = pool.slice(0, OFFER_COUNT);
+    // 배포 기도: 가끔 선택지가 하나 더 (이것도 비밀 난수로 정한다)
+    const count = OFFER_COUNT + (world.secret() < extraOfferChanceOf(p) ? 1 : 0);
+    p.offers = pool.slice(0, count);
     p.offerTimer = 0;
     world.events.push({ type: 'offers', pid: p.id });
-  }
-}
-
-function nearestEnemy(world: World, x: number, y: number, maxDist: number): Enemy | null {
-  let best: Enemy | null = null;
-  let bestD = maxDist * maxDist;
-  for (const e of world.enemies) {
-    const d = (e.x - x) ** 2 + (e.y - y) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = e;
-    }
-  }
-  return best;
-}
-
-function fire(world: World, p: Player, kind: ShotKind, ang: number, speed: number, dmg: number, pierce: number, ttl: number, r: number): void {
-  if (world.shots.length >= MAX_SHOTS) return;
-  world.shots.push({
-    id: world.nextId++,
-    kind,
-    owner: p.id,
-    x: p.x,
-    y: p.y,
-    vx: Math.cos(ang) * speed,
-    vy: Math.sin(ang) * speed,
-    ttl,
-    dmg: dmg * dmgMultOf(p),
-    pierce,
-    r,
-    hit: new Set(),
-  });
-}
-
-function damage(world: World, e: Enemy, dmg: number, by: Player | undefined): void {
-  if (e.hp <= 0) return;
-  e.hp -= dmg;
-  e.hit = true;
-  if (e.hp <= 0) {
-    if (by) by.kills++;
-    if (world.gems.length >= MAX_GEMS) world.gems.shift();
-    world.gems.push({ id: world.nextId++, x: e.x, y: e.y, v: ENEMIES[e.type].xp });
-    // 회복 아이템: 보스는 반드시, 그 외에는 쿨다운이 끝났을 때 낮은 확률로
-    // 드롭 여부는 비밀 난수로 정한다 (보이는 난수를 쓰면 시드를 아는 사람이 드롭을 미리 알고 처치 순서로 조종할 수 있다)
-    const boss = ENEMIES[e.type].boss === true;
-    if (boss || (world.healCd <= 0 && world.secret() < HEAL_DROP_CHANCE)) {
-      if (!boss) world.healCd = HEAL_DROP_COOLDOWN;
-      if (world.heals.length >= MAX_HEALS) world.heals.shift();
-      world.heals.push({ id: world.nextId++, x: e.x + (boss ? 10 : 0), y: e.y });
-    }
-  }
-}
-
-/**
- * 러버덕 i 번째(총 n 마리)의 주인 기준 상대 위치. 서버 판정과 클라이언트 그리기가 함께 쓴다.
- * radius: 도는 반경. 주인의 공격 범위 강화에 따라 넓어진다 (DUCK_ORBIT_RADIUS * rangeMult(단계)).
- */
-export function duckOffset(time: number, i: number, n: number, radius: number = DUCK_ORBIT_RADIUS): [number, number] {
-  const a = time * DUCK_ORBIT_SPEED + (i * Math.PI * 2) / n;
-  return [Math.cos(a) * radius, Math.sin(a) * radius];
-}
-
-export function duckPositions(world: World, p: Player): [number, number][] {
-  const n = lv(p, 'rubber_duck');
-  const radius = DUCK_ORBIT_RADIUS * rangeMultOf(p);
-  const out: [number, number][] = [];
-  for (let i = 0; i < n; i++) {
-    const [ox, oy] = duckOffset(world.time, i, n, radius);
-    out.push([p.x + ox, p.y + oy]);
-  }
-  return out;
-}
-
-function runWeapons(world: World, p: Player, dt: number): void {
-  const cdm = cdMultOf(p);
-  // 공격 범위: 더 멀리 있는 적을 겨누고, 탄이 더 오래(= 더 멀리) 날아간다
-  const reach = rangeMultOf(p);
-  for (const w of WEAPON_IDS) {
-    const level = lv(p, w);
-    if (level === 0 || w === 'rubber_duck') continue;
-    const cd = (p.cd[w] ?? 0) - dt;
-    if (cd > 0) {
-      p.cd[w] = cd;
-      continue;
-    }
-    if (w === 'console_log') {
-      const target = nearestEnemy(world, p.x, p.y, 200 * reach);
-      if (!target) continue;
-      const base = Math.atan2(target.y - p.y, target.x - p.x);
-      const n = 1 + (level >= 3 ? 1 : 0) + (level >= 5 ? 1 : 0);
-      for (let i = 0; i < n; i++) fire(world, p, 'log', base + (i - (n - 1) / 2) * 0.18, 220, 8 + 4 * level, level >= 4 ? 1 : 0, 1.2 * reach, 4);
-      p.cd[w] = 0.9 * cdm;
-    } else if (w === 'regex') {
-      fire(world, p, 'regex', Math.atan2(p.fy, p.fx), 300, 12 + 6 * level, 999, 0.7 * reach, 7);
-      p.cd[w] = Math.max(0.6, 2.4 - 0.25 * level) * cdm;
-    } else if (w === 'ai_agent') {
-      const near = world.enemies.filter((e) => (e.x - p.x) ** 2 + (e.y - p.y) ** 2 < (220 * reach) ** 2);
-      if (near.length === 0) continue;
-      const target = near[Math.floor(world.rng() * near.length)]!;
-      // 15% 확률로 할루시네이션: 자신만만하게 엉뚱한 곳을 쏜다
-      const ang = world.rng() < 0.15 ? world.rng() * Math.PI * 2 : Math.atan2(target.y - p.y, target.x - p.x);
-      fire(world, p, 'ai', ang, 260, 16 + 8 * level, 2, 1.1 * reach, 5);
-      p.cd[w] = Math.max(0.5, 1.5 - 0.15 * level) * cdm;
-    }
-  }
-  const ducks = lv(p, 'rubber_duck');
-  if (ducks > 0) {
-    const dmg = (6 + 3 * ducks) * dmgMultOf(p);
-    for (const [dx, dy] of duckPositions(world, p)) {
-      for (const e of world.enemies) {
-        if (e.duckCd > 0) continue;
-        const rr = ENEMIES[e.type].r + 6;
-        if ((e.x - dx) ** 2 + (e.y - dy) ** 2 < rr * rr) {
-          e.duckCd = 0.35;
-          damage(world, e, dmg, p);
-        }
-      }
-    }
   }
 }
 
@@ -525,13 +476,17 @@ function spawnEnemies(world: World, alive: Player[], dt: number): void {
     const anchor = alive[Math.floor(world.rng() * alive.length)]!;
     const a = world.rng() * Math.PI * 2;
     const d = 300 + world.rng() * 60;
+    // 운영 서버 직접 수정: 그 사람 주변에 나오는 버그는 더 세고 빠르고, 경험치도 그만큼 많다
+    const curse = curseOf(anchor);
     world.enemies.push({
       id: world.nextId++,
       type,
       x: anchor.x + Math.cos(a) * d,
       y: anchor.y + Math.sin(a) * d,
-      hp: ENEMIES[type].hp * hpScale,
-      duckCd: 0,
+      hp: ENEMIES[type].hp * hpScale * curse,
+      spd: curse,
+      xpMult: curse,
+      frozen: 0,
       hit: false,
     });
   };
@@ -539,7 +494,9 @@ function spawnEnemies(world: World, alive: Player[], dt: number): void {
     world.nextBossAt += BOSS_INTERVAL;
     spawnAt('legacy_code');
   }
-  const rate = Math.min(14, (1.2 + world.time / 22) * (0.6 + 0.4 * alive.length));
+  // 등장 빈도도 운영 서버 직접 수정만큼 늘어난다 (살아 있는 사람들의 평균)
+  const curse = alive.reduce((sum, p) => sum + curseOf(p), 0) / alive.length;
+  const rate = Math.min(14 * curse, (1.2 + world.time / 22) * (0.6 + 0.4 * alive.length) * curse);
   world.spawnAcc += rate * dt;
   const pool = ENEMY_IDS.filter((id) => ENEMIES[id].weight > 0 && ENEMIES[id].from <= world.time);
   const total = pool.reduce((s, id) => s + ENEMIES[id].weight, 0);
@@ -560,6 +517,7 @@ function spawnEnemies(world: World, alive: Player[], dt: number): void {
 }
 
 export function step(world: World, dt: number): void {
+  world.stepped = false;
   if (world.over) return;
   const players = [...world.players.values()];
 
@@ -583,6 +541,7 @@ export function step(world: World, dt: number): void {
   if (world.paused) return;
 
   world.tick++;
+  world.stepped = true;
   // 누적 덧셈 대신 틱에서 계산: 오차가 쌓이지 않고, 클라이언트가 tick 만으로 같은 시간을 구할 수 있다 (러버덕 각도)
   world.time = world.tick * dt;
   world.healCd -= dt;
@@ -597,13 +556,19 @@ export function step(world: World, dt: number): void {
     world.itemCd = fieldItemDelay(world.secret);
     if (world.items.length < MAX_FIELD_ITEMS) spawnFieldItem(world, alive);
   }
-  for (const p of players) if (p.shield > 0) p.shield = Math.max(0, p.shield - dt);
+  for (const p of players) {
+    if (p.shield > 0) p.shield = Math.max(0, p.shield - dt);
+    if (p.guard > 0) p.guard = Math.max(0, p.guard - dt);
+  }
 
   // 선택 중인 플레이어는 이동/피격/공격 없음
   const active = alive.filter((p) => p.offers === null);
 
   for (const p of active) {
-    const sp = speedOf(p);
+    // 워라밸: 가만히 있어도 조금씩 찬다
+    const regen = recoveryOf(p);
+    if (regen > 0) p.hp = Math.min(maxHpOf(p), p.hp + regen * dt);
+    const sp = moveSpeedOf(p);
     p.x += p.dx * sp * dt;
     p.y += p.dy * sp * dt;
     if (p.dx !== 0 || p.dy !== 0) {
@@ -648,8 +613,12 @@ export function step(world: World, dt: number): void {
   // 적 이동 + 접촉 피해
   for (const e of world.enemies) {
     const def = ENEMIES[e.type];
-    e.duckCd -= dt;
     e.hit = false;
+    // 얼어 있는 버그는 움직이지도 때리지도 못한다
+    if (e.frozen > 0) {
+      e.frozen = Math.max(0, e.frozen - dt);
+      continue;
+    }
     let target: Player | null = null;
     let best = Infinity;
     for (const p of active) {
@@ -668,11 +637,11 @@ export function step(world: World, dt: number): void {
       e.y = target.y + Math.sin(a) * 320;
       continue;
     }
-    e.x += ((target.x - e.x) / dist) * def.speed * dt;
-    e.y += ((target.y - e.y) / dist) * def.speed * dt;
-    // 되살아난 직후(shield)에는 피해를 받지 않는다
-    if (dist < def.r + PLAYER_RADIUS && target.shield <= 0) {
-      target.hp -= def.dps * dt;
+    e.x += ((target.x - e.x) / dist) * def.speed * e.spd * dt;
+    e.y += ((target.y - e.y) / dist) * def.speed * e.spd * dt;
+    // 되살아난 직후(shield)와 2단계 인증(guard) 동안에는 피해를 받지 않는다
+    if (dist < def.r + PLAYER_RADIUS && target.shield <= 0 && target.guard <= 0) {
+      target.hp -= contactDps(target, def.dps) * dt;
       if (target.hp <= 0) {
         if (target.revives > 0) {
           revive(world, target);
@@ -686,48 +655,31 @@ export function step(world: World, dt: number): void {
     }
   }
 
-  // 적끼리 살짝 밀어내기
-  const es = world.enemies;
-  for (let i = 0; i < es.length; i++) {
-    const a = es[i]!;
-    for (let j = i + 1; j < es.length; j++) {
-      const b = es[j]!;
+  // 적끼리 살짝 밀어내기 (공간 격자로 가까운 것끼리만 본다)
+  let grid = new Grid(world.enemies);
+  for (const a of world.enemies) {
+    const ra = ENEMIES[a.type].r;
+    grid.near(a.x, a.y, ra, (b) => {
+      if (b.id <= a.id) return;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
-      const min = ENEMIES[a.type].r + ENEMIES[b.type].r;
+      const min = ra + ENEMIES[b.type].r;
       const d2 = dx * dx + dy * dy;
-      if (d2 >= min * min || d2 === 0) continue;
+      if (d2 >= min * min || d2 === 0) return;
       const d = Math.sqrt(d2);
       const push = ((min - d) / d) * 0.25;
       a.x -= dx * push;
       a.y -= dy * push;
       b.x += dx * push;
       b.y += dy * push;
-    }
+    });
   }
 
-  for (const p of active) if (p.alive) runWeapons(world, p, dt);
-
-  // 투사체
-  for (const s of world.shots) {
-    s.x += s.vx * dt;
-    s.y += s.vy * dt;
-    s.ttl -= dt;
-    if (s.ttl <= 0) continue;
-    for (const e of world.enemies) {
-      if (e.hp <= 0 || s.hit.has(e.id)) continue;
-      const rr = ENEMIES[e.type].r + s.r;
-      if ((e.x - s.x) ** 2 + (e.y - s.y) ** 2 < rr * rr) {
-        s.hit.add(e.id);
-        damage(world, e, s.dmg, world.players.get(s.owner));
-        if (s.pierce-- <= 0) {
-          s.ttl = 0;
-          break;
-        }
-      }
-    }
-  }
-  world.shots = world.shots.filter((s) => s.ttl > 0);
+  // 무기 · 투사체 · 바닥 영역 (밀어낸 뒤의 자리로 격자를 다시 만든다)
+  grid = new Grid(world.enemies);
+  for (const p of active) if (p.alive) runWeapons(world, grid, p, dt);
+  updateShots(world, grid, dt);
+  updateZones(world, grid, dt);
   world.enemies = world.enemies.filter((e) => e.hp > 0);
 
   // 경험치(커밋): 획득 범위에 들어오면 그 플레이어에게 끌려가고, 닿으면 획득한다.
@@ -768,7 +720,11 @@ export function step(world: World, dt: number): void {
     return true;
   });
   for (const [p, gained] of gains) {
-    p.xp += gained;
+    // 사이드 프로젝트: 같은 경험치를 주워도 더 많이 오른다. 소수는 쌓아 두었다가 정수만큼 올린다
+    p.xpFrac += gained * growthOf(p);
+    const whole = Math.floor(p.xpFrac + 1e-9);
+    p.xpFrac -= whole;
+    p.xp += whole;
     checkLevelUp(world, p);
   }
 
@@ -810,8 +766,12 @@ export function step(world: World, dt: number): void {
 
 const r1 = (n: number): number => Math.round(n * 10) / 10;
 
-/** 플레이어 한 명 시점의 스냅샷. 관심 영역(VIEW_RADIUS) 밖의 정보는 포함하지 않는다. */
-export function buildSnapshot(world: World, pid: number): Snapshot | null {
+/**
+ * 플레이어 한 명 시점의 스냅샷. 관심 영역(VIEW_RADIUS) 밖의 정보는 포함하지 않는다.
+ * zonesAfter: 이 틱 뒤에 생긴 바닥 영역만 싣는다. 방은 연결마다 마지막으로 보낸 틱을 넘겨, 영역이 한 번씩만 가게 한다.
+ * 주지 않으면 이번 틱에 새로 생긴 것만 (월드가 멈춰 틱이 그대로면 아무것도).
+ */
+export function buildSnapshot(world: World, pid: number, zonesAfter?: number): Snapshot | null {
   const me = world.players.get(pid);
   if (!me) return null;
   const v2 = VIEW_RADIUS * VIEW_RADIUS;
@@ -840,6 +800,7 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
     p: [],
     e: [],
     s: [],
+    z: [],
     g: [],
     h: [],
     i: [],
@@ -848,10 +809,43 @@ export function buildSnapshot(world: World, pid: number): Snapshot | null {
   // 몸이 없는 사람(관전으로 합류)은 보내지 않는다: 그릴 것이 없다
   for (const p of world.players.values()) {
     if (!p.body) continue;
-    snap.p.push([p.id, r1(p.x), r1(p.y), p.face, p.alive ? 1 : 0, Math.round((p.hp / maxHpOf(p)) * 100), p.alive ? lv(p, 'rubber_duck') : 0, p.alive && p.shield > 0 ? 1 : 0, p.alive ? lv(p, 'dual_monitor') : 0]);
+    const ducks = duckState(p);
+    snap.p.push([
+      p.id,
+      r1(p.x),
+      r1(p.y),
+      p.face,
+      p.alive ? 1 : 0,
+      Math.round((p.hp / maxHpOf(p)) * 100),
+      ducks.n,
+      p.alive && p.shield > 0 ? 1 : 0,
+      ducks.radius,
+      Math.round(ducks.speed * 10),
+      auraRadius(p),
+      p.alive && p.guard > 0 ? 1 : 0,
+    ]);
   }
-  for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0]);
+  for (const e of world.enemies) if (near(e.x, e.y)) snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0, e.frozen > 0 ? 1 : 0]);
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
+  // 카나리아·부엉이: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
+  for (const p of world.players.values()) {
+    if (!p.alive) continue;
+    for (const w of ['canary', 'night_owl'] as const) {
+      const id = p.pets[w];
+      if (id === undefined || lv(p, w) === 0) continue;
+      const [x, y] = petPosition(world, p, w);
+      if (near(x, y)) snap.s.push([id, SHOT_KINDS.indexOf(w === 'canary' ? 'canary' : 'owl'), r1(x), r1(y)]);
+    }
+  }
+  // 바닥 영역: 아직 보내지 않은 것 중 조금이라도 보이는 것 (크기만큼 넓게 본다). 한 번만, 남는 시간과 함께 보낸다
+  const after = zonesAfter ?? (world.stepped ? world.tick - 1 : world.tick);
+  for (const z of world.zones) {
+    if (z.born <= after || z.ttl <= 0) continue;
+    const reach = VIEW_RADIUS + z.r;
+    if ((z.x - cx) ** 2 + (z.y - cy) ** 2 <= reach * reach) {
+      snap.z.push([z.id, ZONE_KINDS.indexOf(z.kind), r1(z.x), r1(z.y), Math.round(z.r), z.aux, Math.min(255, Math.ceil(z.ttl * TICK_RATE))]);
+    }
+  }
   // 끌려오는 경험치는 움직이므로 소수 좌표로 보낸다 (전송 크기는 같다: 어차피 1/16 픽셀 정수로 부호화한다)
   for (const g of world.gems) if (near(g.x, g.y)) snap.g.push([g.id, r1(g.x), r1(g.y)]);
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);

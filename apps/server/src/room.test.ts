@@ -642,7 +642,7 @@ test('재접속(페어): 끊긴 사람의 캐릭터는 그 자리에 남아 계�
   assert.ok(a.ws.snaps.at(-1)!.p.some((row) => row[0] === b.conn.pid), '동료의 화면에 그대로 보인다');
 
   // 무적이 아니다: 붙어 있는 적에게 맞는다 (끊는 것으로 피해를 피할 수 없다)
-  room.world.enemies.push({ id: 990_001, type: 'bug', x: pb.x, y: pb.y, hp: 1e9, duckCd: 0, hit: false });
+  room.world.enemies.push({ id: 990_001, type: 'bug', x: pb.x, y: pb.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
   survive(room, [a.conn], 1);
   assert.ok(pb.hp < 60, `체력 60 -> ${pb.hp}`);
   const hurt = pb.hp;
@@ -897,4 +897,37 @@ test('재접속: 판 도중에 끊긴 사람은, 판이 끝나 대기실로 돌�
   assert.equal(rooms.resume(key, ws2 as unknown as WebSocket)?.conn, b.conn, '5분 뒤에도 이어받는다');
   assert.equal(last(ws2, 'over')!.result.name, 'b', '놓친 판의 결과도 받는다');
   assert.equal(last(ws2, 'roster')!.started, false);
+});
+
+test('바닥 영역: 연결마다 한 번씩만 보낸다 (레벨업 선택으로 월드가 멈춰 있어도 같은 영역을 거듭 보내지 않는다)', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const p = room.world.players.get(a.conn.pid)!;
+  p.up = { console_log: 1, hotfix: 3 };
+  p.xpNext = 1e9;
+  room.world.itemCd = 1e9;
+  const seen = new Map<number, number>();
+  const count = (): void => {
+    for (const s of a.ws.snaps.splice(0)) for (const z of s.z) seen.set(z[0], (seen.get(z[0]) ?? 0) + 1);
+  };
+  for (let i = 0; i < 20 * 6; i++) {
+    p.hp = 1e9;
+    mock.timers.tick(50);
+  }
+  count();
+  assert.ok(seen.size > 0, '웅덩이가 생겼다');
+  // 레벨업 선택: 혼자라 월드가 멈춘다. 그동안 스냅샷은 계속 가지만 영역은 다시 실리지 않는다
+  p.offers = ['coffee', 'cdn', 'work_life'];
+  for (let i = 0; i < 20 * 3; i++) mock.timers.tick(50);
+  count();
+  assert.ok([...seen.values()].every((n) => n === 1), `같은 영역을 여러 번 보냈다: ${[...seen.entries()].filter(([, n]) => n > 1).length}개`);
+  room.onPick(a.conn, 0);
+  for (let i = 0; i < 20 * 5; i++) {
+    p.hp = 1e9;
+    mock.timers.tick(50);
+  }
+  count();
+  assert.ok([...seen.values()].every((n) => n === 1));
+  room.leave(a.conn);
 });

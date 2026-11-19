@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DT,
-  DUCK_ORBIT_RADIUS,
   FIELD_ITEM_FADE,
   FIELD_ITEM_INTERVAL,
   FIELD_ITEM_KINDS,
@@ -11,12 +10,10 @@ import {
   FIELD_ITEM_TTL,
   FIELD_ITEMS,
   MAX_FIELD_ITEMS,
-  RANGE_PER_LEVEL,
   REVIVE_BLAST_RADIUS,
   REVIVE_SHIELD_SECONDS,
   UPGRADES,
   UPGRADE_IDS,
-  rangeMult,
   GEM_PULL_MAX,
   PLAYER_BASE_PICKUP,
   SPECTATOR_LEASH,
@@ -31,7 +28,6 @@ import {
   decodeSnapshot,
   duckOffset,
   encodeSnapshot,
-  duckPositions,
   maxHpOf,
   normalizeRoomCode,
   parseClientMsg,
@@ -40,6 +36,8 @@ import {
   setInput,
   sfc32,
   step,
+  areaMultOf,
+  effectiveStats,
   type Gem,
 } from './index';
 
@@ -177,8 +175,8 @@ test('normalizeRoomCode: 사람이 친 코드를 정리하고, 형식이 다르�
 test('sim: 회복 아이템은 보스에게서 반드시 나오고, 체력이 가득이면 줍지 않는다', () => {
   const w = createWorld(7);
   const p = addPlayer(w, 'a');
-  w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, duckCd: 0, hit: false });
-  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set() });
+  w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, boom: 0, turn: 0 });
   step(w, DT);
   assert.equal(w.heals.length, 1, '보스 처치 → 회복 아이템');
   w.gems.length = 0; // 보스가 남긴 경험치를 주우면 레벨업 선택으로 월드가 멈추므로 치워 둔다
@@ -253,18 +251,34 @@ test('sim: 위아래로 움직일 때 미세한 좌우 흔들림으로 캐릭터
   assert.equal(p.face, -1);
 });
 
-test('sim: 러버덕 위치는 틱만으로 계산할 수 있고(클라이언트 그리기용) 서버 판정 위치와 같다', () => {
+test('sim: 러버덕은 정해진 시간 돌고 쉬기를 되풀이하고, 화면은 스냅샷의 반경·각속도·틱만으로 서버와 같은 자리에 그린다', () => {
   const w = createWorld(9);
   const p = addPlayer(w, 'a');
-  p.up.rubber_duck = 3;
-  for (let i = 0; i < 137; i++) step(w, DT);
-  const snap = buildSnapshot(w, p.id)!;
-  assert.equal(snap.p[0]![6], 3, '스냅샷에는 러버덕 개수만 들어간다');
-  const server = duckPositions(w, p);
-  for (let i = 0; i < 3; i++) {
-    const [ox, oy] = duckOffset(snap.tick * DT, i, 3);
-    assert.ok(Math.abs(p.x + ox - server[i]![0]) < 1e-6 && Math.abs(p.y + oy - server[i]![1]) < 1e-6);
-    assert.ok(Math.abs(Math.hypot(ox, oy) - DUCK_ORBIT_RADIUS) < 1e-9);
+  p.xpNext = 1e9;
+  w.itemCd = 1e9;
+  p.up.rubber_duck = 4; // 2마리 (2단계에 +1), 3단계에 반경·속도 +, 4단계에 지속 +0.5초
+  const st = effectiveStats(p, 'rubber_duck');
+  assert.equal(st.amount, 2);
+  const counts: number[] = [];
+  for (let i = 0; i < 20 * 12; i++) {
+    p.hp = 1e9;
+    step(w, DT);
+    counts.push(buildSnapshot(w, p.id)!.p[0]![6]);
+  }
+  const on = counts.filter((n) => n === 2).length / counts.length;
+  // 3.5초 돌고 3초 쉰다 → 약 54%
+  assert.ok(on > 0.45 && on < 0.62, `도는 시간의 비율 ${on.toFixed(2)}`);
+  assert.ok(counts.includes(0), '쉬는 동안은 0');
+  // 도는 중인 순간을 골라 서버 판정 위치와 화면 위치를 비교한다
+  while (buildSnapshot(w, p.id)!.p[0]![6] === 0) step(w, DT);
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  const row = snap.p.find((r) => r[0] === p.id)!;
+  assert.equal(row[8], Math.round(36 * 1.25), '반경 (3단계에 +25%)');
+  assert.equal(row[9], Math.round(2.6 * 1.3 * 10), '각속도 ×10 (3단계에 +30%)');
+  for (let i = 0; i < 2; i++) {
+    const [cx, cy] = duckOffset(snap.tick * DT, i, row[6], row[8], row[9] / 10);
+    const [sx, sy] = duckOffset(w.time, i, 2, Math.round(st.area), Math.round(st.speed * 10) / 10);
+    assert.ok(Math.abs(cx - sx) < 1e-6 && Math.abs(cy - sy) < 1e-6, `오리 ${i}`);
   }
 });
 
@@ -273,7 +287,7 @@ test('sim: 같은 방 동료는 멀리 있어도 스냅샷에 있고, 멀리 있
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
   b.x = a.x + VIEW_RADIUS * 3;
-  w.enemies.push({ id: 7001, type: 'bug', x: b.x + 10, y: b.y, hp: 1e9, duckCd: 0, hit: false });
+  w.enemies.push({ id: 7001, type: 'bug', x: b.x + 10, y: b.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
   w.heals.push({ id: 7002, x: b.x + 10, y: b.y });
   const snap = buildSnapshot(w, a.id)!;
   assert.deepEqual(snap.p.map((r) => r[0]).sort(), [a.id, b.id].sort());
@@ -286,8 +300,11 @@ test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (
   const w = createWorld(21);
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
-  a.up.rubber_duck = 2;
+  // 영역(웅덩이·발자국·폭발)과 여러 투사체가 다 실리도록 무기를 골고루 준다
+  a.up = { console_log: 8, rubber_duck: 2, hotfix: 3, commit_history: 2, logic_bomb: 2, firewall: 3 };
+  b.up = { console_log: 1, keyboard_cat: 2, code_freeze: 2, canary: 2 };
   let checked = 0;
+  let zones = 0;
   let jsonBytes = 0;
   let binBytes = 0;
   for (let i = 0; i < 20 * 240 && !w.over; i++) {
@@ -308,21 +325,23 @@ test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (
       assert.equal(back.paused, snap.paused);
       assert.deepEqual(back.me, snap.me);
       assert.equal(back.p.length, snap.p.length);
-      for (const [k, list] of [['e', snap.e], ['s', snap.s], ['g', snap.g], ['h', snap.h], ['p', snap.p]] as const) {
+      for (const [k, list] of [['e', snap.e], ['s', snap.s], ['z', snap.z], ['g', snap.g], ['h', snap.h], ['p', snap.p]] as const) {
         const got = back[k] as number[][];
         assert.equal(got.length, list.length, k);
         list.forEach((row: number[], n: number) => {
           row.forEach((v, c) => {
-            const isCoord = k === 'e' || k === 's' ? c === 2 || c === 3 : c === 1 || c === 2;
+            const isCoord = k === 'e' || k === 's' || k === 'z' ? c === 2 || c === 3 : c === 1 || c === 2;
             if (isCoord) assert.ok(Math.abs(got[n]![c]! - v) <= 1 / 16 + 0.02, `${k}[${n}][${c}] ${got[n]![c]} vs ${v}`);
             else assert.equal(got[n]![c], v, `${k}[${n}][${c}]`);
           });
         });
       }
       checked++;
+      zones += snap.z.length;
     }
   }
   assert.ok(checked > 500);
+  assert.ok(zones > 20, `영역 ${zones}개를 확인했다`);
   assert.ok(binBytes < jsonBytes * 0.45, `이진 ${binBytes} / JSON ${jsonBytes} = ${((binBytes / jsonBytes) * 100).toFixed(0)}%`);
 });
 
@@ -355,15 +374,15 @@ test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시�
   const w = createWorld(31);
   const p = addPlayer(w, 'a');
   p.cd.console_log = 1e9; // 자동 공격이 끼어들지 않게
-  w.enemies.push({ id: 5001, type: 'merge_conflict', x: p.x + 150, y: p.y, hp: 80, duckCd: 0, hit: false });
-  w.enemies.push({ id: 5002, type: 'bug', x: p.x - 150, y: p.y, hp: 10, duckCd: 0, hit: false });
+  w.enemies.push({ id: 5001, type: 'merge_conflict', x: p.x + 150, y: p.y, hp: 80, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 5002, type: 'bug', x: p.x - 150, y: p.y, hp: 10, spd: 1, xpMult: 1, frozen: 0, hit: false });
   const row = (id: number): number[] | undefined => buildSnapshot(w, p.id)!.e.find((e) => e[0] === id);
   step(w, DT);
   assert.equal(row(5001)![4], 0);
-  assert.equal(row(5001)!.length, 5, '[id, 종류, x, y, 피격] 뿐: 체력은 없다');
+  assert.equal(row(5001)!.length, 6, '[id, 종류, x, y, 피격, 얼음] 뿐: 체력은 없다');
 
   const tank = w.enemies.find((e) => e.id === 5001)!;
-  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set() });
+  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, boom: 0, turn: 0 });
   step(w, DT);
   assert.equal(row(5001)![4], 1, '맞은 틱');
   assert.equal(row(5002)![4], 0, '안 맞은 적');
@@ -420,7 +439,7 @@ test('sim: npm install 은 경험치를 끌어당기는 범위를 넓힌다', ()
   w.gems.push(gem);
   for (let i = 0; i < 10; i++) quietStep(w);
   assert.equal(gem.x, p.x + PLAYER_BASE_PICKUP * 1.2, '기본 범위(36)에서는 닿지 않는다');
-  p.up.npm_install = 1; // 범위 +30% → 46.8
+  p.up.npm_install = 1; // 범위 +40% → 50.4
   for (let i = 0; i < 10; i++) quietStep(w);
   assert.equal(p.xp, 1);
   assert.equal(w.gems.length, 0);
@@ -527,8 +546,8 @@ test('관전: 쓰러진 사람은 입력으로 시점만 움직인다. 묘비는
   assert.equal(b.camY, 0);
 
   // 시점 근처의 적은 보이고, 묘비 근처지만 시점에서 먼 적은 보이지 않는다
-  w.enemies.push({ id: 7001, type: 'bug', x: b.camX + VIEW_RADIUS - 20, y: 0, hp: 1e9, duckCd: 0, hit: false });
-  w.enemies.push({ id: 7002, type: 'bug', x: b.x - VIEW_RADIUS + 20, y: 0, hp: 1e9, duckCd: 0, hit: false });
+  w.enemies.push({ id: 7001, type: 'bug', x: b.camX + VIEW_RADIUS - 20, y: 0, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 7002, type: 'bug', x: b.x - VIEW_RADIUS + 20, y: 0, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
   const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, b.id)!));
   assert.ok(Math.abs(snap.view[0] - b.camX) < 0.11 && snap.view[1] === 0, `시점이 스냅샷에 실린다 (${snap.view})`);
   assert.equal(snap.me.alive, false);
@@ -615,7 +634,7 @@ test('관전으로 합류한 사람은 몸이 없다: 화면에 그려지지 않
   w.gems.push(gem);
   w.heals.push({ id: 8002, x: s.camX, y: s.camY + 3 });
   // 적은 관전자와 a 사이에 둔다: a 에게 가면 관전자에게서는 멀어진다
-  w.enemies.push({ id: 8003, type: 'bug', x: s.camX - 60, y: s.camY, hp: 1e9, duckCd: 0, hit: false });
+  w.enemies.push({ id: 8003, type: 'bug', x: s.camX - 60, y: s.camY, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
   const gemAt = gem.x;
   const toWatcher = 60;
   const toPlayer = Math.hypot(s.camX - 60 - a.x, s.camY - a.y);
@@ -802,8 +821,8 @@ test('부활: 백업이 있으면 쓰러질 순간에 그 자리에서 되살아
   p.hp = 0.5;
   const swarm = (): void => {
     w.enemies.length = 0;
-    for (let i = 0; i < 12; i++) w.enemies.push({ id: 9200 + i, type: 'bug', x: p.x + Math.cos(i) * 3, y: p.y + Math.sin(i) * 3, hp: 1e9, duckCd: 0, hit: false });
-    w.enemies.push({ id: 9290, type: 'bug', x: p.x, y: p.y, hp: 1e9, duckCd: 0, hit: false }); // 정확히 겹친 적
+    for (let i = 0; i < 12; i++) w.enemies.push({ id: 9200 + i, type: 'bug', x: p.x + Math.cos(i) * 3, y: p.y + Math.sin(i) * 3, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
+    w.enemies.push({ id: 9290, type: 'bug', x: p.x, y: p.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false }); // 정확히 겹친 적
   };
   swarm();
   w.shots.length = 0;
@@ -850,7 +869,7 @@ test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 
   b.y = -4000;
   w.items.push({ id: 9301, kind: 'levelup', x: 5000.3, y: -1234.5, ttl: FIELD_ITEM_TTL });
   w.items.push({ id: 9302, kind: 'revive', x: -700, y: 650, ttl: FIELD_ITEM_FADE + 0.2 });
-  w.enemies.push({ id: 9303, type: 'bug', x: 5000, y: -1234, hp: 1e9, duckCd: 0, hit: false });
+  w.enemies.push({ id: 9303, type: 'bug', x: 5000, y: -1234, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
   for (const viewer of [a, b]) {
     const raw = buildSnapshot(w, viewer.id)!;
     const snap = decodeSnapshot(encodeSnapshot(raw));
@@ -879,17 +898,10 @@ test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 
 
 /* ───────────── 공격 범위 강화 (듀얼 모니터) ───────────── */
 
-test('듀얼 모니터: 강화 목록의 맨 뒤에 추가됐고(통신 순서 유지), 한 단계에 12% 씩 넓어진다', () => {
-  assert.equal(UPGRADE_IDS[UPGRADE_IDS.length - 1], 'dual_monitor');
-  assert.equal(UPGRADES.dual_monitor.kind, 'passive');
-  assert.equal(rangeMult(0), 1);
-  assert.ok(Math.abs(rangeMult(1) - (1 + RANGE_PER_LEVEL)) < 1e-9);
-  assert.ok(Math.abs(rangeMult(5) - 1.6) < 1e-9);
-  // 이상한 값이 와도 범위를 벗어나지 않는다 (화면에서 러버덕 반경을 계산할 때 쓴다)
-  for (const bad of [-3, 99, Number.NaN, 2.7]) assert.ok(rangeMult(bad) >= 1 && rangeMult(bad) <= 1.6001, String(bad));
-});
-
-test('듀얼 모니터: 더 멀리 있는 적을 겨누고, 탄이 더 멀리 날아간다', () => {
+test('듀얼 모니터: 공격 범위가 한 단계에 10% 씩 커지고, 더 멀리 있는 적을 겨누고 탄이 더 멀리 날아간다', () => {
+  assert.equal(areaMultOf({ up: {} }), 1);
+  assert.ok(Math.abs(areaMultOf({ up: { dual_monitor: 5 } }) - 1.5) < 1e-9);
+  assert.ok(Math.abs(areaMultOf({ up: { dual_monitor: 99 } }) - 1.5) < 1e-9, '최대 단계를 넘는 값이 와도 최대로 친다');
   // 가만히 서서 console.log 만으로, 정해진 거리에 놓은 적을 맞히는지 본다
   const hits = (level: number, dist: number): boolean => {
     const w = createWorld(51);
@@ -897,7 +909,7 @@ test('듀얼 모니터: 더 멀리 있는 적을 겨누고, 탄이 더 멀리 �
     p.xpNext = 1e9;
     w.itemCd = 1e9;
     if (level > 0) p.up.dual_monitor = level;
-    const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, duckCd: 0, hit: false };
+    const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false };
     for (let i = 0; i < 20 * 4; i++) {
       p.hp = 1e9;
       // 스폰된 다른 적은 치우고 표적만 제자리에 둔다
@@ -911,60 +923,7 @@ test('듀얼 모니터: 더 멀리 있는 적을 겨누고, 탄이 더 멀리 �
     return false;
   };
   assert.equal(hits(0, 190), true, '기본 조준 거리(200) 안');
-  assert.equal(hits(0, 215), false, '기본 조준 거리 밖은 겨누지 않는다');
-  assert.equal(hits(1, 215), true, '한 단계면 224 까지');
-  assert.equal(hits(5, 310), true, '다섯 단계면 320 까지 겨누고, 탄도 거기까지 닿는다');
+  assert.equal(hits(0, 225), false, '기본 조준 거리 밖은 겨누지 않는다');
+  assert.equal(hits(5, 290), true, '다섯 단계면 300 까지 겨누고, 탄도 거기까지 닿는다');
   assert.equal(hits(5, 330), false);
-
-  // 정규표현식(바라보는 방향으로 관통)도 더 멀리 간다: 기본은 210, 다섯 단계면 336
-  const regexReach = (level: number): number => {
-    const w = createWorld(52);
-    const p = addPlayer(w, 'a');
-    p.xpNext = 1e9;
-    w.itemCd = 1e9;
-    p.up = { regex: 1, ...(level > 0 ? { dual_monitor: level } : {}) };
-    let far = 0;
-    for (let i = 0; i < 20 * 5; i++) {
-      p.hp = 1e9;
-      w.enemies.length = 0;
-      step(w, DT);
-      for (const sh of w.shots) far = Math.max(far, Math.hypot(sh.x - p.x, sh.y - p.y));
-    }
-    return far;
-  };
-  const base = regexReach(0);
-  const wide = regexReach(5);
-  assert.ok(base > 190 && base <= 211, `기본 ${base}`);
-  assert.ok(wide > base * 1.5 && wide <= 337, `다섯 단계 ${wide}`);
-});
-
-test('듀얼 모니터: 러버덕이 도는 반경이 넓어지고, 서버 판정 위치와 화면에 그릴 위치가 같다', () => {
-  const w = createWorld(53);
-  const p = addPlayer(w, 'a');
-  p.xpNext = 1e9;
-  w.itemCd = 1e9;
-  p.up.rubber_duck = 3;
-  p.up.dual_monitor = 4;
-  for (let i = 0; i < 37; i++) quietStep(w);
-  const radius = DUCK_ORBIT_RADIUS * rangeMult(4);
-  const server = duckPositions(w, p);
-  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
-  const row = snap.p.find((r) => r[0] === p.id)!;
-  assert.deepEqual([row[6], row[8]], [3, 4], '스냅샷에 러버덕 수와 범위 단계가 실린다');
-  for (let i = 0; i < 3; i++) {
-    const [ox, oy] = duckOffset(snap.tick * DT, i, row[6], DUCK_ORBIT_RADIUS * rangeMult(row[8]));
-    assert.ok(Math.abs(row[1] + ox - server[i]![0]) < 0.11 && Math.abs(row[2] + oy - server[i]![1]) < 0.11);
-    assert.ok(Math.abs(Math.hypot(ox, oy) - radius) < 1e-6, `반경 ${Math.hypot(ox, oy)}`);
-  }
-  // 넓어진 반경에 있는 적이 맞는다 (기본 반경 36 에서는 닿지 않던 거리)
-  const [dx, dy] = duckOffset(w.time + DT, 0, 3, radius);
-  const e = { id: 9600, type: 'bug' as const, x: p.x + dx, y: p.y + dy, hp: 1e9, duckCd: 0, hit: false };
-  w.enemies.push(e);
-  p.up.console_log = 0;
-  w.shots.length = 0;
-  step(w, DT);
-  assert.equal(e.hit, true);
-  // 쓰러진 사람의 줄에는 0 으로 실린다 (그릴 러버덕이 없다)
-  fell(p);
-  assert.deepEqual([buildSnapshot(w, p.id)!.p[0]![6], buildSnapshot(w, p.id)!.p[0]![8]], [0, 0]);
 });
