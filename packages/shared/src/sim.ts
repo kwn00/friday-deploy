@@ -63,6 +63,9 @@ import { curseOf, effectiveStats, extraOfferChanceOf, growthOf, healAmountOf, hi
 import type { Offer, Snapshot } from './protocol';
 import { derivedSecret, sfc32, type Rand, type Seed } from './rng';
 
+/** 적 정의를 지역 상수로 잡아 둔다 (모듈 경계 너머의 이름은 틱마다 수천 번 읽으면 그 자체로 무겁다) */
+const EN = ENEMIES;
+
 export interface Player {
   id: number;
   name: string;
@@ -635,7 +638,7 @@ const coopOf = (alive: number): number => 0.6 + 0.4 * alive;
  * 체력은 그 사람의 저주(바로 적용)와, HP x Level 인 적이면 그 사람의 레벨을 곱한다. 속도는 이번 분의 저주.
  */
 function spawnEnemy(world: World, type: EnemyId, anchor: Player, x?: number, y?: number): Enemy {
-  const def = ENEMIES[type];
+  const def = EN[type];
   if (x === undefined || y === undefined) {
     const a = world.rng() * Math.PI * 2;
     const d = 300 + world.rng() * 60;
@@ -886,7 +889,7 @@ function advance(world: World, dt: number): void {
   // 적 이동 + 접촉. 접촉 피해는 한 대씩: 닿아 있는 적 가운데 가장 센 공격 하나를 맞고, 잠깐(0.24초) 무적이 된다 (뱀서)
   const strongest = new Map<Player, number>();
   for (const e of world.enemies) {
-    const def = ENEMIES[e.type];
+    const def = EN[e.type];
     e.hit = false;
     // 이벤트로 나온 적(버그 떼, 포위): 수명이 다하면 경험치 없이 사라진다
     if (e.life > 0) {
@@ -969,15 +972,16 @@ function advance(world: World, dt: number): void {
   }
   world.enemies = world.enemies.filter((e) => e.hp > 0);
 
-  // 적끼리 살짝 밀어내기 (공간 격자로 가까운 것끼리만 본다)
+  // 적끼리 살짝 밀어내기 (공간 격자로 가까운 것끼리만 본다). 적이 300 마리까지 몰리면 틱에서 가장 무거운 일이라
+  // 두 틱에 한 번만 한다 (화면에서는 차이가 거의 없다)
   let grid = new Grid(world.enemies);
-  for (const a of world.enemies) {
-    const ra = ENEMIES[a.type].r;
+  if (world.tick % 2 === 0) for (const a of world.enemies) {
+    const ra = EN[a.type].r;
     grid.near(a.x, a.y, ra, (b) => {
       if (b.id <= a.id) return;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
-      const min = ra + ENEMIES[b.type].r;
+      const min = ra + EN[b.type].r;
       const d2 = dx * dx + dy * dy;
       if (d2 >= min * min || d2 === 0) return;
       const d = Math.sqrt(d2);
@@ -1160,7 +1164,7 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
   const ev2 = ENEMY_VIEW_RADIUS * ENEMY_VIEW_RADIUS;
   for (const e of world.enemies) {
     const d2 = (e.x - cx) ** 2 + (e.y - cy) ** 2;
-    if (d2 > (ENEMIES[e.type].boss ? v2 : ev2)) continue;
+    if (d2 > (EN[e.type].boss ? v2 : ev2)) continue;
     snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0, e.frozen > 0 ? 1 : 0]);
   }
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);

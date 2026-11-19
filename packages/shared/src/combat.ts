@@ -9,11 +9,14 @@ import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, t
 import type { Enemy, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf } from './stats';
 
+/** 적 정의를 지역 상수로 잡아 둔다 (모듈 경계 너머의 이름은 틱마다 수천 번 읽으면 그 자체로 무겁다) */
+const EN = ENEMIES;
+
 /* ───────────── 공간 격자 ───────────── */
 
 const CELL = 48;
 /** 가장 큰 적의 반경: 주변 칸을 볼 때 이만큼 넉넉히 본다 */
-const MAX_ENEMY_R = Math.max(...ENEMY_IDS.map((id) => ENEMIES[id].r));
+const MAX_ENEMY_R = Math.max(...ENEMY_IDS.map((id) => EN[id].r));
 const cellKey = (cx: number, cy: number): number => (cx + 32768) * 65536 + (cy + 32768);
 
 export class Grid {
@@ -40,7 +43,7 @@ export class Grid {
         if (!list) continue;
         for (const e of list) {
           if (e.hp <= 0) continue;
-          const rr = r + ENEMIES[e.type].r;
+          const rr = r + EN[e.type].r;
           if ((e.x - x) ** 2 + (e.y - y) ** 2 > rr * rr) continue;
           if (fn(e) === true) return;
         }
@@ -96,7 +99,7 @@ export function hit(world: World, e: Enemy, dmg: number, by: Player | undefined,
   if (def.crit && by && world.rng() < def.crit.chance * luckOf(by)) dmg *= def.crit.mult;
   damage(world, e, dmg, by);
   if (e.hp <= 0) return;
-  const ed = ENEMIES[e.type];
+  const ed = EN[e.type];
   if (w === 'firewall' && !ed.debuffRes) {
     // 방화벽에 맞을 때마다 더 잘 밀리고(상한까지) 더 잘 언다 (뱀서 Garlic)
     e.kbTaken = Math.min(ed.kbMax, e.kbTaken + 0.3);
@@ -115,7 +118,7 @@ export function damage(world: World, e: Enemy, dmg: number, by: Player | undefin
   e.hit = true;
   if (e.hp > 0) return;
   if (by) by.kills++;
-  const def = ENEMIES[e.type];
+  const def = EN[e.type];
   if (def.xp > 0) dropGem(world, e.x, e.y, def.xp);
   // 보스는 보물상자를 떨어뜨린다 (끌려오지 않는다. 직접 닿아야 연다)
   dropChest(world, e);
@@ -193,7 +196,7 @@ function strip(grid: Grid, x: number, y: number, ax: number, ay: number, len: nu
     const ry = e.y - y;
     const along = rx * ax + ry * ay;
     const across = Math.abs(rx * -ay + ry * ax);
-    const er = ENEMIES[e.type].r;
+    const er = EN[e.type].r;
     if (along >= -er && along <= len + er && across <= width / 2 + er) fn(e);
   });
 }
@@ -611,7 +614,7 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       const inView = (x: number, y: number): boolean => (x - p.x) ** 2 + (y - p.y) ** 2 <= r2;
       const keep = world.rng() < st.chance;
       for (const e of world.enemies) {
-        if (e.hp <= 0 || ENEMIES[e.type].killRes || !inView(e.x, e.y)) continue;
+        if (e.hp <= 0 || EN[e.type].killRes || !inView(e.x, e.y)) continue;
         if (keep) damage(world, e, e.hp, p);
         else erase(world, e, p);
       }
