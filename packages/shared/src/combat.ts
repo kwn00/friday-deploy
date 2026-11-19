@@ -160,7 +160,7 @@ interface ShotSpec {
   r: number;
   /** 같은 적을 다시 맞힐 수 있는 간격(초). 0 이면 적마다 한 번만 */
   rehit?: number;
-  /** 터질 때의 반경 (로직 밤) */
+  /** 터질 때의 반경 (로직 폭탄) */
   boom?: number;
 }
 
@@ -237,7 +237,7 @@ export function updateShots(world: World, grid: Grid, dt: number): void {
         s.hit.add(e.id);
       }
       if (s.boom > 0) {
-        // 로직 밤: 처음 닿은 곳에서 터진다
+        // 로직 폭탄: 처음 닿은 곳에서 터진다
         if (owner) blast(world, grid, owner, s.x, s.y, s.boom, s.dmg);
         s.ttl = 0;
         return true;

@@ -153,8 +153,8 @@ const P = (name: string, icon: string, desc: string, per: string | string[], max
 export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   /* ── 무기 ── */
   console_log: W('console.log()', '🖨️', '가장 가까운 버그에게 로그를 찍는다. 디버거는 사치.',
-    { dmg: 12, cd: 1.0, amount: 1, area: 4, speed: 220, dur: 1.0, pierce: 0 },
-    [{ amount: 1 }, { cd: -0.2 }, { amount: 1 }, { dmg: 8 }, { amount: 1 }, { pierce: 1 }, { dmg: 8 }]),
+    { dmg: 12, cd: 0.9, amount: 1, area: 4, speed: 220, dur: 1.0, pierce: 0 },
+    [{ amount: 1 }, { cd: -0.1 }, { amount: 1 }, { dmg: 8 }, { amount: 1 }, { pierce: 1 }, { dmg: 8 }]),
   rubber_duck: W('러버덕', '🦆', '잠깐씩 주위를 도는 오리. 설명하다 보면 버그가 죽는다.',
     { dmg: 9, cd: 3.0, amount: 1, area: 36, speed: 2.6, dur: 3.0, pierce: 0 },
     [{ amount: 1 }, { speed: 0.3, area: 0.25 }, { dur: 0.5, dmg: 5 }, { amount: 1 }, { speed: 0.3, area: 0.25 }, { dur: 0.5, dmg: 5 }, { amount: 1 }]),
