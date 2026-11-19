@@ -240,3 +240,35 @@ test('함께 한 판: 이름은 기여도(개인 처치 수)가 큰 사람부터
   lb.record(run({ names: ['solo'], killsBy: [41], kills: 41, time: 150 }));
   assert.deepEqual(lb.top('solo')[0]!.killsBy, [41]);
 });
+
+test('아이템: 사람별 무기·패시브가 이름과 함께 정렬되고, 서버가 다시 걸러 낸다. 없는 기록은 없는 대로', () => {
+  const lb = new Leaderboard(new MemoryStore());
+  lb.record(
+    run({
+      board: 'coop',
+      names: ['host', 'mate'],
+      killsBy: [3, 9],
+      itemsBy: [
+        [{ id: 'console_log', level: 2 }],
+        [{ id: 'coffee', level: 1 }, { id: 'rubber_duck', level: 4 }, { id: 'hack' as never, level: 1 }],
+      ],
+      time: 200,
+    }),
+  );
+  const [entry] = lb.top('coop');
+  assert.deepEqual(entry!.names, ['mate', 'host']);
+  assert.deepEqual(entry!.itemsBy, [
+    [{ id: 'rubber_duck', level: 4 }, { id: 'coffee', level: 1 }],
+    [{ id: 'console_log', level: 2 }],
+  ], '기여도 순으로 바뀌어도 아이템은 제 주인을 따라간다. 모르는 id 는 버린다');
+
+  // 개수가 이름과 맞지 않거나 없으면 남기지 않는다 (이 값을 남기기 전의 기록)
+  lb.record(run({ board: 'coop', names: ['x', 'y'], itemsBy: [[{ id: 'coffee', level: 1 }]], time: 190 }));
+  lb.record(run({ names: ['old'], time: 150 }));
+  assert.equal(lb.top('coop')[1]!.itemsBy, undefined);
+  assert.equal(lb.top('solo')[0]!.itemsBy, undefined);
+
+  // 목록이 배열이 아니면 그 사람은 빈 목록
+  lb.record(run({ names: ['solo'], itemsBy: ['bad' as never], time: 160 }));
+  assert.deepEqual(lb.top('solo')[0]!.itemsBy, [[]]);
+});

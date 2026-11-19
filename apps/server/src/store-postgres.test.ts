@@ -313,6 +313,42 @@ describe('PostgreSQL 저장소: 개인별 기여도', { skip: skipAll }, () => {
   });
 });
 
+describe('PostgreSQL 저장소: 개인별 아이템', { skip: skipAll }, () => {
+  it('사람별 아이템이 이름과 같은 순서로 저장되고 돌아온다. 없는 기록은 없는 대로 돌아온다', async () => {
+    const store = await createPostgresStore(URL!);
+    try {
+      const season = newSeason();
+      const itemsBy = [[{ id: 'console_log' as const, level: 3 }, { id: 'coffee' as const, level: 2 }], []];
+      await store.save(run(season, { board: 'coop', names: ['가', '나'], killsBy: [4, 1], itemsBy, kills: 5, time: 300 }));
+      await store.save(run(season, { board: 'coop', names: ['예전', '기록'], time: 200 }));
+      const rows = await store.load('coop', season, 5);
+      assert.deepEqual(rows.map((r) => r.itemsBy), [itemsBy, undefined]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('member_items 열이 없던 테이블에도 열이 더해지고, 예전 기록은 아이템 없이 읽힌다. DB 에 이상한 값이 있어도 걸러 낸다', async () => {
+    const season = newSeason();
+    const admin = new pg.Client({ connectionString: URL! });
+    await admin.connect();
+    try {
+      await admin.query('ALTER TABLE leaderboard_runs DROP COLUMN IF EXISTS member_items');
+      await admin.query('INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at) VALUES ($1, $2, $3, $4, 120, 9, 2, 0, 1700000000000)', [`old-${season}`, 'solo', season, ['옛날']]);
+      const store = await createPostgresStore(URL!);
+      try {
+        assert.deepEqual((await store.load('solo', season, 5)).map((r) => [r.id, r.itemsBy]), [[`old-${season}`, undefined]]);
+        await admin.query(`UPDATE leaderboard_runs SET member_items = $1 WHERE id = $2`, [JSON.stringify([[{ id: 'coffee', level: 99 }, { id: 'rubber_duck', level: 1 }]]), `old-${season}`]);
+        assert.deepEqual((await store.load('solo', season, 5)).map((r) => r.itemsBy), [[[{ id: 'rubber_duck', level: 1 }]]]);
+      } finally {
+        await store.close();
+      }
+    } finally {
+      await admin.end().catch(() => {});
+    }
+  });
+});
+
 describe('PostgreSQL 저장소: 서버가 뜰 때 테이블을 막지 않는다', { skip: skipAll }, () => {
   it('열과 인덱스가 이미 있으면, 다른 연결이 테이블을 읽거나 쓰는 중이어도 기다리지 않고 바로 준비된다', async () => {
     // 테이블·열·인덱스를 먼저 만들어 둔다

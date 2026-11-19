@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DT,
+  ownedUpgrades,
+  upgradesOf,
   ENEMY_IDS,
   OFFER_COUNT,
   PASSIVE_IDS,
@@ -507,4 +509,31 @@ test('검토 반영: 월드가 멈춰 있는 동안(레벨업 선택 중)에는 
   const all = buildSnapshot(w, p.id, -1)!.z;
   assert.equal(all.length, 1);
   assert.ok(all[0]![6]! > 0 && all[0]![6]! < 40);
+});
+
+test('순위표에 남기는 아이템: 게임 화면 칸과 같은 순서(무기 먼저)로 두고, 모르는 것·범위 밖 단계·중복·칸을 넘는 것은 버린다', () => {
+  assert.deepEqual(upgradesOf({ coffee: 2, console_log: 3, rubber_duck: 0 }), [
+    { id: 'console_log', level: 3 },
+    { id: 'coffee', level: 2 },
+  ], '단계 0 은 가진 것이 아니다');
+  const max = UPGRADES.console_log.max;
+  assert.deepEqual(
+    ownedUpgrades([
+      { id: 'console_log', level: max + 1 },
+      { id: 'console_log', level: 2 },
+      { id: 'console_log', level: 3 },
+      { id: 'nope', level: 1 },
+      { id: 'coffee', level: 1.5 },
+      { id: 'coffee', level: '1' },
+      null,
+      'coffee',
+    ]),
+    [{ id: 'console_log', level: 2 }],
+  );
+  const tooMany = [...WEAPON_IDS, ...PASSIVE_IDS].map((id) => ({ id, level: 1 }));
+  const kept = ownedUpgrades(tooMany)!;
+  assert.equal(kept.filter((u) => UPGRADES[u.id].kind === 'weapon').length, Math.min(WEAPON_IDS.length, 6));
+  assert.equal(kept.filter((u) => UPGRADES[u.id].kind === 'passive').length, Math.min(PASSIVE_IDS.length, PASSIVE_SLOTS));
+  assert.equal(ownedUpgrades('x'), null);
+  assert.deepEqual(ownedUpgrades([]), []);
 });

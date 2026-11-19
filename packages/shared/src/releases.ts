@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.1.3',
+    date: '2026-11-19',
+    title: '순위표에 무기도 보여요',
+    items: [
+      '순위표에서 각자 끝날 때 가지고 있던 무기와 강화를 볼 수 있어요.',
+      '아이콘 옆 숫자는 몇 단계까지 올렸는지예요.',
+      '함께 한 기록은 사람마다 따로 보여줘요.',
+      '이번 버전 전에 세운 기록에는 나오지 않아요.',
+    ],
+  },
+  {
     version: '0.1.2',
     date: '2026-11-19',
     title: '보스, 보물상자, 그리고 월요일 아침',
