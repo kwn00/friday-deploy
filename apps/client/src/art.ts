@@ -348,8 +348,8 @@ export const ENEMY_ART: Record<EnemyId, string[]> = {
   ],
   tech_debt: techDebt(),
   flaky_test: FLAKY_TEST,
-  /** 버그 떼: 보라색 날벌레 (작고 빠르다) */
-  bug_swarm: ['.k....k.', '..kkkk..', '.kpPPpk.', 'kkpkkpkk', 'jkpPPpkj', 'k.kkkk.k'],
+  /** 버그 떼: 날개가 흰 보라색 날벌레 (작고 빠르다. 떼로 화면을 가로지른다) */
+  bug_swarm: ['.ll..ll.', 'lwlkklwl', '.lkppkl.', '.kpeepk.', '.kppppk.', 'k.kPPk.k', '...kk...'],
   boss_bug: bossBug(),
   legacy_code: [
     '..kkkkkkkkkkkkkkkkkk..',

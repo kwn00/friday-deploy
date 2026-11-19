@@ -22,16 +22,20 @@ export function parseChest(raw: unknown): ChestMsg | null {
   return { t: 'chest', items: [...(o.items as UpgradeId[])], heal: o.heal };
 }
 
+/** 띄어쓰기에서 줄이 바뀌지 않게 (좁은 화면에서 "듀얼 / 모니터 +1" 처럼 한 항목이 갈라지지 않도록) */
+const keep = (text: string): string => text.replace(/ /g, '\u00a0');
+
 /**
  * 보물상자를 열었을 때의 알림 문구. 같은 것이 여러 번 오르면 묶는다 (러버덕 +2).
- * 예: "🎁 보물상자: console.log() +1, 러버덕 +2" / 올릴 것이 없어 체력만 찼으면 "🎁 보물상자: 체력 +30"
+ * 예: "🎁 보물상자: console.log() +1, 러버덕 +2" / 올릴 것이 없어 체력만 찼으면 "🎁 보물상자: 체력 +30".
+ * 항목 하나("듀얼 모니터 +1") 안에서는 줄을 바꾸지 않는다: 좁은 화면에서는 쉼표 뒤에서만 줄이 바뀐다.
  */
 export function chestText(items: readonly UpgradeId[], heal: number): string {
   const counts = new Map<UpgradeId, number>();
   for (const id of items) counts.set(id, (counts.get(id) ?? 0) + 1);
-  const parts = [...counts].map(([id, n]) => `${UPGRADES[id].name} +${n}`);
+  const parts = [...counts].map(([id, n]) => keep(`${UPGRADES[id].name} +${n}`));
   const hp = Math.round(heal);
-  if (hp > 0) parts.push(`체력 +${hp}`);
+  if (hp > 0) parts.push(keep(`체력 +${hp}`));
   const head = `${FIELD_ITEMS.chest.icon} 보물상자`;
   return parts.length > 0 ? `${head}: ${parts.join(', ')}` : `${head}: 더 올릴 것이 없어요`;
 }
