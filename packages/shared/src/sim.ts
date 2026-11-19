@@ -973,28 +973,34 @@ function advance(world: World, dt: number): void {
   world.enemies = world.enemies.filter((e) => e.hp > 0);
 
   // 적끼리 살짝 밀어내기 (공간 격자로 가까운 것끼리만 본다). 적이 300 마리까지 몰리면 틱에서 가장 무거운 일이라
-  // 두 틱에 한 번만 한다 (화면에서는 차이가 거의 없다)
-  let grid = new Grid(world.enemies);
-  if (world.tick % 2 === 0) for (const a of world.enemies) {
-    const ra = EN[a.type].r;
-    grid.near(a.x, a.y, ra, (b) => {
-      if (b.id <= a.id) return;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const min = ra + EN[b.type].r;
-      const d2 = dx * dx + dy * dy;
-      if (d2 >= min * min || d2 === 0) return;
-      const d = Math.sqrt(d2);
-      const push = ((min - d) / d) * 0.25;
-      a.x -= dx * push;
-      a.y -= dy * push;
-      b.x += dx * push;
-      b.y += dy * push;
-    });
+  // 두 틱에 한 번만 한다 (화면에서는 차이가 거의 없다). 짝마다 한 번만 보도록 id 를 먼저 비교해서 거리 계산을 반으로 줄인다
+  if (world.tick % 2 === 0) {
+    const sep = new Grid(world.enemies);
+    for (const a of world.enemies) {
+      const ra = EN[a.type].r;
+      // 후보는 밀기 전 자리(ax, ay)로 거르고, 실제로 미는 양은 지금 자리로 잰다
+      const ax = a.x;
+      const ay = a.y;
+      sep.candidates(ax, ay, ra, (b) => {
+        if (b.id <= a.id || b.hp <= 0) return;
+        const min = ra + EN[b.type].r;
+        if ((b.x - ax) ** 2 + (b.y - ay) ** 2 > min * min) return;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= min * min || d2 === 0) return;
+        const d = Math.sqrt(d2);
+        const push = ((min - d) / d) * 0.25;
+        a.x -= dx * push;
+        a.y -= dy * push;
+        b.x += dx * push;
+        b.y += dy * push;
+      });
+    }
   }
 
-  // 무기 · 투사체 · 바닥 영역 (밀어낸 뒤의 자리로 격자를 다시 만든다)
-  grid = new Grid(world.enemies);
+  // 무기 · 투사체 · 바닥 영역 (밀어낸 뒤의 자리로 격자를 만든다)
+  const grid = new Grid(world.enemies);
   for (const p of active) if (p.alive) runWeapons(world, grid, p, dt);
   updateShots(world, grid, dt);
   updateZones(world, grid, dt);

@@ -50,6 +50,24 @@ export class Grid {
       }
     }
   }
+  /**
+   * (x, y) 에서 r 안쪽에 몸이 걸칠 수 있는 칸에 든 적마다 fn. 거리와 체력은 보지 않는다 (부르는 쪽이 거른다).
+   * 적끼리 밀어내기처럼 거리보다 싼 조건으로 먼저 거를 수 있을 때 쓴다
+   */
+  candidates(x: number, y: number, r: number, fn: (e: Enemy) => void): void {
+    const reach = r + MAX_ENEMY_R;
+    const x0 = Math.floor((x - reach) / CELL);
+    const x1 = Math.floor((x + reach) / CELL);
+    const y0 = Math.floor((y - reach) / CELL);
+    const y1 = Math.floor((y + reach) / CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const list = this.cells.get(cellKey(cx, cy));
+        if (!list) continue;
+        for (const e of list) fn(e);
+      }
+    }
+  }
   /** (x, y) 에서 maxDist 안의 가장 가까운 적 */
   nearest(x: number, y: number, maxDist: number): Enemy | null {
     let best: Enemy | null = null;
