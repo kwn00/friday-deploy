@@ -499,6 +499,43 @@ export function upgradeText(id: UpgradeId, level: number): string {
   return parts.join(', ');
 }
 
+/* ───────────── 가진 것 (순위표에 남기는 모양) ───────────── */
+
+/** 순위표에 남기는 아이템 하나 (protocol.ts 의 LeaderboardItem 과 같은 모양) */
+export interface OwnedUpgrade {
+  id: UpgradeId;
+  level: number;
+}
+
+/**
+ * 가진 무기·패시브 목록을 정리한다. 게임 화면의 칸과 같은 순서(UPGRADE_IDS 순: 무기 먼저, 그다음 패시브)로 둔다.
+ * 모르는 id, 범위 밖 단계, 중복, 칸 수를 넘는 것은 버린다. 배열이 아니면 null.
+ * 서버가 기록할 때, DB 에서 읽을 때, 클라이언트가 응답을 받을 때 같은 규칙으로 걸러 낸다.
+ */
+export function ownedUpgrades(raw: unknown): OwnedUpgrade[] | null {
+  if (!Array.isArray(raw)) return null;
+  const weapons: OwnedUpgrade[] = [];
+  const passives: OwnedUpgrade[] = [];
+  const seen = new Set<string>();
+  for (const it of raw.slice(0, 64)) {
+    if (typeof it !== 'object' || it === null) continue;
+    const { id, level } = it as { id?: unknown; level?: unknown };
+    if (!isUpgradeId(id) || seen.has(id)) continue;
+    if (typeof level !== 'number' || !Number.isInteger(level) || level < 1 || level > UPGRADES[id].max) continue;
+    const list = isWeapon(id) ? weapons : passives;
+    if (list.length >= (isWeapon(id) ? WEAPON_SLOTS : PASSIVE_SLOTS)) continue;
+    seen.add(id);
+    list.push({ id, level });
+  }
+  const order = (u: OwnedUpgrade): number => (UPGRADE_IDS as readonly string[]).indexOf(u.id);
+  return [...weapons, ...passives].sort((a, b) => order(a) - order(b));
+}
+
+/** 플레이어가 지금 가진 무기·패시브 (단계 1 이상) */
+export function upgradesOf(up: Partial<Record<UpgradeId, number>>): OwnedUpgrade[] {
+  return ownedUpgrades(Object.entries(up).map(([id, level]) => ({ id, level })))!;
+}
+
 /* ───────────── 필드 아이템 ───────────── */
 
 /** 순서가 곧 통신에서 쓰는 번호다. 중간에 끼워 넣지 말고 뒤에 추가할 것 */

@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { BoardId } from '@friday-deploy/shared';
+import { ownedUpgrades, type BoardId } from '@friday-deploy/shared';
 import type { LeaderboardStore, RunRecord } from './leaderboard';
 
 /**
@@ -54,6 +54,10 @@ const CREATE_TABLE = `CREATE TABLE IF NOT EXISTS leaderboard_runs (
 const HAS_MEMBER_KILLS = `SELECT 1 FROM pg_attribute
    WHERE attrelid = 'leaderboard_runs'::regclass AND attname = 'member_kills' AND NOT attisdropped`;
 const ADD_MEMBER_KILLS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_kills integer[]`;
+/** 개인별 아이템(무기·패시브와 단계). names 와 같은 순서의 배열의 배열을 JSON 으로 둔다. 나중에 추가한 열이라 예전 기록에는 NULL 이다 */
+const HAS_MEMBER_ITEMS = `SELECT 1 FROM pg_attribute
+   WHERE attrelid = 'leaderboard_runs'::regclass AND attname = 'member_items' AND NOT attisdropped`;
+const ADD_MEMBER_ITEMS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_items jsonb`;
 /** 상위 N 조회와 정리 쿼리가 그대로 이 인덱스를 따라 읽는다 */
 const HAS_INDEX = `SELECT to_regclass('leaderboard_runs_top') IS NOT NULL AS present`;
 const CREATE_INDEX = `CREATE INDEX IF NOT EXISTS leaderboard_runs_top
@@ -67,6 +71,8 @@ interface Row {
   season: number;
   names: string[];
   member_kills: number[] | null;
+  /** jsonb 는 풀어진 값으로 온다. DB 에 무엇이 들었든 모양을 다시 확인해서 쓴다 */
+  member_items: unknown;
   time: number;
   kills: number;
   level: number;
@@ -77,6 +83,12 @@ interface Row {
 
 /** PostgreSQL 의 text 는 NUL 문자를 담지 못한다. 이름은 위에서 정리되지만 저장 실패로 재시도만 반복하지 않게 방어한다 */
 const clean = (s: string): string => s.replaceAll('\u0000', '');
+
+/** DB 의 member_items 를 기록 모양으로. 이름 수와 맞는 배열의 배열일 때만 쓰고, 각 목록은 다시 걸러 낸다 */
+function itemsOf(raw: unknown, members: number): Pick<RunRecord, 'itemsBy'> {
+  if (!Array.isArray(raw) || raw.length !== members) return {};
+  return { itemsBy: raw.map((list) => ownedUpgrades(list) ?? []) };
+}
 
 export interface PostgresStoreOptions {
   /** DB 쪽 문장 시간 제한(ms). 기본 10초. 테스트에서 짧게 잡을 때만 바꾼다 */
@@ -120,7 +132,7 @@ class PostgresStore implements LeaderboardStore {
       const n = Math.max(0, Math.floor(limit));
       const res = await this.tx((client) =>
         client.query<Row>(
-          `SELECT id, board, season, names, member_kills, time, kills, level, paused_seconds, ended_at
+          `SELECT id, board, season, names, member_kills, member_items, time, kills, level, paused_seconds, ended_at
              FROM leaderboard_runs WHERE board = $1 AND season = $2
             ORDER BY ${ORDER} LIMIT $3`,
           [board, season, n],
@@ -133,6 +145,7 @@ class PostgresStore implements LeaderboardStore {
         names: r.names,
         // 이름과 개수가 맞을 때만 쓴다 (예전 기록은 NULL)
         ...(Array.isArray(r.member_kills) && r.member_kills.length === r.names.length ? { killsBy: r.member_kills } : {}),
+        ...itemsOf(r.member_items, r.names.length),
         time: r.time,
         kills: r.kills,
         level: r.level,
@@ -147,10 +160,10 @@ class PostgresStore implements LeaderboardStore {
       await this.ensureSchema();
       await this.tx((client) =>
         client.query(
-          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at, member_kills)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at, member_kills, member_items)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (id) DO NOTHING`,
-          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt, r.killsBy ?? null],
+          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt, r.killsBy ?? null, r.itemsBy ? JSON.stringify(r.itemsBy) : null],
         ),
       );
     });
@@ -208,10 +221,12 @@ class PostgresStore implements LeaderboardStore {
       // 나중에 더한 열과 인덱스는 "없을 때만" 만든다. ALTER TABLE 은 IF NOT EXISTS 가 붙어 있어도 테이블 전체를 막는
       // 잠금부터 잡고, CREATE INDEX 도 쓰기를 막는 잠금을 잡는다. 서버가 뜰 때마다 그러면, 마침 다른 연결이 테이블을
       // 쓰고 있을 때 서로를 기다리게 만든다. 평소(이미 다 있는 경우)에는 읽기 두 번으로 끝난다.
-      const column = await client.query(HAS_MEMBER_KILLS);
-      if (column.rowCount === 0) {
+      const missing: string[] = [];
+      if ((await client.query(HAS_MEMBER_KILLS)).rowCount === 0) missing.push(ADD_MEMBER_KILLS);
+      if ((await client.query(HAS_MEMBER_ITEMS)).rowCount === 0) missing.push(ADD_MEMBER_ITEMS);
+      if (missing.length > 0) {
         await client.query(`SET LOCAL lock_timeout = ${MIGRATE_LOCK_TIMEOUT_MS}`);
-        await client.query(ADD_MEMBER_KILLS);
+        for (const sql of missing) await client.query(sql);
       }
       const index = await client.query<{ present: boolean }>(HAS_INDEX);
       if (!index.rows[0]?.present) await client.query(CREATE_INDEX);
