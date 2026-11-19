@@ -11,6 +11,7 @@ import {
   PASSIVE_SLOTS,
   RELEASES,
   ROOM_CODE_LEN,
+  STAGE_TIME,
   UPGRADES,
   WEAPON_IDS,
   WEAPON_SLOTS,
@@ -29,6 +30,7 @@ import {
   type UnrankedReason,
   type UpgradeId,
 } from '@friday-deploy/shared';
+import { chestText } from './chest';
 import { Input } from './input';
 import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
@@ -288,10 +290,13 @@ const knownItems = new Set<number>();
 let lastRevives = 0;
 /** 직전의 스냅샷(패시브) 단계: 스냅샷을 골라서 부활이 늘어난 것은 백업을 주운 것으로 알리지 않는다 */
 let lastSnapshotLv = 0;
+/** 이번 판에서 30분(월요일 아침)을 이미 알렸는지 */
+let overtimeNoticed = false;
 function resetItemNotices(): void {
   knownItems.clear();
   lastRevives = 0;
   lastSnapshotLv = 0;
+  overtimeNoticed = false;
   window.clearTimeout(toastTimer);
   el.toast.classList.add('hidden');
 }
@@ -317,6 +322,11 @@ function noticeItems(s: Snapshot): void {
   if (knownItems.size > 64) for (const id of knownItems) if (!s.i.some((it) => it[0] === id)) knownItems.delete(id);
   // 미니맵을 꺼 둔 사람에게 "미니맵을 보세요"라고 하면 헷갈린다: 켜면 보인다고 알려준다
   if (fresh && me.alive && phase === 'playing') toast(`${FIELD_ITEMS[fresh].icon} ${ITEM_DROPPED[fresh]} · ${minimapOn ? '미니맵을 보세요' : '미니맵을 켜면 위치가 보여요'}`);
+  // 30분: 화면의 버그가 모두 사라지고 1분마다 월요일 아침(닿으면 바로 쓰러진다)이 온다. 그 순간 한 번 알린다 (다른 알림보다 먼저)
+  if (s.time >= STAGE_TIME && !overtimeNoticed && phase === 'playing') {
+    overtimeNoticed = true;
+    if (me.alive) toast('⏰ 월요일 아침이 왔다! 닿으면 끝이니 도망쳐!');
+  }
 }
 
 /** 아이템이 놓였을 때의 문구 (이름마다 조사가 달라서 통째로 적는다) */
@@ -324,6 +334,7 @@ const ITEM_DROPPED: Record<FieldItemKind, string> = {
   heal: '야근 피자가 떨어졌어요',
   levelup: 'LGTM 이 떨어졌어요',
   revive: '백업이 떨어졌어요!',
+  chest: '보물상자가 떨어졌어요! 닿으면 열려요',
 };
 
 let minimapOn = store.get('minimap') !== '0';
@@ -588,6 +599,10 @@ function onMessage(msg: ServerMsg): void {
       break;
     case 'levelup':
       showOffers(msg.offers, msg.timeout);
+      break;
+    case 'chest':
+      // 내가 연 보물상자에서 무엇이 올랐는지 (모양은 net.ts 가 확인했다). 강화 칸은 다음 스냅샷이 고쳐 그린다
+      if (phase === 'playing') toast(chestText(msg.items, msg.heal));
       break;
     case 'pause':
       if (msg.on) {

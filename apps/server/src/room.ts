@@ -456,6 +456,10 @@ export class Room {
         const conn = this.conns.get(ev.pid);
         const p = this.world.players.get(ev.pid);
         if (conn && p) this.send(conn, { t: 'levelup', offers: offersOf(p), timeout: OFFER_TIMEOUT });
+      } else if (ev.type === 'chest') {
+        // 보물상자: 연 사람에게만 무엇이 올랐는지 알려 준다 (끊겨 있으면 다음 스냅샷의 강화 단계로 알 수 있다)
+        const conn = this.conns.get(ev.pid);
+        if (conn) this.send(conn, { t: 'chest', items: ev.items, heal: ev.heal });
       } else if (ev.type === 'over') {
         this.finish();
         return true;

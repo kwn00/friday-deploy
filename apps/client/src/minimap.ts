@@ -1,9 +1,15 @@
-import { ENEMY_IDS, FIELD_ITEM_KINDS, VIEW_RADIUS, type Snapshot } from '@friday-deploy/shared';
+import { ENEMIES, ENEMY_IDS, FIELD_ITEM_KINDS, VIEW_RADIUS, type Snapshot } from '@friday-deploy/shared';
+
+/** 경험치 점의 색: 색 단계(0 파랑, 1 초록, 2 빨강)별 */
+const GEM_DOT = ['rgba(137,180,250,0.45)', 'rgba(166,227,161,0.45)', 'rgba(230,69,83,0.8)'] as const;
+/** 적 종류 번호 → 보스인지 */
+const IS_BOSS: readonly boolean[] = ENEMY_IDS.map((id) => ENEMIES[id].boss === true);
+const MONDAY = ENEMY_IDS.indexOf('monday');
 
 /**
  * 미니맵. 서버가 이미 보내준 정보(내 주변 VIEW_RADIUS 안 + 같은 방 플레이어)만 그린다.
  * 화면 밖에서 다가오는 적, 떨어진 회복 아이템, 멀어진 동료의 방향을 알려주는 용도.
- * 필드 아이템(피자·LGTM·백업)은 서버가 거리와 상관없이 보내 준다. 범위 밖이면 가장자리에 붙여 방향을 알려주고,
+ * 필드 아이템(피자·LGTM·백업·보물상자)은 서버가 거리와 상관없이 보내 준다. 범위 밖이면 가장자리에 붙여 방향을 알려주고,
  * 새로 놓인 것은 몇 초 동안 테두리가 퍼지며 눈에 띄게 한다.
  * 크기와 위치는 CSS 브레이크포인트가 정하고, 여기서는 그 크기에 맞춰 그리기만 한다.
  */
@@ -52,14 +58,26 @@ export class Minimap {
     ctx.lineWidth = Math.max(1, u >> 1);
     ctx.strokeRect(Math.round(c - (view.w / 2) * k) + 0.5, Math.round(c - (view.h / 2) * k) + 0.5, Math.round(view.w * k), Math.round(view.h * k));
 
-    for (const g of snap.g) dot(mx(g[1]), my(g[2]), Math.max(1, u >> 1), 'rgba(166,227,161,0.45)');
+    for (const g of snap.g) dot(mx(g[1]), my(g[2]), Math.max(1, u >> 1), GEM_DOT[g[3]] ?? GEM_DOT[0]);
 
+    // 적: 졸개는 작은 분홍 점, 보스는 큰 보라 네모. 월요일 아침은 붉은 네모가 깜빡이며 퍼지는 테두리를 두른다 (닿으면 끝이다)
+    const bosses: [number, number, boolean][] = [];
     for (const e of snap.e) {
-      if (ENEMY_IDS[e[1]] === 'legacy_code') {
-        dot(mx(e[2]), my(e[3]), u * 3 + 2, '#11111b');
-        dot(mx(e[2]), my(e[3]), u * 3, '#cba6f7');
+      if (IS_BOSS[e[1]]) bosses.push([mx(e[2]), my(e[3]), e[1] === MONDAY]);
+      else dot(mx(e[2]), my(e[3]), u, '#f38ba8');
+    }
+    for (const [x, y, monday] of bosses) {
+      if (monday) {
+        const grow = this.calm ? u * 3 : u * 2 + ((now % 600) / 600) * u * 4;
+        ctx.strokeStyle = '#e64553';
+        ctx.lineWidth = Math.max(1, u >> 1);
+        ctx.strokeRect(Math.round(x - grow) + 0.5, Math.round(y - grow) + 0.5, Math.round(grow * 2), Math.round(grow * 2));
+        dot(x, y, u * 3 + 2, '#11111b');
+        dot(x, y, u * 3, Math.floor(now / 200) % 2 && !this.calm ? '#11111b' : '#e64553');
+        dot(x, y, u, '#e64553');
       } else {
-        dot(mx(e[2]), my(e[3]), u, '#f38ba8');
+        dot(x, y, u * 3 + 2, '#11111b');
+        dot(x, y, u * 3, '#cba6f7');
       }
     }
 
@@ -96,7 +114,7 @@ export class Minimap {
       // 새로 놓인 것: 4초 동안 테두리가 퍼져 나간다 (동작 줄이기 설정에서는 고정된 테두리)
       if (age < 4000) {
         const grow = this.calm ? u * 4 : u * 3 + ((age % 1000) / 1000) * u * 5;
-        ctx.strokeStyle = kind === 'revive' ? '#89dceb' : kind === 'levelup' ? '#f9e2af' : '#a6e3a1';
+        ctx.strokeStyle = kind === 'revive' ? '#89dceb' : kind === 'levelup' ? '#f9e2af' : kind === 'chest' ? '#fab387' : '#a6e3a1';
         ctx.lineWidth = Math.max(1, u >> 1);
         ctx.strokeRect(Math.round(x - grow) + 0.5, Math.round(y - grow) + 0.5, Math.round(grow * 2), Math.round(grow * 2));
       }
@@ -112,6 +130,16 @@ export class Minimap {
         // LGTM: 노란 마름모
         this.diamond(x, y, u + 1, '#11111b');
         this.diamond(x, y, u, '#f9e2af');
+      } else if (kind === 'chest') {
+        // 보물상자: 갈색 상자에 금테와 자물쇠 (사라지지 않는다. 범위 밖이면 가장자리에서 방향을 알려준다)
+        const top = y - Math.round(u * 1.5);
+        ctx.fillStyle = '#11111b';
+        ctx.fillRect(x - u * 2 - 1, top - 1, u * 4 + 2, u * 3 + 2);
+        ctx.fillStyle = '#9a6a43';
+        ctx.fillRect(x - u * 2, top, u * 4, u * 3);
+        ctx.fillStyle = '#f9e2af';
+        ctx.fillRect(x - u * 2, top + u, u * 4, Math.max(1, u >> 1));
+        ctx.fillRect(x - (u >> 1), top + u, u, u);
       } else {
         // 백업: 하늘색 네모 (가장 드물다. 조금 크게)
         dot(x, y, u * 4 + 2, '#11111b');

@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -40,6 +40,11 @@ export const PING_INTERVAL_MS = 2000;
 
 /** 서버가 각 플레이어에게 보내주는 관심 영역 반경 (그 밖의 정보는 아예 전송하지 않는다) */
 export const VIEW_RADIUS = 420;
+/**
+ * 일반 적과 경험치는 이 반경 안의 것만 보낸다 (화면의 가장 먼 모서리 296px 바로 바깥까지). 적은 300 마리,
+ * 경험치는 400 개까지 쌓이므로 전송량을 줄이려고 미니맵용 넓은 반경(VIEW_RADIUS)은 보스와 회복 아이템 등에만 쓴다.
+ */
+export const ENEMY_VIEW_RADIUS = 304;
 
 export const PLAYER_RADIUS = 6;
 export const PLAYER_BASE_SPEED = 70;
@@ -72,9 +77,18 @@ export const OFFER_COUNT = 3;
 /** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. */
 export const OFFER_TIMEOUT = 20;
 
-export const MAX_ENEMIES_BASE = 140;
-export const MAX_ENEMIES_PER_EXTRA_PLAYER = 40;
-export const MAX_GEMS = 300;
+/**
+ * 적 수의 상한 (뱀서): 살아 있는 적이 300 이상이면 주기적인 스폰을 멈추고, 보스·이벤트는 500 까지만 나온다.
+ * 사람 수와 상관없이 같다 (무료 서버의 CPU). 함께 하면 웨이브의 최소 수와 한 번에 나오는 수만 늘어난다.
+ */
+export const MAX_ENEMIES_REGULAR = 300;
+export const MAX_ENEMIES_ALL = 500;
+/** 땅에 있을 수 있는 경험치 수 (뱀서 400). 넘으면 새 경험치는 빨간 경험치 하나에 모인다 */
+export const MAX_GEMS = 400;
+/** 땅에 남아 있을 수 있는 보물상자 수 (넘으면 가장 오래된 것이 사라진다) */
+export const MAX_CHESTS = 20;
+/** 한 대 맞은 뒤, 레벨업을 고른 뒤, 상자를 연 뒤 무적인 시간(초) (뱀서 Invulnerability Time 240ms) */
+export const INVULN_SECONDS = 0.24;
 /** 투사체·소환물(고양이) 수의 상한. 넘으면 새로 쏘지 않는다 (서버 CPU 와 전송량을 묶어 둔다) */
 export const MAX_SHOTS = 320;
 /** 피해를 주는 바닥 영역(웅덩이, 발자국) 수의 상한 */
@@ -89,8 +103,6 @@ export const MAX_FLASHES = 200;
  */
 export const HEAL_DROP_CHANCE = 0.03;
 export const HEAL_DROP_COOLDOWN = 25;
-/** 최대 체력 대비 회복량 */
-export const HEAL_FRACTION = 0.2;
 export const MAX_HEALS = 4;
 
 /**
