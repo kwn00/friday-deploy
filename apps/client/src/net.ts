@@ -10,6 +10,7 @@ import {
   type LeaderboardResponse,
   type ServerMsg,
 } from '@friday-deploy/shared';
+import { parseChest } from './chest';
 
 /**
  * 네트워크 계층. 클라이언트는 "입력 의도"만 보내고, 서버가 보내준 상태를 그리기만 한다.
@@ -56,6 +57,17 @@ const RESUME_TIMEOUT_MS = 8000;
 const RESUME_SESSION_TIMEOUT_MS = 4000;
 /** 연결이 죽었다고 클라이언트가 스스로 판단했을 때 onClose 에 넘기는 코드 (서버가 보내는 코드가 아니다) */
 export const CLOSE_TIMEOUT = 4900;
+
+/**
+ * 서버의 JSON 텍스트 메시지. 화면에 옮기는 값이 들어 있는 것(보물상자의 강화 목록)은 모양을 확인하고, 맞지 않으면 버린다 (null).
+ * 나머지는 받는 쪽(main.ts)이 쓰기 전에 필요한 만큼 확인한다.
+ */
+function parseText(raw: string): ServerMsg | null {
+  const m: unknown = JSON.parse(raw);
+  if (typeof m !== 'object' || m === null || Array.isArray(m)) return null;
+  if ((m as { t?: unknown }).t === 'chest') return parseChest(m);
+  return m as ServerMsg;
+}
 
 export class Net {
   private ws: WebSocket | null = null;
@@ -158,7 +170,8 @@ export class Net {
       this.lastRecv = this.quietSince = performance.now();
       try {
         // 스냅샷은 이진 프레임, 그 밖의 메시지는 JSON 텍스트
-        this.onMessage(typeof ev.data === 'string' ? (JSON.parse(ev.data) as ServerMsg) : decodeSnapshot(ev.data as ArrayBuffer));
+        const msg = typeof ev.data === 'string' ? parseText(ev.data) : decodeSnapshot(ev.data as ArrayBuffer);
+        if (msg) this.onMessage(msg);
       } catch {
         /* 형식이 맞지 않는 메시지는 버린다 */
       }

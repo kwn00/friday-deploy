@@ -1,11 +1,13 @@
 import {
   DT,
+  ENEMIES,
   ENEMY_IDS,
   FIELD_ITEM_KINDS,
   SHOT_KINDS,
   ZONE_KINDS,
   duckOffset,
   moveSpeedOf,
+  type EnemyId,
   type FieldItemKind,
   type RosterPlayer,
   type Snapshot,
@@ -40,7 +42,15 @@ const ITEM_FX: Record<FieldItemKind, { glow: string; spark: [string, string] }> 
   heal: { glow: '166,227,161', spark: ['#a6e3a1', '#eff1f5'] },
   levelup: { glow: '249,226,175', spark: ['#f9e2af', '#a6e3a1'] },
   revive: { glow: '137,220,235', spark: ['#89dceb', '#eff1f5'] },
+  chest: { glow: '249,226,175', spark: ['#f9e2af', '#fab387'] },
 };
+
+/** 경험치 색 단계(0 파랑, 1 초록, 2 빨강)의 반짝임 색 */
+const GEM_COLOR = ['#89b4fa', '#a6e3a1', '#e64553'] as const;
+/** 적 종류 번호 → 보스인지 (매 프레임 수백 마리를 보므로 미리 표로 만들어 둔다) */
+const IS_BOSS: readonly boolean[] = ENEMY_IDS.map((id) => ENEMIES[id].boss === true);
+/** 2단계 인증 방패 고리의 색: 방패 1개 파랑, 2개 초록, 3개 노랑 (뱀서 Laurel 과 같은 순서) */
+const SHIELD_COLOR = ['#89b4fa', '#a6e3a1', '#f9e2af'] as const;
 
 /** 머리 위 닉네임 색: 나 / 동료 / 쓰러진 사람 */
 const NAME_COLOR = { me: '#a6e3a1', mate: '#cdd6f4', down: '#7f849c' } as const;
@@ -70,6 +80,8 @@ interface LiveZone {
   from: number;
   /** 사라지는 재생 틱 */
   to: number;
+  /** 수명보다 일찍 없어질 때(날아간 커밋 발자국) 사라지는 재생 틱. 흐려지지 않고 그 순간 없어진다 */
+  gone?: number;
 }
 
 /** 기억해 두는 영역 수의 상한 (서버는 한 방에 최대 200개를 둔다. 화면이 멈춰 있는 동안 쌓이지 않게) */
@@ -224,6 +236,11 @@ export class Renderer {
       if (!kind || this.zones.has(z[0])) continue;
       this.zones.set(z[0], { id: z[0], kind, x: z[2], y: z[3], size: z[4], aux: z[5], from: snap.tick - 1, to: snap.tick + z[6] + 1 });
     }
+    // 일찍 없어진 영역 (멈췄을 때 날아간 커밋 발자국): 이 스냅샷이 화면에 나오기 시작할 때 지운다 (날아가는 커밋이 그때 나타난다)
+    for (const id of snap.zr) {
+      const z = this.zones.get(id);
+      if (z) z.gone = Math.min(z.gone ?? Infinity, snap.tick - 1);
+    }
     // 화면이 그려지지 않는 동안(탭이 가려짐 등)에도 끝없이 쌓이지 않게: 재생 버퍼보다 오래된 것, 그래도 많으면 오래된 것부터 버린다
     if (this.zones.size > MAX_LIVE_ZONES) {
       for (const [id, z] of this.zones) if (z.to < snap.tick - 40) this.zones.delete(id);
@@ -287,7 +304,7 @@ export class Renderer {
     const alive = this.indexOf(next).e;
     for (const e of prev.e) {
       if (alive.has(e[0]) || Math.hypot(e[2]! - vx, e[3]! - vy) > 280) continue;
-      const boss = ENEMY_IDS[e[1]!] === 'legacy_code';
+      const boss = IS_BOSS[e[1]!] === true;
       this.burst(e[2]!, e[3]!, boss ? 40 : 6, boss ? 90 : 50, ['#f38ba8', '#f9e2af']);
     }
     // 경험치가 플레이어에게 빨려 들어가 사라진 자리에 작은 반짝임 (시야 밖으로 나간 것은 제외: 닿을 만큼 가까웠던 것만)
@@ -295,7 +312,7 @@ export class Renderer {
       const gems = this.indexOf(next).g;
       for (const g of prev.g) {
         if (gems.has(g[0])) continue;
-        if (next.p.some((p) => p[4] && Math.hypot(g[1] - p[1], g[2] - p[2]) < 40)) this.burst(g[1], g[2], 2, 30, ['#a6e3a1', '#eff1f5'], 1, 0.12);
+        if (next.p.some((p) => p[4] && Math.hypot(g[1] - p[1], g[2] - p[2]) < 40)) this.burst(g[1], g[2], 2, 30, [GEM_COLOR[g[3]] ?? GEM_COLOR[0], '#eff1f5'], 1, 0.12);
       }
     }
     // 필드 아이템: 누군가 주워서 사라진 자리에 반짝임 (수명이 다해 사라진 것은 조용히 없어진다)
@@ -303,7 +320,9 @@ export class Renderer {
     for (const it of prev.i) {
       const kind = FIELD_ITEM_KINDS[it[1]];
       if (!kind || items.has(it[0]) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
-      this.burst(it[2], it[3], kind === 'heal' ? 14 : 24, kind === 'heal' ? 40 : 70, ITEM_FX[kind].spark, kind === 'heal' ? 2 : 3);
+      // 보물상자는 크게 터진다
+      const [n, speed] = kind === 'heal' ? [14, 40] : kind === 'chest' ? [44, 100] : [24, 70];
+      this.burst(it[2], it[3], n, speed, ITEM_FX[kind].spark, kind === 'heal' ? 2 : 3);
     }
     // 방금 되살아난 사람: 주변으로 퍼지는 반짝임 (무적 표시가 켜지는 순간)
     const before = this.indexOf(prev).p;
@@ -368,10 +387,10 @@ export class Renderer {
       this.drawAura(sx(ax), sy(ay), p[10] * S, now);
     }
 
-    // 경험치: 끌려오는 동안 서버가 위치를 옮기므로 다른 것들처럼 두 스냅샷 사이를 보간한다
+    // 경험치: 끌려오는 동안 서버가 위치를 옮기므로 다른 것들처럼 두 스냅샷 사이를 보간한다. 색은 담긴 양의 단계 (파랑 < 초록 < 빨강)
     for (const g of curr.g) {
       const q = was.g.get(g[0]);
-      blit(this.spr.commit, mix(q?.[1], g[1]), mix(q?.[2], g[2]) + Math.sin(now / 200 + g[0]) * 1.5);
+      blit(this.spr.gems[Math.min(2, Math.max(0, g[3]))]!, mix(q?.[1], g[1]), mix(q?.[2], g[2]) + Math.sin(now / 200 + g[0]) * 1.5);
     }
 
     // 필드 아이템 (화면 안에 들어온 것만 보인다. 멀리 있는 것은 미니맵이 알려준다)
@@ -382,6 +401,8 @@ export class Renderer {
       if (it[4] && !this.calm && Math.floor(now / 160) % 2 === 0) continue;
       const bob = this.calm ? 0 : Math.sin(now / 260 + it[0]) * 2;
       const pulse = this.calm ? 0.35 : 0.3 + 0.2 * Math.sin(now / 180 + it[0]);
+      // 보물상자: 금빛이 번지고 빛줄기가 솟는다 (보스가 남긴 것. 사라지지 않으니 찾아가서 닿으면 열린다)
+      if (kind === 'chest') this.drawChestGlow(sx(it[2]), sy(it[3]), S, now, it[0]);
       ctx.fillStyle = `rgba(${ITEM_FX[kind].glow},${pulse})`;
       ctx.fillRect(sx(it[2]) - 8 * S, sy(it[3]) + 6 * S, 16 * S, 2 * S);
       if (it[4] && this.calm) ctx.globalAlpha = 0.5;
@@ -397,9 +418,8 @@ export class Renderer {
       blit(this.spr.heal, h[1], h[2] + bob);
     }
 
-    for (const e of curr.e) {
-      const id = ENEMY_IDS[e[1]];
-      if (!id) continue;
+    /** 적 한 마리를 그릴 자리와 그림 (보간, 흔들림, 피격 번쩍임과 밀려남) */
+    const enemySpot = (e: Snapshot['e'][number], id: EnemyId): [number, number, Sprite] => {
       const p = was.e.get(e[0]);
       // 얼어 있으면 흔들리지도 않는다
       const frozen = e[5] === 1;
@@ -434,8 +454,27 @@ export class Renderer {
           }
         }
       }
-      blit(sprite, ex, ey);
+      return [ex, ey, sprite];
+    };
+    // 보스는 졸개 위에 그린다 (가려지지 않게). 그 밑에는 그림자와 보라 고리, 월요일 아침은 붉게 일렁이는 빛을 먼저 깐다
+    const bosses: [EnemyId, number, number, Sprite][] = [];
+    for (const e of curr.e) {
+      const id = ENEMY_IDS[e[1]];
+      if (!id || !IS_BOSS[e[1]]) continue;
+      const [ex, ey, sprite] = enemySpot(e, id);
+      bosses.push([id, ex, ey, sprite]);
+      this.drawBossGround(id, sx(ex), sy(ey), sprite.height, ex, ey, now);
     }
+    for (const e of curr.e) {
+      const id = ENEMY_IDS[e[1]];
+      if (!id || IS_BOSS[e[1]]) continue;
+      const [ex, ey, sprite] = enemySpot(e, id);
+      // 깨지는 테스트: 가끔 흐려졌다 돌아온다 (됐다 안 됐다 하는 테스트)
+      if (id === 'flaky_test' && !this.calm && hash(e[0], Math.floor(now / 300)) % 6 === 0) ctx.globalAlpha = 0.35;
+      blit(sprite, ex, ey);
+      ctx.globalAlpha = 1;
+    }
+    for (const [, ex, ey, sprite] of bosses) blit(sprite, ex, ey);
 
     // 러버덕은 서버가 위치를 보내지 않는다. 보간된 주인 위치와 보간된 서버 시간으로 직접 계산하므로
     // 다른 것들과 같은 프레임률로 매끄럽게 돈다. (판정은 서버가 같은 식으로 한다)
@@ -460,12 +499,14 @@ export class Renderer {
       const frame = moving && Math.floor(now / 140) % 2 ? 1 : 0;
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.fillRect(px - 5 * S, py + 6 * S, 10 * S, 2 * S);
-      // 방금 되살아나 피해를 받지 않는 동안에는 깜빡인다 (동작 줄이기 설정에서는 반투명으로만)
+      // 피해를 받지 않는 동안에는 깜빡인다: 되살아난 직후(p[7])는 느리게, 맞은 직후(p[12])는 빠르게.
+      // 동작 줄이기 설정에서는 반투명으로만
       if (p[7]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 90) % 2 ? 0.35 : 0.9;
+      else if (p[12]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 50) % 2 ? 0.2 : 1;
       blit(this.spr.dev[face < 0 ? 'l' : 'r'][frame], x, y);
       ctx.globalAlpha = 1;
-      // 2단계 인증: 피해를 받지 않는 동안 둘러싸는 옅은 방울
-      if (p[11]) this.drawGuard(px, py, S, now);
+      // 2단계 인증: 남은 방패 수만큼 색이 바뀌는 고리 (1 파랑, 2 초록, 3 노랑)
+      if (p[11] > 0) this.drawShield(px, py, S, p[11], now);
       // 머리 위 체력바 / 이름
       const bx = px - 7 * S;
       const by = py - 11 * S;
@@ -486,13 +527,17 @@ export class Renderer {
       if (!kind) continue;
       const p = was.s.get(s[0]);
       let spr = this.spr.shots[kind];
+      const x = mix(p?.[2], s[2]);
+      const y = mix(p?.[3], s[3]);
+      // 날아가는 커밋과 멀티스레드의 실: 날아온 쪽으로 꼬리를 그린다 (방향은 직전 위치에서)
+      if ((kind === 'drill' || kind === 'bomb') && p) this.drawTail(kind, sx(x), sy(y), s[2] - p[2]!, s[3] - p[3]!, S);
       if (kind === 'canary' && p) {
         // 나는 쪽을 바라본다 (좌우로 거의 안 움직일 때는 바라보던 쪽 그대로)
         const dx = s[2] - p[2]!;
         if (Math.abs(dx) > 0.05) this.facingLeft.set(s[0], dx < 0);
         if (this.facingLeft.get(s[0])) spr = this.spr.canaryL;
       }
-      blit(spr, mix(p?.[2], s[2]), mix(p?.[3], s[3]));
+      blit(spr, x, y);
     }
     if (this.facingLeft.size > 32) this.facingLeft.clear();
 
@@ -538,7 +583,7 @@ export class Renderer {
     let pools: Path2D | null = null;
     const steady: LiveZone[] = [];
     for (const z of this.zones.values()) {
-      if (z.to <= c.t) {
+      if (z.to <= c.t || (z.gone !== undefined && z.gone <= c.t)) {
         // 시간이 다 된 것은 버린다 (바닥 그리기가 매 프레임 먼저 돈다)
         if (ground) this.zones.delete(z.id);
         continue;
@@ -791,23 +836,121 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
-  /** 2단계 인증: 캐릭터를 감싸는 옅은 파란 방울과 작은 반짝임 (px, py 는 캐릭터 가운데, 기기 픽셀) */
-  private drawGuard(px: number, py: number, S: number, now: number): void {
+  /**
+   * 2단계 인증: 캐릭터를 감싸는 고리와 작은 반짝임 (px, py 는 캐릭터 가운데, 기기 픽셀).
+   * 색이 남은 방패 수를 알려준다 (1 파랑, 2 초록, 3 노랑). 아주 천천히 숨 쉬듯 (깜빡이지 않는다)
+   */
+  private drawShield(px: number, py: number, S: number, charges: number, now: number): void {
     const { ctx } = this;
-    // 아주 천천히 숨 쉬듯 (깜빡이지 않는다). 동작 줄이기 설정에서는 그대로
-    const r = (10 + (this.calm ? 0 : Math.sin(now / 400) * 0.5)) * S;
-    ctx.globalAlpha = 0.16;
-    ctx.fillStyle = '#89b4fa';
+    const color = SHIELD_COLOR[Math.min(SHIELD_COLOR.length, charges) - 1] ?? SHIELD_COLOR[0];
+    const r = (11 + (this.calm ? 0 : Math.sin(now / 400) * 0.5)) * S;
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = color;
     this.circle(px, py, r);
     ctx.fill();
-    ctx.globalAlpha = 0.8;
-    ctx.strokeStyle = '#b4befe';
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = color;
     ctx.lineWidth = S;
     ctx.stroke();
     ctx.globalAlpha = 0.9;
     ctx.fillStyle = '#eff1f5';
     ctx.fillRect(Math.round(px - r * 0.55), Math.round(py - r * 0.6), 2 * S, S);
     ctx.fillRect(Math.round(px - r * 0.65), Math.round(py - r * 0.6) + S, S, S);
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 보스 밑에 까는 것 (X, Y 는 보스 가운데, 기기 픽셀. h 는 그림의 높이, 기기 픽셀).
+   * 보통 보스: 발밑의 그림자와 보라 고리 (미니맵의 보스 표시와 같은 색).
+   * 월요일 아침: 붉게 일렁이는 빛과 흩날리는 불티 (검은 몸이 어두운 바닥에서도 바로 보이게. 닿으면 끝이다)
+   */
+  private drawBossGround(id: EnemyId, X: number, Y: number, h: number, wx: number, wy: number, now: number): void {
+    const { ctx } = this;
+    const S = this.scale;
+    const r = ENEMIES[id].r;
+    if (id === 'monday') {
+      const pulse = this.calm ? 0.5 : 0.5 + 0.5 * Math.sin(now / 140);
+      ctx.fillStyle = '#e64553';
+      ctx.globalAlpha = 0.12 + 0.1 * pulse;
+      this.circle(X, Y, (r * 2.6 + 3 * pulse) * S);
+      ctx.fill();
+      ctx.globalAlpha = 0.2 + 0.12 * pulse;
+      this.circle(X, Y, r * 1.6 * S);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      if (!this.calm && this.particles.length < MAX_PARTICLES) {
+        const a = Math.random() * Math.PI * 2;
+        this.particles.push({ x: wx + Math.cos(a) * r, y: wy + Math.sin(a) * r, vx: Math.cos(a) * 12, vy: -25 - Math.random() * 20, life: 0.3 + Math.random() * 0.3, color: Math.random() < 0.5 ? '#e64553' : '#fab387', size: 1 });
+      }
+      return;
+    }
+    const footY = Y + (h >> 1) - S;
+    ctx.beginPath();
+    ctx.ellipse(X, footY, r * 1.1 * S, r * 0.4 * S, 0, 0, Math.PI * 2);
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#11111b';
+    ctx.fill();
+    ctx.globalAlpha = this.calm ? 0.6 : 0.5 + 0.25 * Math.sin(now / 300);
+    ctx.strokeStyle = '#cba6f7';
+    ctx.lineWidth = S;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /** 보물상자: 금빛이 번지는 원과 위로 솟는 빛줄기, 떠오르는 반짝이 (X, Y 는 상자 가운데, 기기 픽셀) */
+  private drawChestGlow(X: number, Y: number, S: number, now: number, seed: number): void {
+    const { ctx } = this;
+    const pulse = this.calm ? 0.5 : 0.5 + 0.5 * Math.sin(now / 240 + seed);
+    ctx.fillStyle = '#f9e2af';
+    ctx.globalAlpha = 0.1 + 0.08 * pulse;
+    this.circle(X, Y, (17 + 2 * pulse) * S);
+    ctx.fill();
+    ctx.globalAlpha = 0.14 + 0.1 * pulse;
+    this.circle(X, Y, 11 * S);
+    ctx.fill();
+    // 빛줄기: 멀리서도 상자가 있는 곳을 알 수 있게
+    ctx.globalAlpha = 0.16 + 0.12 * pulse;
+    ctx.fillRect(X - 3 * S, Y - 40 * S, 6 * S, 36 * S);
+    ctx.globalAlpha = 0.3 + 0.2 * pulse;
+    ctx.fillRect(X - S, Y - 40 * S, 2 * S, 36 * S);
+    if (!this.calm) {
+      for (let i = 0; i < 3; i++) {
+        const t = (now / 900 + i / 3 + seed * 0.37) % 1;
+        const a = seed * 1.7 + i * 2.1;
+        const gx = Math.round(X + Math.cos(a) * 10 * S);
+        const gy = Math.round(Y - 4 * S - t * 20 * S);
+        ctx.globalAlpha = 0.9 * (1 - t);
+        ctx.fillRect(gx - S, gy, 3 * S, S);
+        ctx.fillRect(gx, gy - S, S, 3 * S);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 날아가는 것의 꼬리 (X, Y 는 머리, 기기 픽셀. dx, dy 는 한 틱 동안 움직인 거리, 월드 단위).
+   * 날아가는 커밋(drill): 초록 줄 (git 그래프의 선처럼). 멀티스레드(bomb): 바늘이 끌고 가는 가는 분홍 실
+   */
+  private drawTail(kind: 'drill' | 'bomb', X: number, Y: number, dx: number, dy: number, S: number): void {
+    const len = Math.hypot(dx, dy);
+    if (len < 0.5) return;
+    const { ctx } = this;
+    const L = (kind === 'drill' ? 12 : 16) * S;
+    const tx = X - (dx / len) * L;
+    const ty = Y - (dy / len) * L;
+    ctx.beginPath();
+    ctx.moveTo(X, Y);
+    ctx.lineTo(tx, ty);
+    if (kind === 'drill') {
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = '#a6e3a1';
+      ctx.lineWidth = 2 * S;
+    } else {
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = '#f38ba8';
+      ctx.lineWidth = S;
+    }
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
