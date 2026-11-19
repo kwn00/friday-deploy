@@ -19,9 +19,10 @@ import {
   SPECTATOR_LEASH,
   SPECTATOR_SPEED,
   HEAL_DROP_COOLDOWN,
-  HEAL_FRACTION,
+  HEAL_AMOUNT,
   PLAYER_BASE_SPEED,
   VIEW_RADIUS,
+  ENEMY_VIEW_RADIUS,
   addPlayer,
   buildSnapshot,
   createWorld,
@@ -172,13 +173,15 @@ test('normalizeRoomCode: 사람이 친 코드를 정리하고, 형식이 다르�
   }
 });
 
-test('sim: 회복 아이템은 보스에게서 반드시 나오고, 체력이 가득이면 줍지 않는다', () => {
+test('sim: 보스는 보물상자를 떨어뜨리고, 회복 아이템은 체력이 가득이면 줍지 않는다', () => {
   const w = createWorld(7);
   const p = addPlayer(w, 'a');
-  w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, spd: 1, xpMult: 1, frozen: 0, hit: false });
-  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, boom: 0, turn: 0 });
+  w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false, chest: [1, 0, 0, 100] });
+  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, turn: 0, w: 'console_log' });
   step(w, DT);
-  assert.equal(w.heals.length, 1, '보스 처치 → 회복 아이템');
+  assert.equal(w.items.filter((it) => it.kind === 'chest').length, 1, '보스 처치 → 보물상자');
+  assert.equal(w.heals.length, 0, '보스는 회복 아이템을 떨어뜨리지 않는다 (뱀서)');
+  w.heals.push({ id: 9010, x: p.x + 200, y: p.y });
   w.gems.length = 0; // 보스가 남긴 경험치를 주우면 레벨업 선택으로 월드가 멈추므로 치워 둔다
 
   // 체력이 가득한 채로 그 위에 서 있어도 사라지지 않는다
@@ -198,7 +201,7 @@ test('sim: 회복 아이템은 보스에게서 반드시 나오고, 체력이 �
   p.hp = 40;
   step(w, DT);
   assert.equal(w.heals.length, 0);
-  assert.equal(p.hp, 40 + Math.ceil(maxHpOf(p) * HEAL_FRACTION));
+  assert.equal(p.hp, 40 + HEAL_AMOUNT, '회복 아이템 하나에 30 (뱀서 Floor Chicken)');
   p.hp = 95;
   w.heals.push({ id: 9003, x: p.x, y: p.y });
   step(w, DT);
@@ -287,7 +290,7 @@ test('sim: 같은 방 동료는 멀리 있어도 스냅샷에 있고, 멀리 있
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
   b.x = a.x + VIEW_RADIUS * 3;
-  w.enemies.push({ id: 7001, type: 'bug', x: b.x + 10, y: b.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 7001, type: 'bug', x: b.x + 10, y: b.y, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
   w.heals.push({ id: 7002, x: b.x + 10, y: b.y });
   const snap = buildSnapshot(w, a.id)!;
   assert.deepEqual(snap.p.map((r) => r[0]).sort(), [a.id, b.id].sort());
@@ -296,7 +299,7 @@ test('sim: 같은 방 동료는 멀리 있어도 스냅샷에 있고, 멀리 있
   assert.equal(buildSnapshot(w, b.id)!.h.length, 1);
 });
 
-test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (좌표는 1/16 픽셀 이내)', () => {
+test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (좌표는 1/4 픽셀 이내)', () => {
   const w = createWorld(21);
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
@@ -335,7 +338,9 @@ test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (
         list.forEach((row: number[], n: number) => {
           row.forEach((v, c) => {
             const isCoord = k === 'e' || k === 's' || k === 'z' ? c === 2 || c === 3 : c === 1 || c === 2;
-            if (isCoord) assert.ok(Math.abs(got[n]![c]! - v) <= 1 / 16 + 0.02, `${k}[${n}][${c}] ${got[n]![c]} vs ${v}`);
+            // 적·투사체·경험치·회복 아이템은 1/4 픽셀, 영역은 1/16 픽셀, 플레이어는 f32
+            const tol = k === 'z' ? 1 / 16 : k === 'p' ? 0.001 : 1 / 8;
+            if (isCoord) assert.ok(Math.abs(got[n]![c]! - v) <= tol + 0.02, `${k}[${n}][${c}] ${got[n]![c]} vs ${v}`);
             else assert.equal(got[n]![c], v, `${k}[${n}][${c}]`);
           });
         });
@@ -378,15 +383,15 @@ test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시�
   const w = createWorld(31);
   const p = addPlayer(w, 'a');
   p.cd.console_log = 1e9; // 자동 공격이 끼어들지 않게
-  w.enemies.push({ id: 5001, type: 'merge_conflict', x: p.x + 150, y: p.y, hp: 80, spd: 1, xpMult: 1, frozen: 0, hit: false });
-  w.enemies.push({ id: 5002, type: 'bug', x: p.x - 150, y: p.y, hp: 10, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 5001, type: 'merge_conflict', x: p.x + 150, y: p.y, hp: 80, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
+  w.enemies.push({ id: 5002, type: 'bug', x: p.x - 150, y: p.y, hp: 10, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
   const row = (id: number): number[] | undefined => buildSnapshot(w, p.id)!.e.find((e) => e[0] === id);
   step(w, DT);
   assert.equal(row(5001)![4], 0);
   assert.equal(row(5001)!.length, 6, '[id, 종류, x, y, 피격, 얼음] 뿐: 체력은 없다');
 
   const tank = w.enemies.find((e) => e.id === 5001)!;
-  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, boom: 0, turn: 0 });
+  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, turn: 0, w: 'console_log' });
   step(w, DT);
   assert.equal(row(5001)![4], 1, '맞은 틱');
   assert.equal(row(5002)![4], 0, '안 맞은 적');
@@ -550,8 +555,8 @@ test('관전: 쓰러진 사람은 입력으로 시점만 움직인다. 묘비는
   assert.equal(b.camY, 0);
 
   // 시점 근처의 적은 보이고, 묘비 근처지만 시점에서 먼 적은 보이지 않는다
-  w.enemies.push({ id: 7001, type: 'bug', x: b.camX + VIEW_RADIUS - 20, y: 0, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
-  w.enemies.push({ id: 7002, type: 'bug', x: b.x - VIEW_RADIUS + 20, y: 0, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 7001, type: 'bug', x: b.camX + ENEMY_VIEW_RADIUS - 20, y: 0, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
+  w.enemies.push({ id: 7002, type: 'bug', x: b.x - ENEMY_VIEW_RADIUS + 20, y: 0, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
   const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, b.id)!));
   assert.ok(Math.abs(snap.view[0] - b.camX) < 0.11 && snap.view[1] === 0, `시점이 스냅샷에 실린다 (${snap.view})`);
   assert.equal(snap.me.alive, false);
@@ -638,7 +643,7 @@ test('관전으로 합류한 사람은 몸이 없다: 화면에 그려지지 않
   w.gems.push(gem);
   w.heals.push({ id: 8002, x: s.camX, y: s.camY + 3 });
   // 적은 관전자와 a 사이에 둔다: a 에게 가면 관전자에게서는 멀어진다
-  w.enemies.push({ id: 8003, type: 'bug', x: s.camX - 60, y: s.camY, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 8003, type: 'bug', x: s.camX - 60, y: s.camY, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
   const gemAt = gem.x;
   const toWatcher = 60;
   const toPlayer = Math.hypot(s.camX - 60 - a.x, s.camY - a.y);
@@ -748,14 +753,14 @@ test('필드 아이템: 피자는 체력이 닳았을 때만, LGTM 은 정확히
   };
   const has = (id: number): boolean => w.items.some((it) => it.id === id);
 
-  // 피자: 체력이 가득이면 남겨 두고, 닳았으면 20% 회복
+  // 피자: 체력이 가득이면 남겨 두고, 닳았으면 30 회복 (뱀서 Floor Chicken)
   const pizza = put('heal');
   quietStep(w);
   assert.ok(has(pizza), '체력이 가득이면 줍지 않는다');
   p.hp = 50;
   quietStep(w);
   assert.ok(!has(pizza));
-  assert.equal(p.hp, 70);
+  assert.equal(p.hp, 80);
   // 범위 밖의 것은 줍지 않는다
   const far = put('heal', PLAYER_BASE_PICKUP + 10);
   quietStep(w);
@@ -825,8 +830,8 @@ test('부활: 백업이 있으면 쓰러질 순간에 그 자리에서 되살아
   p.hp = 0.5;
   const swarm = (): void => {
     w.enemies.length = 0;
-    for (let i = 0; i < 12; i++) w.enemies.push({ id: 9200 + i, type: 'bug', x: p.x + Math.cos(i) * 3, y: p.y + Math.sin(i) * 3, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
-    w.enemies.push({ id: 9290, type: 'bug', x: p.x, y: p.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false }); // 정확히 겹친 적
+    for (let i = 0; i < 12; i++) w.enemies.push({ id: 9200 + i, type: 'bug', x: p.x + Math.cos(i) * 3, y: p.y + Math.sin(i) * 3, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
+    w.enemies.push({ id: 9290, type: 'bug', x: p.x, y: p.y, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false }); // 정확히 겹친 적
   };
   swarm();
   w.shots.length = 0;
@@ -873,7 +878,7 @@ test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 
   b.y = -4000;
   w.items.push({ id: 9301, kind: 'levelup', x: 5000.3, y: -1234.5, ttl: FIELD_ITEM_TTL });
   w.items.push({ id: 9302, kind: 'revive', x: -700, y: 650, ttl: FIELD_ITEM_FADE + 0.2 });
-  w.enemies.push({ id: 9303, type: 'bug', x: 5000, y: -1234, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false });
+  w.enemies.push({ id: 9303, type: 'bug', x: 5000, y: -1234, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
   for (const viewer of [a, b]) {
     const raw = buildSnapshot(w, viewer.id)!;
     const snap = decodeSnapshot(encodeSnapshot(raw));
@@ -902,7 +907,7 @@ test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 
 
 /* ───────────── 공격 범위 강화 (듀얼 모니터) ───────────── */
 
-test('듀얼 모니터: 공격 범위가 한 단계에 10% 씩 커지고, 더 멀리 있는 적을 겨누고 탄이 더 멀리 날아간다', () => {
+test('듀얼 모니터: 공격 범위(크기)가 한 단계에 10% 씩 커진다. 겨누는 거리와 탄이 날아가는 거리는 그대로다 (뱀서 Area)', () => {
   assert.equal(areaMultOf({ up: {} }), 1);
   assert.ok(Math.abs(areaMultOf({ up: { dual_monitor: 5 } }) - 1.5) < 1e-9);
   assert.ok(Math.abs(areaMultOf({ up: { dual_monitor: 99 } }) - 1.5) < 1e-9, '최대 단계를 넘는 값이 와도 최대로 친다');
@@ -913,7 +918,7 @@ test('듀얼 모니터: 공격 범위가 한 단계에 10% 씩 커지고, 더 �
     p.xpNext = 1e9;
     w.itemCd = 1e9;
     if (level > 0) p.up.dual_monitor = level;
-    const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, spd: 1, xpMult: 1, frozen: 0, hit: false };
+    const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false };
     for (let i = 0; i < 20 * 4; i++) {
       p.hp = 1e9;
       // 스폰된 다른 적은 치우고 표적만 제자리에 둔다
@@ -928,8 +933,8 @@ test('듀얼 모니터: 공격 범위가 한 단계에 10% 씩 커지고, 더 �
   };
   assert.equal(hits(0, 190), true, '기본 조준 거리(200) 안');
   assert.equal(hits(0, 225), false, '기본 조준 거리 밖은 겨누지 않는다');
-  assert.equal(hits(5, 290), true, '다섯 단계면 300 까지 겨누고, 탄도 거기까지 닿는다');
-  assert.equal(hits(5, 330), false);
+  assert.equal(hits(5, 225), false, '듀얼 모니터로 겨누는 거리가 늘지 않는다');
+  assert.ok(Math.abs(effectiveStats({ up: { console_log: 1, dual_monitor: 5 } }, 'console_log').area - 4 * 1.5) < 1e-9, '탄의 크기는 커진다');
 });
 
 test('입력 반영 틱 수: 같은 입력으로 움직인 틱을 세고, 입력이 오면 다시 센다. 움직이지 못하는 동안에는 세지 않는다', () => {
@@ -963,6 +968,7 @@ test('입력 반영 틱 수: 같은 입력으로 움직인 틱을 세고, 입력
 test('틱 도중에 도착한 입력: 도착한 때부터 적용한다. 누른 시간만큼만 움직이고, 한 틱에 가는 거리는 늘지 않는다', () => {
   const w = createWorld(22);
   const p = addPlayer(w, 'a');
+  p.xpNext = 1e9; // 레벨업 선택으로 월드가 멈추지 않게 (이동만 본다)
   const tick = (): void => {
     p.hp = 1e9;
     step(w, DT);

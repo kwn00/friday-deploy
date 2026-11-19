@@ -12,9 +12,16 @@ import { DT } from './constants';
 import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 5;
+const VERSION = 6;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
+/**
+ * 적·투사체·경험치·회복 아이템의 좌표: 1/4 픽셀, x 와 y 를 12비트씩 3바이트에 담는다 (±512 픽셀).
+ * 적이 300 마리까지 나와서 한 마리에 1바이트씩 아낀다. 이것들은 모두 관심 영역(420) 안에 있다.
+ */
+const Q12 = 4;
+const pack12 = (v: number): number => Math.max(-2048, Math.min(2047, Math.round(v * Q12))) & 0xfff;
+const unpack12 = (u: number): number => ((u & 0x800 ? u - 0x1000 : u) / Q12);
 
 class Writer {
   private buf = new Uint8Array(4096);
@@ -41,6 +48,15 @@ class Writer {
     this.need(4);
     this.view.setFloat32(this.at, v, true);
     this.at += 4;
+  }
+  /** 기준점에서의 상대 좌표 두 개 (1/4 픽셀, 12비트씩) */
+  xy12(dx: number, dy: number): void {
+    this.need(3);
+    const a = pack12(dx);
+    const b = pack12(dy);
+    this.buf[this.at++] = a & 0xff;
+    this.buf[this.at++] = (a >> 8) | ((b & 0xf) << 4);
+    this.buf[this.at++] = b >> 4;
   }
   /** 음이 아닌 정수 (LEB128). 작은 값은 1바이트. */
   varuint(v: number): void {
@@ -85,6 +101,13 @@ class Reader {
     const v = this.view.getFloat32(this.at, true);
     this.at += 4;
     return v;
+  }
+  xy12(): [number, number] {
+    this.need(3);
+    const b0 = this.buf[this.at++]!;
+    const b1 = this.buf[this.at++]!;
+    const b2 = this.buf[this.at++]!;
+    return [unpack12(b0 | ((b1 & 0xf) << 8)), unpack12((b1 >> 4) | (b2 << 4))];
   }
   varuint(): number {
     let v = 0;
@@ -140,12 +163,13 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.varuint(p[0]);
     w.f32(p[1]);
     w.f32(p[2]);
-    // 방향(1) · 생존(2) · 러버덕 수(4,8,16) · 되살아난 직후 무적(32) · 2단계 인증 무적(64)
-    w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((Math.min(7, p[6]) & 7) << 2) | (p[7] ? 32 : 0) | (p[11] ? 64 : 0));
+    // 방향(1) · 생존(2) · 러버덕 수(4,8,16) · 되살아난 직후 무적(32) · 맞은 직후 무적(64)
+    w.u8((p[3] < 0 ? 1 : 0) | (p[4] ? 2 : 0) | ((Math.min(7, p[6]) & 7) << 2) | (p[7] ? 32 : 0) | (p[12] ? 64 : 0));
     w.u8(Math.max(0, Math.min(100, p[5])));
     w.u8(clampByte(p[8]));
     w.u8(clampByte(p[9]));
     w.u8(clampByte(p[10]));
+    w.u8(clampByte(p[11]));
   }
 
   const rel = (v: number, o: number): number => Math.round((v - o) * Q);
@@ -156,8 +180,7 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     prev = e[0];
     // 종류(하위 6비트) + 얼어 있음(0x40) + 피격 표시(0x80): 표시를 위해 바이트를 더 쓰지 않는다
     w.u8((e[1] & 0x3f) | (e[5] ? 0x40 : 0) | (e[4] ? 0x80 : 0));
-    w.i16(rel(e[2], ox));
-    w.i16(rel(e[3], oy));
+    w.xy12(e[2] - ox, e[3] - oy);
   }
   prev = 0;
   w.varuint(s.s.length);
@@ -165,8 +188,7 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.varint(sh[0] - prev);
     prev = sh[0];
     w.u8(sh[1]);
-    w.i16(rel(sh[2], ox));
-    w.i16(rel(sh[3], oy));
+    w.xy12(sh[2] - ox, sh[3] - oy);
   }
   prev = 0;
   w.varuint(s.z.length);
@@ -180,15 +202,29 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.u8(clampByte(z[5]));
     w.u8(clampByte(z[6]));
   }
-  for (const list of [s.g, s.h]) {
+  prev = 0;
+  w.varuint(s.zr.length);
+  for (const id of s.zr) {
+    w.varint(id - prev);
+    prev = id;
+  }
+  // 경험치는 색 단계별로 묶어 보낸다 (단계마다 개수만 더 실으면 되므로 경험치 하나당 바이트가 늘지 않는다)
+  for (let tier = 0; tier < 3; tier++) {
+    const list = s.g.filter((g) => g[3] === tier);
     prev = 0;
     w.varuint(list.length);
     for (const g of list) {
       w.varint(g[0] - prev);
       prev = g[0];
-      w.i16(rel(g[1], ox));
-      w.i16(rel(g[2], oy));
+      w.xy12(g[1] - ox, g[2] - oy);
     }
+  }
+  prev = 0;
+  w.varuint(s.h.length);
+  for (const h of s.h) {
+    w.varint(h[0] - prev);
+    prev = h[0];
+    w.xy12(h[1] - ox, h[2] - oy);
   }
   // 필드 아이템: 멀리 있을 수 있어 플레이어처럼 절대 좌표로 보낸다 (몇 개 안 된다)
   prev = 0;
@@ -240,7 +276,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   };
   const abs = (o: number): number => o + r.i16() / Q;
 
-  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], ack, ackTicks, ackPhase, me, p: [], e: [], s: [], z: [], g: [], h: [], i: [] };
+  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], ack, ackTicks, ackPhase, me, p: [], e: [], s: [], z: [], zr: [], g: [], h: [], i: [] };
   const players = r.u8();
   for (let i = 0; i < players; i++) {
     const id = r.varuint();
@@ -248,20 +284,22 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
     const y = r.f32();
     const bits = r.u8();
     const hp = r.u8();
-    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, hp, (bits >> 2) & 7, bits & 32 ? 1 : 0, r.u8(), r.u8(), r.u8(), bits & 64 ? 1 : 0]);
+    snap.p.push([id, x, y, bits & 1 ? -1 : 1, bits & 2 ? 1 : 0, hp, (bits >> 2) & 7, bits & 32 ? 1 : 0, r.u8(), r.u8(), r.u8(), Math.min(3, r.u8()), bits & 64 ? 1 : 0]);
   }
   let id = 0;
   for (let i = count(); i > 0; i--) {
     id += r.varint();
     const type = r.u8();
     if ((type & 0x3f) >= ENEMY_IDS.length) throw new RangeError('unknown enemy type');
-    snap.e.push([id, type & 0x3f, abs(ox), abs(oy), type >> 7, (type >> 6) & 1]);
+    const [dx, dy] = r.xy12();
+    snap.e.push([id, type & 0x3f, ox + dx, oy + dy, type >> 7, (type >> 6) & 1]);
   }
   id = 0;
   for (let i = count(); i > 0; i--) {
     id += r.varint();
     const kind = r.u8();
-    snap.s.push([id, kind, abs(ox), abs(oy)]);
+    const [dx, dy] = r.xy12();
+    snap.s.push([id, kind, ox + dx, oy + dy]);
   }
   id = 0;
   for (let i = count(); i > 0; i--) {
@@ -274,12 +312,24 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
     const aux = r.u8();
     snap.z.push([id, kind, x, y, size, aux, r.u8()]);
   }
-  for (const list of [snap.g, snap.h]) {
+  id = 0;
+  for (let i = count(); i > 0; i--) {
+    id += r.varint();
+    snap.zr.push(id);
+  }
+  for (let tier = 0; tier < 3; tier++) {
     id = 0;
     for (let i = count(); i > 0; i--) {
       id += r.varint();
-      list.push([id, abs(ox), abs(oy)]);
+      const [dx, dy] = r.xy12();
+      snap.g.push([id, ox + dx, oy + dy, tier]);
     }
+  }
+  id = 0;
+  for (let i = count(); i > 0; i--) {
+    id += r.varint();
+    const [dx, dy] = r.xy12();
+    snap.h.push([id, ox + dx, oy + dy]);
   }
   id = 0;
   for (let i = r.u8(); i > 0; i--) {

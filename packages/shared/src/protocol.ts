@@ -117,11 +117,12 @@ export interface Snapshot {
   /**
    * 같은 방의 플레이어. 거리와 상관없이 전부 포함 (아군 위치는 비밀이 아니다).
    * [id, x, y, face, alive(0|1), hp 비율(0..100), 돌고 있는 러버덕 수, 되살아난 직후 무적(0|1),
-   *  러버덕 반경(px), 러버덕 각속도(×10 rad/s), 방화벽 반경(px, 없으면 0), 2단계 인증 무적(0|1)].
+   *  러버덕 반경(px), 러버덕 각속도(×10 rad/s), 방화벽 반경(px, 없으면 0), 2단계 인증 방패 수(0~3),
+   *  맞은 직후 무적(0|1: 깜빡여 그린다)].
    * alive 가 0 이면 그 자리에 묘비가 있다. 관전으로 합류해 몸이 없는 사람은 들어 있지 않다 (나 자신이라도).
    * 러버덕은 서버가 위치를 보내지 않는다: 클라이언트가 같은 반경·각속도·시간으로 같은 자리를 계산해 매끄럽게 그린다.
    */
-  p: [number, number, number, number, number, number, number, number, number, number, number, number][];
+  p: [number, number, number, number, number, number, number, number, number, number, number, number, number][];
   /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1), 얼어 있는지(0|1)] */
   e: [number, number, number, number, number, number][];
   /** 투사체·소환물 [id, 종류 번호(SHOT_KINDS 의 순서), x, y] */
@@ -132,8 +133,10 @@ export interface Snapshot {
    * 영역은 생길 때 한 번만 보낸다 (전송량을 아끼려고). 클라이언트가 남는 틱 수만큼 그린다.
    */
   z: [number, number, number, number, number, number, number][];
-  /** [id, x, y] */
-  g: [number, number, number][];
+  /** 수명보다 일찍 없어진 영역의 id (멈췄을 때 날아간 커밋 히스토리). 클라이언트는 그리던 것을 지운다 */
+  zr: number[];
+  /** 경험치 [id, x, y, 색 단계(0 파랑: 2 이하, 1 초록: 9 이하, 2 빨강)] */
+  g: [number, number, number, number][];
   /** 회복 아이템 [id, x, y] */
   h: [number, number, number][];
   /**
@@ -168,6 +171,8 @@ export type ServerMsg =
   /** 솔로 일시정지 상태가 바뀔 때마다 서버가 알려준다. max: 자동 재개까지 남은 최대 시간(초) */
   | { t: 'pause'; on: boolean; max: number }
   | { t: 'levelup'; offers: Offer[]; timeout: number }
+  /** 보물상자를 열었다: 한 단계씩 오른 것들 (같은 것이 여러 번 있을 수 있다)과, 올릴 것이 없어 대신 찬 체력 */
+  | { t: 'chest'; items: UpgradeId[]; heal: number }
   /** place: 이번 판이 순위표에 올랐을 때의 순위 (오르지 못했으면 없음) */
   | { t: 'over'; result: RunResult; sig: string; place?: { board: BoardId; rank: number }; unranked?: UnrankedReason }
   | { t: 'pong'; ts: number }
