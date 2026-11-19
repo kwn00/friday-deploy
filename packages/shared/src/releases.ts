@@ -21,6 +21,12 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.1.1',
+    date: '2026-11-19',
+    title: '누르자마자 움직여요',
+    items: ['캐릭터가 누르는 즉시 움직여요. 한 박자 늦게 따라오던 것을 고쳤어요.', '손을 떼면 그 자리에 바로 서요.'],
+  },
+  {
     version: '0.1.0',
     date: '2026-11-19',
     title: '무기 23종, 패시브 15종',
