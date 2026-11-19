@@ -557,7 +557,12 @@ test('관전: 쓰러진 사람은 입력으로 시점만 움직인다. 묘비는
   // 시점 근처의 적은 보이고, 묘비 근처지만 시점에서 먼 적은 보이지 않는다
   w.enemies.push({ id: 7001, type: 'bug', x: b.camX + ENEMY_VIEW_RADIUS - 20, y: 0, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
   w.enemies.push({ id: 7002, type: 'bug', x: b.x - ENEMY_VIEW_RADIUS + 20, y: 0, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
+  // 경험치도 시점을 따른다
+  // 7102 는 묘비에서는 304 안이지만 시점에서는 304 와 420 사이다
+  w.gems.push({ id: 7101, x: b.camX + ENEMY_VIEW_RADIUS - 20, y: 0, v: 1 }, { id: 7102, x: b.camX - ENEMY_VIEW_RADIUS - 40, y: 0, v: 1 });
+  assert.ok(Math.abs(b.camX - ENEMY_VIEW_RADIUS - 40 - b.x) < ENEMY_VIEW_RADIUS);
   const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, b.id)!));
+  assert.deepEqual(snap.g.map((g) => g[0]), [7101], '관전 중에는 경험치도 시점 주변 것만');
   assert.ok(Math.abs(snap.view[0] - b.camX) < 0.11 && snap.view[1] === 0, `시점이 스냅샷에 실린다 (${snap.view})`);
   assert.equal(snap.me.alive, false);
   assert.deepEqual(snap.e.map((e) => e[0]), [7001]);
@@ -578,9 +583,28 @@ test('스냅샷: 경험치는 일반 적처럼 화면 바로 바깥(ENEMY_VIEW_R
   w.gems.push({ id: 8002, x: 0, y: -(ENEMY_VIEW_RADIUS + 5), v: 1 });
   w.gems.push({ id: 8003, x: -(ENEMY_VIEW_RADIUS - 5), y: 0, v: 50 });
   w.heals.push({ id: 8101, x: 0, y: VIEW_RADIUS - 5 });
-  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, a.id)!));
-  assert.deepEqual(snap.g.map((g) => [g[0], g[3]]), [[8001, 0], [8003, 2]], '304 밖의 경험치는 싣지 않고, 실은 것은 색 단계 순서');
+  const far = ENEMY_VIEW_RADIUS + 40; // 304 와 420 사이
+  w.enemies.push({ id: 8201, type: 'boss_bug', x: far, y: 0, hp: 1e9, spd: 0, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
+  w.enemies.push({ id: 8202, type: 'bug', x: -far, y: 0, hp: 1e9, spd: 0, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
+  const raw = buildSnapshot(w, a.id)!;
+  // 이진 스냅샷은 색 단계별로 묶어 보낸다. 서버의 목록도 같은 순서여야 풀었을 때와 같다
+  assert.deepEqual(raw.g.map((g) => g[0]), [8001, 8003]);
+  const snap = decodeSnapshot(encodeSnapshot(raw));
+  assert.deepEqual(snap.g.map((g) => [g[0], g[3]]), [[8001, 0], [8003, 2]], '304 밖의 경험치는 싣지 않는다');
   assert.deepEqual(snap.h.map((h) => h[0]), [8101]);
+  assert.deepEqual(snap.e.map((e) => e[0]), [8201], '304 와 420 사이: 보스는 보내고 일반 적은 보내지 않는다');
+});
+
+test('스냅샷: 색 단계가 섞여 쌓여 있어도 서버의 경험치 목록은 색 단계 순서다 (풀었을 때와 같은 순서)', () => {
+  const w = createWorld(34);
+  const a = addPlayer(w, 'a');
+  a.xpNext = 1e9;
+  a.x = a.y = 0;
+  // 빨강, 파랑, 초록, 파랑 순서로 쌓는다
+  w.gems.push({ id: 8301, x: 100, y: 0, v: 50 }, { id: 8302, x: 110, y: 0, v: 1 }, { id: 8303, x: 120, y: 0, v: 5 }, { id: 8304, x: 130, y: 0, v: 2 });
+  const raw = buildSnapshot(w, a.id)!;
+  assert.deepEqual(raw.g.map((g) => [g[0], g[3]]), [[8302, 0], [8304, 0], [8303, 1], [8301, 2]]);
+  assert.deepEqual(decodeSnapshot(encodeSnapshot(raw)).g.map((g) => g[0]), raw.g.map((g) => g[0]));
 });
 
 test('관전: 시점은 살아 있는 동료에게서 정해진 거리보다 멀어질 수 없고, 동료가 움직이면 따라 끌려간다', () => {

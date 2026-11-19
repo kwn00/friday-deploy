@@ -1203,7 +1203,7 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
   // 넘친 경험치를 모으는 것은 처음부터 빨강이다
   const tierOf = (g: Gem): 0 | 1 | 2 => (g.big ? 2 : gemTier(g.v));
   // 경험치는 화면 바로 바깥(ENEMY_VIEW_RADIUS)까지만 보낸다: 400 개까지 쌓여 스냅샷에서 가장 큰 몫이다.
-  // 끌려오기 전에는 움직이지 않으므로, 화면에 들어올 때 갑자기 나타나 보이지 않는다
+  // 일반 적과 같은 범위라, 화면이 스냅샷 중심보다 앞서 갈 때(움직이는 중) 화면 가장자리 몇 픽셀에서 늦게 보일 수 있다
   const gems: Gem[] = [];
   for (const g of world.gems) if ((g.x - cx) ** 2 + (g.y - cy) ** 2 <= ev2) gems.push(g);
   for (let tier = 0; tier < 3; tier++) {
