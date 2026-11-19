@@ -317,12 +317,16 @@ test('codec: 스냅샷을 이진으로 보냈다가 풀면 같은 내용이다 (
     if (i % 7 !== 0) continue;
     for (const pid of [a.id, b.id]) {
       const snap = buildSnapshot(w, pid)!;
+      // 입력 번호와 도착한 때는 방이 채운다: 큰 번호도 그대로 오가야 한다
+      snap.ack = i * 1_000_003;
+      snap.ackPhase = i % 256;
       const bin = encodeSnapshot(snap);
       const back = decodeSnapshot(bin);
       jsonBytes += JSON.stringify(snap).length;
       binBytes += bin.length;
       assert.equal(back.tick, snap.tick);
       assert.equal(back.paused, snap.paused);
+      assert.deepEqual([back.ack, back.ackTicks, back.ackPhase], [snap.ack, snap.ackTicks, snap.ackPhase]);
       assert.deepEqual(back.me, snap.me);
       assert.equal(back.p.length, snap.p.length);
       for (const [k, list] of [['e', snap.e], ['s', snap.s], ['z', snap.z], ['g', snap.g], ['h', snap.h], ['p', snap.p]] as const) {
@@ -926,4 +930,84 @@ test('듀얼 모니터: 공격 범위가 한 단계에 10% 씩 커지고, 더 �
   assert.equal(hits(0, 225), false, '기본 조준 거리 밖은 겨누지 않는다');
   assert.equal(hits(5, 290), true, '다섯 단계면 300 까지 겨누고, 탄도 거기까지 닿는다');
   assert.equal(hits(5, 330), false);
+});
+
+test('입력 반영 틱 수: 같은 입력으로 움직인 틱을 세고, 입력이 오면 다시 센다. 움직이지 못하는 동안에는 세지 않는다', () => {
+  const w = createWorld(21);
+  const p = addPlayer(w, 'a');
+  const tick = (): void => {
+    p.hp = 1e9;
+    step(w, DT);
+  };
+  setInput(w, p.id, 1, 0);
+  for (let i = 0; i < 3; i++) tick();
+  assert.equal(buildSnapshot(w, p.id)!.ackTicks, 3);
+  // 같은 방향을 다시 보내도 새 입력이다: 클라이언트는 입력 번호마다 따로 센다
+  setInput(w, p.id, 1, 0);
+  assert.equal(buildSnapshot(w, p.id)!.ackTicks, 0);
+  tick();
+  assert.equal(buildSnapshot(w, p.id)!.ackTicks, 1);
+  // 선택지를 고르는 동안에는 서버가 캐릭터를 세워 둔다: 그동안은 세지 않고, 위치도 그대로다
+  const x = p.x;
+  p.offers = ['coffee'];
+  for (let i = 0; i < 5; i++) tick();
+  assert.equal(buildSnapshot(w, p.id)!.ackTicks, 1);
+  assert.equal(p.x, x);
+  p.offers = null;
+  for (let i = 0; i < 400; i++) tick();
+  assert.equal(buildSnapshot(w, p.id)!.ackTicks, 255, '255 에서 멈춘다 (한 바이트)');
+  // 화면을 위한 값일 뿐이다: 위치는 입력과 틱으로만 정해진다
+  assert.ok(Math.abs(p.x - (x + 400 * PLAYER_BASE_SPEED * DT)) < 1e-6);
+});
+
+test('틱 도중에 도착한 입력: 도착한 때부터 적용한다. 누른 시간만큼만 움직이고, 한 틱에 가는 거리는 늘지 않는다', () => {
+  const w = createWorld(22);
+  const p = addPlayer(w, 'a');
+  const tick = (): void => {
+    p.hp = 1e9;
+    step(w, DT);
+  };
+  const per = PLAYER_BASE_SPEED * DT;
+  // 틱의 40% 지점에서 누르면 그 틱에는 나머지 60% 만큼만 간다
+  let x = p.x;
+  setInput(w, p.id, 1, 0, 0.4);
+  tick();
+  assert.ok(Math.abs(p.x - x - per * 0.6) < 1e-9);
+  // 다음 틱부터는 한 틱을 다 간다
+  tick();
+  assert.ok(Math.abs(p.x - x - per * 1.6) < 1e-9);
+  // 틱의 25% 지점에서 떼면 그 틱에는 25% 만큼만 더 간다: 누르고 있던 시간은 0.6 + 1 + 0.25 틱
+  setInput(w, p.id, 0, 0, 0.25);
+  tick();
+  tick();
+  assert.ok(Math.abs(p.x - x - per * 1.85) < 1e-9);
+  // 한 틱 안에서 방향을 여러 번 바꿔도 각 구간의 길이만큼씩만 간다. 순서가 뒤집힌 시각은 앞으로 당겨지지 않는다
+  x = p.x;
+  const y = p.y;
+  setInput(w, p.id, 1, 0, 0);
+  setInput(w, p.id, 0, 1, 0.5);
+  setInput(w, p.id, -1, 0, 0.2); // 0.5 보다 앞이라고 주장해도 0.5 부터다
+  tick();
+  assert.ok(Math.abs(p.x - x - per * (0.5 - 0.5)) < 1e-9 && Math.abs(p.y - y) < 1e-9);
+  // 어떤 조합이어도 한 틱에 기본 속도보다 멀리 가지 못한다
+  for (let i = 0; i < 200; i++) {
+    const bx = p.x;
+    const by = p.y;
+    for (let k = 0; k < 5; k++) setInput(w, p.id, Math.cos(i * k), Math.sin(i + k), ((i * 7 + k * 13) % 10) / 9);
+    tick();
+    assert.ok(Math.hypot(p.x - bx, p.y - by) <= per * 1.0001);
+  }
+  // 엉뚱한 값은 0 으로 본다 (틱의 처음부터)
+  setInput(w, p.id, 0, 0);
+  tick();
+  x = p.x;
+  setInput(w, p.id, 1, 0, Number.NaN);
+  tick();
+  assert.ok(Math.abs(p.x - x - per) < 1e-9);
+  // 월드가 멈춰 있는 동안 온 입력의 몫은 다음 틱으로 넘어가지 않는다
+  setInput(w, p.id, 0, 0);
+  p.offers = ['coffee'];
+  setInput(w, p.id, 1, 0, 0.9);
+  step(w, DT);
+  assert.deepEqual([p.part, p.preX, p.preY], [0, 0, 0]);
 });

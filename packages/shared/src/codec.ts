@@ -12,7 +12,7 @@ import { DT } from './constants';
 import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 4;
+const VERSION = 5;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 
@@ -120,6 +120,9 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
   w.varuint(s.tick);
   w.f32(ox);
   w.f32(oy);
+  w.varuint(s.ack);
+  w.u8(Math.max(0, Math.min(255, s.ackTicks)));
+  w.u8(clampByte(s.ackPhase));
 
   w.varuint(s.me.id);
   w.varuint(s.me.hp);
@@ -209,6 +212,9 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   const tick = r.varuint();
   const ox = r.f32();
   const oy = r.f32();
+  const ack = r.varuint();
+  const ackTicks = r.u8();
+  const ackPhase = r.u8();
 
   const me: Snapshot['me'] = {
     id: r.varuint(),
@@ -234,7 +240,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   };
   const abs = (o: number): number => o + r.i16() / Q;
 
-  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], me, p: [], e: [], s: [], z: [], g: [], h: [], i: [] };
+  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], ack, ackTicks, ackPhase, me, p: [], e: [], s: [], z: [], g: [], h: [], i: [] };
   const players = r.u8();
   for (let i = 0; i < players; i++) {
     const id = r.varuint();

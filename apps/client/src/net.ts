@@ -175,13 +175,13 @@ export class Net {
   }
 
   /**
-   * 입력을 보낸다. 보냈으면 true.
+   * 입력을 보낸다. 보냈으면 그 입력의 번호(1 이상), 보내지 못했으면 0.
    * 서버에서 한동안 아무것도 오지 않는 동안에는 보내지 않는다 (부르는 쪽이 다음에 최신 값을 다시 보낸다).
    */
-  sendInput(dx: number, dy: number): boolean {
-    if (!this.connected || performance.now() - this.lastRecv > QUIET_MS) return false;
+  sendInput(dx: number, dy: number): number {
+    if (!this.connected || performance.now() - this.lastRecv > QUIET_MS) return 0;
     this.send({ t: 'input', seq: ++this.seq, dx, dy });
-    return true;
+    return this.seq;
   }
 
   sendPick(choice: number): void {
