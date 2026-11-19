@@ -87,6 +87,19 @@ export interface Player {
    */
   camX: number;
   camY: number;
+  /**
+   * 지금의 입력으로 캐릭터를 움직인 틱 수. 입력이 바뀌면 0 부터 다시 센다.
+   * 스냅샷에 실려 가서, 클라이언트가 내 캐릭터를 얼마나 앞서 그릴지 계산하는 데 쓴다 (판정에는 쓰지 않는다).
+   */
+  held: number;
+  /**
+   * 이번 틱 도중에 입력이 바뀌었을 때: 지금 입력이 시작된 때(틱의 0~1)와, 그 전의 입력들이 이번 틱에 움직인 몫(방향 × 틱의 비율).
+   * 서버는 입력을 도착한 때부터 적용한다. 틱 단위로 끊으면 누르고 뗀 시간과 실제로 움직인 거리가 최대 한 틱만큼 어긋나서,
+   * 화면이 내 캐릭터를 앞서 그린 자리와 서버 위치가 멈출 때마다 조금씩 달라진다.
+   */
+  part: number;
+  preX: number;
+  preY: number;
   /** 가지고 있는 부활 수 (백업 + 스냅샷). 쓰러질 때 하나를 써서 그 자리에서 되살아난다 */
   revives: number;
   /** 그중 주운 백업의 수 (백업은 하나까지만 가질 수 있다. 스냅샷으로 받은 부활과 따로 센다) */
@@ -310,6 +323,10 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     body: !spectator,
     camX: x,
     camY: y,
+    held: 0,
+    part: 0,
+    preX: 0,
+    preY: 0,
     revives: 0,
     backups: 0,
     xpFrac: 0,
@@ -334,8 +351,12 @@ export function removePlayer(world: World, id: number): void {
   world.players.delete(id);
 }
 
-/** 입력 적용. 값은 이미 파싱 단계에서 유한/범위 검증됨. 여기서 길이를 1 이하로 다시 강제한다. */
-export function setInput(world: World, id: number, dx: number, dy: number): void {
+/**
+ * 입력 적용. 값은 이미 파싱 단계에서 유한/범위 검증됨. 여기서 길이를 1 이하로 다시 강제한다.
+ * at: 이번 틱의 어디쯤에서 도착했는지 (0~1. 서버가 자기 시계로 잰 값이다: 클라이언트가 보내는 값이 아니다).
+ * 그 앞부분은 이전 입력으로, 뒷부분은 새 입력으로 움직인다. 어느 쪽이든 길이가 1 이하라서 한 틱에 가는 거리는 늘지 않는다.
+ */
+export function setInput(world: World, id: number, dx: number, dy: number, at = 0): void {
   const p = world.players.get(id);
   if (!p) return;
   const len = Math.hypot(dx, dy);
@@ -343,8 +364,14 @@ export function setInput(world: World, id: number, dx: number, dy: number): void
     dx /= len;
     dy /= len;
   }
+  // 한 틱 안에서 시간은 앞으로만 간다 (늦게 온 입력이 앞의 입력이 쓴 시간을 다시 쓰지 못한다)
+  const t = Math.min(1, Math.max(p.part, Number.isFinite(at) ? at : 0));
+  p.preX += p.dx * (t - p.part);
+  p.preY += p.dy * (t - p.part);
+  p.part = t;
   p.dx = dx;
   p.dy = dy;
+  p.held = 0;
 }
 
 /** 레벨업 선택. 서버가 제시한 선택지의 인덱스만 받는다. 유효하지 않으면 false. */
@@ -517,6 +544,16 @@ function spawnEnemies(world: World, alive: Player[], dt: number): void {
 }
 
 export function step(world: World, dt: number): void {
+  advance(world, dt);
+  // 틱 도중에 바뀐 입력의 몫은 이번 틱에만 쓴다 (월드가 멈춰 있어 쓰지 않았더라도 다음 틱으로 넘기지 않는다)
+  for (const p of world.players.values()) {
+    p.part = 0;
+    p.preX = 0;
+    p.preY = 0;
+  }
+}
+
+function advance(world: World, dt: number): void {
   world.stepped = false;
   if (world.over) return;
   const players = [...world.players.values()];
@@ -569,8 +606,9 @@ export function step(world: World, dt: number): void {
     const regen = recoveryOf(p);
     if (regen > 0) p.hp = Math.min(maxHpOf(p), p.hp + regen * dt);
     const sp = moveSpeedOf(p);
-    p.x += p.dx * sp * dt;
-    p.y += p.dy * sp * dt;
+    p.x += (p.preX + p.dx * (1 - p.part)) * sp * dt;
+    p.y += (p.preY + p.dy * (1 - p.part)) * sp * dt;
+    if (p.held < 255) p.held++;
     if (p.dx !== 0 || p.dy !== 0) {
       const len = Math.hypot(p.dx, p.dy);
       p.fx = p.dx / len;
@@ -785,6 +823,10 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
     time: r1(world.time),
     paused: world.paused,
     view: [r1(cx), r1(cy)],
+    // 입력 번호와 도착한 때는 연결이 아는 값이라 방(room.ts)이 채운다
+    ack: 0,
+    ackTicks: me.held,
+    ackPhase: 0,
     me: {
       id: me.id,
       hp: Math.ceil(me.hp),

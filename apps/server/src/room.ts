@@ -37,6 +37,8 @@ export interface Conn {
   name: string;
   pid: number;
   lastSeq: number;
+  /** 마지막 입력이 틱과 틱 사이의 어디쯤에서 도착했는지 (0~255, 256 이 한 틱) */
+  seqPhase: number;
   /** 이 판에 합류했을 때의 게임 시간(초). 결과에는 "함께 한 시간"만 적는다. */
   joinedAt: number;
   /**
@@ -160,6 +162,7 @@ export class Room {
       name: p.name,
       pid: p.id,
       lastSeq: -1,
+      seqPhase: 0,
       joinedAt: this.world.time,
       // 비밀 값은 운영체제 CSPRNG 에서 192비트. 추측으로 남의 자리를 이어받을 수 없다
       key: `${this.id}.${randomBytes(24).toString('base64url')}`,
@@ -259,6 +262,7 @@ export class Room {
     conn.away = false;
     conn.stalled = false;
     conn.lastSeq = -1; // 새 연결의 입력 번호는 처음부터 다시 센다
+    conn.seqPhase = 0;
     conn.lastInput = now;
     // 새 연결은 아무것도 받지 못했다: 아직 남아 있는 영역을 (남은 시간으로) 한 번 다시 보낸다
     conn.zoneTick = -1;
@@ -331,10 +335,13 @@ export class Room {
     if (seq <= conn.lastSeq) return false;
     conn.lastSeq = seq;
     const now = Date.now();
+    // 직전 틱에서 얼마나 지나서 도착했는지 (서버 시계). 입력은 도착한 때부터 적용하고, 같은 값을 스냅샷에 실어
+    // 화면이 내 캐릭터를 앞서 그릴 거리를 한 틱보다 곱게 맞추게 한다
+    conn.seqPhase = Math.max(0, Math.min(255, Math.floor(((now - this.lastTick) * TICK_RATE * 256) / 1000)));
     // 대기실에서는 입력이 "활동"이 아니다 (입력만 보내며 대기실을 끝없이 붙잡아 두지 못하게)
     if (this.started) this.lastActivity = now;
     this.active(conn, now);
-    setInput(this.world, conn.pid, dx, dy);
+    setInput(this.world, conn.pid, dx, dy, conn.seqPhase / 256);
     return true;
   }
 
@@ -463,6 +470,8 @@ export class Room {
     const snap = buildSnapshot(this.world, conn.pid, conn.zoneTick);
     if (!snap) return;
     if (this.userPaused) snap.paused = true;
+    snap.ack = Math.max(0, conn.lastSeq);
+    snap.ackPhase = conn.seqPhase;
     // 스냅샷만 이진 프레임으로 보낸다 (JSON 의 약 1/3 크기). 나머지 메시지는 드물어서 JSON 그대로.
     conn.ws.send(encodeSnapshot(snap), { binary: true });
     conn.zoneTick = this.world.tick;

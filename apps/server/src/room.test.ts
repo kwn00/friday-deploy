@@ -931,3 +931,35 @@ test('바닥 영역: 연결마다 한 번씩만 보낸다 (레벨업 선택으�
   assert.ok([...seen.values()].every((n) => n === 1));
   room.leave(a.conn);
 });
+
+test('입력 확인: 스냅샷에 마지막으로 받은 입력 번호, 그 입력으로 움직인 틱 수, 틱 사이의 어디쯤에서 도착했는지가 실린다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  const tick = (ms = 50): void => {
+    me.hp = 1e9;
+    if (me.offers) room.onPick(a.conn, 0);
+    mock.timers.tick(ms);
+  };
+  tick();
+  assert.deepEqual([a.ws.snaps.at(-1)!.ack, a.ws.snaps.at(-1)!.ackTicks], [0, 1], '입력을 받기 전에는 0 번');
+  // 틱에서 20ms 지나서 도착한 입력: 20/50 틱 = 102/256
+  tick(20);
+  room.onInput(a.conn, 7, 1, 0);
+  tick(30);
+  let snap = a.ws.snaps.at(-1)!;
+  assert.deepEqual([snap.ack, snap.ackTicks, snap.ackPhase], [7, 1, 102]);
+  const x = snap.view[0];
+  tick();
+  tick();
+  snap = a.ws.snaps.at(-1)!;
+  assert.deepEqual([snap.ack, snap.ackTicks, snap.ackPhase], [7, 3, 102]);
+  assert.ok(Math.abs(snap.view[0] - (x + 2 * 3.5)) < 0.11, '위치는 서버가 틱마다 계산한 그대로다');
+  // 다시 연결하면 입력 번호를 처음부터 센다
+  hangUp(room, a);
+  const ws = socket();
+  assert.ok(rooms.resume(keyOf(a.ws), ws as unknown as WebSocket));
+  mock.timers.tick(50);
+  assert.equal(ws.snaps.at(-1)!.ack, 0);
+});

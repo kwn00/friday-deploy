@@ -5,6 +5,7 @@ import {
   SHOT_KINDS,
   ZONE_KINDS,
   duckOffset,
+  moveSpeedOf,
   type FieldItemKind,
   type RosterPlayer,
   type Snapshot,
@@ -13,6 +14,7 @@ import {
 import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
+import { Predictor } from './predict';
 import { cameraPx, computeView, toScreen } from './view';
 
 interface Particle {
@@ -127,6 +129,8 @@ function zoneReach(z: LiveZone): number {
  */
 export class Renderer {
   readonly timeline = new Timeline();
+  /** 내 캐릭터를 입력대로 먼저 그린다 (화면 전용. predict.ts) */
+  readonly predictor = new Predictor();
   /** 마지막으로 그린 장면 (미니맵 등 다른 UI 가 같은 시점을 쓰도록) */
   sample: Sample | null = null;
 
@@ -192,6 +196,7 @@ export class Renderer {
 
   reset(): void {
     this.timeline.reset();
+    this.predictor.reset();
     this.sample = null;
     this.shown = null;
     this.particles = [];
@@ -312,7 +317,8 @@ export class Renderer {
     }
   }
 
-  draw(now: number, dt: number): void {
+  /** dt: 화면 효과에 쓰는 시간(초, 상한이 있다). real: 실제로 흐른 시간(초). 내 캐릭터 예측은 실제 시간을 따라간다 */
+  draw(now: number, dt: number, real = dt): void {
     const { ctx, pxW, pxH } = this;
     const S = this.scale;
     const sample = (this.sample = this.timeline.advance(dt * 1000));
@@ -331,9 +337,15 @@ export class Renderer {
     const was = this.indexOf(prev);
     const mix = (a: number | undefined, b: number): number => (a === undefined ? b : a + (b - a) * alpha);
 
-    // 카메라 = 보간된 시점 (살아 있으면 내 캐릭터 위치, 관전 중이면 서버가 계산한 관전 시점)
-    const cx = mix(prev.view[0], curr.view[0]);
-    const cy = mix(prev.view[1], curr.view[1]);
+    // 카메라 = 살아 있으면 내 캐릭터 위치, 관전 중이면 서버가 계산한 관전 시점.
+    // 살아 있는 동안에는 보간된 과거 위치가 아니라, 서버의 가장 최근 위치에 아직 반영되지 않은 내 입력을 더한 자리를 쓴다
+    // (누르자마자 움직인다). 다른 것들은 모두 서버가 보낸 대로 그린다.
+    const newest = this.timeline.newest ?? curr;
+    const mine = prev.me.alive && curr.me.alive && newest.me.alive;
+    const base = mine ? { x: newest.view[0], y: newest.view[1], ack: newest.ack, ackTicks: newest.ackTicks, ackPhase: newest.ackPhase, speed: moveSpeedOf(newest.me) } : null;
+    const [cx, cy] = this.predictor.place(base, mix(prev.view[0], curr.view[0]), mix(prev.view[1], curr.view[1]), real, newest.paused);
+    /** 플레이어의 그릴 위치: 나는 예측한 자리, 다른 사람은 두 스냅샷 사이 */
+    const spot = (p: Row, q: Row | undefined): [number, number] => (mine && p[0] === curr.me.id ? [cx, cy] : [mix(q?.[1], p[1]!), mix(q?.[2], p[2]!)]);
     const camX = cameraPx(cx, S);
     const camY = cameraPx(cy, S);
     const sx = (x: number): number => toScreen(x, camX, hx, S);
@@ -352,8 +364,8 @@ export class Renderer {
     // 방화벽: 주인 둘레의 따뜻한 고리 (캐릭터 아래)
     for (const p of curr.p) {
       if (!p[4] || !p[10]) continue;
-      const q = was.p.get(p[0]);
-      this.drawAura(sx(mix(q?.[1], p[1])), sy(mix(q?.[2], p[2])), p[10] * S, now);
+      const [ax, ay] = spot(p, was.p.get(p[0]));
+      this.drawAura(sx(ax), sy(ay), p[10] * S, now);
     }
 
     // 경험치: 끌려오는 동안 서버가 위치를 옮기므로 다른 것들처럼 두 스냅샷 사이를 보간한다
@@ -433,8 +445,7 @@ export class Renderer {
     const labels: NameLabel[] = [];
     for (const p of curr.p) {
       const q = was.p.get(p[0]);
-      const x = mix(q?.[1], p[1]);
-      const y = mix(q?.[2], p[2]);
+      const [x, y] = spot(p, q);
       const px = sx(x);
       const py = sy(y);
       if (!p[4]) {
@@ -442,13 +453,16 @@ export class Renderer {
         labels.push({ id: p[0], color: NAME_COLOR.down, px, bottom: py - 5 * S });
         continue;
       }
-      const moving = q ? Math.abs(q[1]! - p[1]) + Math.abs(q[2]! - p[2]) > 0.2 : false;
+      // 내 캐릭터는 걷는 그림과 바라보는 쪽도 입력을 바로 따라간다
+      const ahead = mine && p[0] === curr.me.id && this.predictor.active;
+      const moving = ahead ? this.predictor.moving : q ? Math.abs(q[1]! - p[1]) + Math.abs(q[2]! - p[2]) > 0.2 : false;
+      const face = (ahead && this.predictor.facing) || p[3];
       const frame = moving && Math.floor(now / 140) % 2 ? 1 : 0;
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.fillRect(px - 5 * S, py + 6 * S, 10 * S, 2 * S);
       // 방금 되살아나 피해를 받지 않는 동안에는 깜빡인다 (동작 줄이기 설정에서는 반투명으로만)
       if (p[7]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 90) % 2 ? 0.35 : 0.9;
-      blit(this.spr.dev[p[3] < 0 ? 'l' : 'r'][frame], x, y);
+      blit(this.spr.dev[face < 0 ? 'l' : 'r'][frame], x, y);
       ctx.globalAlpha = 1;
       // 2단계 인증: 피해를 받지 않는 동안 둘러싸는 옅은 방울
       if (p[11]) this.drawGuard(px, py, S, now);

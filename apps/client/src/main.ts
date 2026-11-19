@@ -115,6 +115,12 @@ let lastError = '';
 let menuOpen = false;
 /** 서버가 확인해 준 솔로 일시정지가 시작된 시각 (선택 제한 시간 표시를 그만큼 미루는 데 쓴다) */
 let pausedSince = 0;
+/**
+ * 혼자 하는 판에서 내가 방금 게임을 다시 움직이게 했다(선택지를 골랐거나 메뉴를 닫았다): 이 시각까지는 서버의 답을 기다리지 않고
+ * 내 캐릭터를 바로 움직여 그린다. 함께 하는 판에서는 쓰지 않는다 (다른 사람이 고르는 중이면 월드가 계속 멈춰 있다).
+ */
+let resumeUntil = 0;
+const RESUME_GRACE_MS = 600;
 let offerDeadline = 0;
 let loadoutKey = '';
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
@@ -362,6 +368,7 @@ function showOffers(offers: Offer[], timeout: number): void {
       btn.addEventListener('click', () => {
         net.sendPick(i);
         el.levelup.classList.add('hidden');
+        if (mode === 'solo') resumeUntil = performance.now() + RESUME_GRACE_MS;
       });
       return btn;
     }),
@@ -404,7 +411,10 @@ function openMenu(): void {
 function closeMenu(): void {
   if (!menuOpen) return;
   hideMenu();
-  if (mode === 'solo') net.sendPause(false);
+  if (mode === 'solo') {
+    net.sendPause(false);
+    resumeUntil = performance.now() + RESUME_GRACE_MS;
+  }
 }
 
 /** 스스로 나간다: 서버가 자리를 바로 비우고, 이어받기 열쇠도 버린다 */
@@ -980,7 +990,7 @@ document.addEventListener('visibilitychange', () => {
   // 화면을 떠나면(전화, 앱 전환 등) 캐릭터를 세운다. 화면이 가려진 동안에는 입력을 보낼 수 없어서,
   // 그대로 두면 누르고 있던 방향으로 계속 달린다
   input.reset();
-  if (net.sendInput(0, 0)) lastSent = { dx: 0, dy: 0, at: performance.now() };
+  sendMove(0, 0, performance.now());
   // 솔로에서는 알아서 멈춘다
   if (mode === 'solo') openMenu();
 });
@@ -1023,6 +1033,23 @@ if (saved && !notes.isOpen && (!invited || invited === saved.code)) {
 
 // 입력 전송: 값이 바뀌었을 때 + 최대 20Hz (서버 레이트리밋보다 충분히 낮게). 1초에 한 번은 변화가 없어도 보낸다(연결 유지).
 let lastSent = { dx: 0, dy: 0, at: 0 };
+/** 입력을 보내고, 보냈으면 내 캐릭터 예측에도 알린다 (화면이 보낸 입력과 똑같이 움직이도록) */
+function sendMove(dx: number, dy: number, now: number): void {
+  const seq = net.sendInput(dx, dy);
+  if (!seq) return;
+  lastSent = { dx, dy, at: now };
+  renderer.predictor.onSent(seq, dx, dy);
+}
+
+/** 지금 내 캐릭터가 입력대로 움직일 수 있는지 (서버가 내 캐릭터를 움직이고 있는 상태인지) */
+function canMove(now: number): boolean {
+  const newest = renderer.timeline.newest;
+  if (phase !== 'playing' || !newest || !newest.me.alive) return false;
+  // 선택지를 고르는 동안, 혼자 하는 판에서 메뉴를 열어 둔 동안에는 서버가 내 캐릭터를 세워 둔다
+  if (!el.levelup.classList.contains('hidden') || (mode === 'solo' && menuOpen)) return false;
+  return !newest.paused || now < resumeUntil;
+}
+
 function pumpInput(now: number): void {
   if (phase !== 'playing') return;
   // 메뉴가 열려 있는 동안에는 캐릭터를 움직이지 않는다
@@ -1031,16 +1058,19 @@ function pumpInput(now: number): void {
   const changed = dx !== lastSent.dx || dy !== lastSent.dy;
   if ((changed && now - lastSent.at >= 50) || now - lastSent.at >= 1000) {
     // 통신이 막혀 있는 동안에는 보내지지 않는다. 그때는 다음 프레임에 최신 값으로 다시 시도한다
-    if (net.sendInput(dx, dy)) lastSent = { dx, dy, at: now };
+    sendMove(dx, dy, now);
   }
 }
 
 let last = performance.now();
 function frame(now: number): void {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const real = Math.min(1, (now - last) / 1000);
+  const dt = Math.min(0.1, real);
   last = now;
+  // 멈췄다가 다시 움직이기 시작한 순간에는 입력을 새로 보낸다 (예측이 그 입력부터 다시 센다)
+  if (renderer.predictor.advance(real, canMove(now))) lastSent.at = 0;
   pumpInput(now);
-  renderer.draw(now, dt);
+  renderer.draw(now, dt, real);
   if (minimapOn && phase === 'playing' && renderer.sample) minimap.draw(renderer.sample.curr, renderer.viewSize, now);
   if (!el.levelup.classList.contains('hidden')) {
     const left = pausedSince > 0 ? offerDeadline - pausedSince : offerDeadline - now;
