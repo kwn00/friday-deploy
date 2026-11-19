@@ -4,7 +4,7 @@
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
  */
-import { HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED, VIEW_RADIUS } from './constants';
+import { ENEMY_VIEW_RADIUS, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED } from './constants';
 import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, type WeaponDef, type WeaponId, type WeaponStats, type ZoneKind } from './content';
 import type { Enemy, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf } from './stats';
@@ -367,6 +367,9 @@ const AIM = 200;
 /** 이만큼 이상 기울여야 "달리는 중"으로 친다 (거의 0 인 입력으로 제자리에서 달리는 척하지 못하게) */
 const RUNNING = 0.3;
 
+/** 시간 비교의 오차 (소수 덧셈으로 쌓이는 아주 작은 값) */
+const EPS = 1e-9;
+
 /** 커밋 히스토리가 움직이는 동안 커밋을 남기는 간격(초) (뱀서 Shadow Pinion 의 interval) */
 const TRAIL_INTERVAL = 0.3;
 
@@ -411,7 +414,7 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
     }
 
     const cd = (p.cd[w] ?? 0) - dt;
-    if (cd > 0) {
+    if (cd > EPS) {
       p.cd[w] = cd;
       continue;
     }
@@ -461,19 +464,23 @@ function runDucks(world: World, grid: Grid, p: Player, st: WeaponStats, dt: numb
  * 그다음 쿨다운만큼 쉰다.
  */
 function runBirds(world: World, grid: Grid, p: Player, w: 'canary' | 'night_owl', st: WeaponStats, dt: number): void {
+  // 시간은 소수 덧셈이라 오차가 쌓인다 (4.0 - 0.05 × 80 = 5.8e-15): 아주 작은 값은 0 으로 본다
   const on = p.on[w] ?? 0;
-  if (on > 0) {
+  if (on > EPS) {
     p.on[w] = on - dt;
     const cd = (p.cd[w] ?? 0) - dt;
-    if (cd <= 0) {
+    if (cd <= EPS) {
       p.cd[w] = st.cd;
       useWeapon(world, grid, p, w, st);
     } else p.cd[w] = cd;
-    if (on - dt <= 0) p.cd[w] = st.cd; // 쉬는 시간
+    if (on - dt <= EPS) {
+      p.on[w] = 0;
+      p.cd[w] = st.cd; // 쉬는 시간
+    }
     return;
   }
   const cd = (p.cd[w] ?? 0) - dt;
-  if (cd > 0) {
+  if (cd > EPS) {
     p.cd[w] = cd;
     return;
   }
@@ -609,7 +616,8 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       // 뱀서 Pentagram: 화면 안의 적을 모두 지운다 (사신만 버틴다). 쓸 때마다 한 번 굴려서
       // - 대개는 경험치 없이 지우고, 화면의 경험치·회복 아이템·보물상자도 함께 지운다 (지워진 보스의 상자는 그 자리에 떨어진다)
       // - '남길 확률'(단계와 운으로 오른다)에 걸리면 처치한 것처럼 경험치를 떨어뜨리고, 아이템은 그대로 둔다
-      const r = VIEW_RADIUS;
+      // 화면 안 = 화면의 가장 먼 모서리 바로 바깥까지 (일반 적을 보내는 범위와 같다)
+      const r = ENEMY_VIEW_RADIUS;
       const r2 = r * r;
       const inView = (x: number, y: number): boolean => (x - p.x) ** 2 + (y - p.y) ** 2 <= r2;
       const keep = world.rng() < st.chance;
@@ -672,10 +680,14 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'code_freeze': {
-      // 시곗바늘처럼 쏠 때마다 30도씩 돈다. 빙결 저항이 1 보다 큰 적(대부분의 보스)은 얼지 않는다 (뱀서 Clock Lancet)
+      // 시곗바늘처럼 쏠 때마다 30도씩 돈다. 빙결 저항이 1 보다 큰 적(스파게티 코드, God Class)은 얼지 않는다 (뱀서 Clock Lancet)
       p.freezeDir = (p.freezeDir + 1) % 12;
       const a = -Math.PI / 2 + (p.freezeDir * Math.PI) / 6;
-      strip(grid, p.x, p.y, Math.cos(a), Math.sin(a), st.area, 10, (e) => {
+      const ax = Math.cos(a);
+      const ay = Math.sin(a);
+      strip(grid, p.x, p.y, ax, ay, st.area, 10, (e) => {
+        // 광선이 나가는 쪽(앞)에 있는 적만: 바로 옆에 붙은 적이 방향과 상관없이 늘 얼지 않게
+        if ((e.x - p.x) * ax + (e.y - p.y) * ay < 0) return;
         if (e.resFreeze <= 1) e.frozen = Math.max(e.frozen, st.dur);
       });
       flash(world, p, 'beam', p.x, p.y, st.area, angleByte(a), 0.25);

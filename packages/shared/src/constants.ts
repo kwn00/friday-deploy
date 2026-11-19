@@ -79,14 +79,14 @@ export const OFFER_TIMEOUT = 20;
 
 /**
  * 적 수의 상한 (뱀서): 살아 있는 적이 300 이상이면 주기적인 스폰을 멈추고, 보스·이벤트는 500 까지만 나온다.
- * 함께 하면 사람 수에 따라 늘어난다 (0.6 + 0.4 × 사람 수 배).
+ * 사람 수와 상관없이 같다 (무료 서버의 CPU). 함께 하면 웨이브의 최소 수와 한 번에 나오는 수만 늘어난다.
  */
 export const MAX_ENEMIES_REGULAR = 300;
 export const MAX_ENEMIES_ALL = 500;
 /** 땅에 있을 수 있는 경험치 수 (뱀서 400). 넘으면 새 경험치는 빨간 경험치 하나에 모인다 */
 export const MAX_GEMS = 400;
 /** 땅에 남아 있을 수 있는 보물상자 수 (넘으면 가장 오래된 것이 사라진다) */
-export const MAX_CHESTS = 30;
+export const MAX_CHESTS = 20;
 /** 한 대 맞은 뒤, 레벨업을 고른 뒤, 상자를 연 뒤 무적인 시간(초) (뱀서 Invulnerability Time 240ms) */
 export const INVULN_SECONDS = 0.24;
 /** 투사체·소환물(고양이) 수의 상한. 넘으면 새로 쏘지 않는다 (서버 CPU 와 전송량을 묶어 둔다) */

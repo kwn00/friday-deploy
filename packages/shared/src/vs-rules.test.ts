@@ -97,7 +97,7 @@ test('경험치가 너무 많으면 (400개) 새 경험치는 빨간 경험치 �
   const big = w.gems.find((g) => g.big)!;
   assert.equal(big.v, 6, 'Off-by-one 3마리 × 2');
   const snap = buildSnapshot(w, p.id)!;
-  assert.ok(snap.g.some((g) => g[0] === big.id && g[3] === 1), '6 은 초록 (9 이하)');
+  assert.ok(snap.g.some((g) => g[0] === big.id && g[3] === 2), '넘친 경험치를 모으는 것은 값이 작아도 빨강');
 });
 
 test('맞는 방식 (뱀서): 닿아 있는 적 중 가장 센 한 대만 맞고 0.24초 무적. 많이 붙어도 그대로다', () => {
@@ -119,7 +119,7 @@ test('맞는 방식 (뱀서): 닿아 있는 적 중 가장 센 한 대만 맞고
   assert.equal(INVULN_SECONDS, 0.24);
 });
 
-test('빠른 적(사신 840px/s)도 가만히 선 플레이어를 지나치지 않고 맞힌다', () => {
+test('빠른 적(사신 420px/s)도 가만히 선 플레이어를 지나치지 않고 맞힌다', () => {
   const { w, p } = quiet(4);
   const reaper = enemy(9200, p.x + 63, p.y, 'monday');
   p.revives = 0;
@@ -333,4 +333,24 @@ test('저주 (뱀서 Curse): 체력은 바로, 속도·수·빈도는 다음 분
   assert.equal(fresh.spd, 1, '속도는 아직');
   assert.ok(w.enemies.length <= n0 + 2);
   assert.equal(UPGRADES.prod_hotfix.kind, 'passive');
+});
+
+test('카나리아 (뱀서 Peachone): 4초 동안 1초마다 한 묶음씩 4번, 그다음 1초 쉰다 (시간 오차로 한 번 더 쏘지 않는다)', () => {
+  const { w, p } = quiet(18);
+  p.up = { console_log: 1, canary: 1 };
+  p.shield = 1e9;
+  const volleys: number[] = [];
+  for (let t = 0; t < 20 * 12; t++) {
+    w.enemies = [];
+    const before = w.zones.filter((z) => z.kind === 'blast').length;
+    still(w);
+    const born = w.zones.filter((z) => z.kind === 'blast' && z.born === w.tick).length;
+    if (born > 0 && before >= 0) volleys.push(Math.round(w.time * 100) / 100);
+  }
+  // 첫 주기: 4번, 그다음 간격은 1초 이상
+  const gaps = volleys.slice(1).map((t, i) => Math.round((t - volleys[i]!) * 100) / 100);
+  assert.deepEqual(gaps.slice(0, 3), [1, 1, 1], `묶음 사이 1초 (${volleys.join(', ')})`);
+  assert.ok(gaps[3]! >= 1.99, `4번 뒤에는 1초 쉰다 (간격 ${gaps[3]})`);
+  const perMinute = volleys.filter((t) => t < 10).length;
+  assert.equal(perMinute, 8, '10초에 8번 (4번 + 쉼, 두 주기)');
 });

@@ -718,7 +718,7 @@ function runEvent(world: World, ev: PendingEvent, alive: Player[], capAll: numbe
  * 적 스폰 (뱀서 웨이브 규칙). 1분에 웨이브 하나 (STAGE).
  * - 웨이브가 바뀌면: 이번 분의 저주를 정하고, 보스를 내고, 이벤트를 예약한다
  * - interval/저주 초마다: 살아 있는 적이 최소×저주보다 적으면 최소까지 한꺼번에 채우고, 아니면 종류마다 한 마리씩
- * - 살아 있는 적이 300 이상이면 주기적인 스폰은 멈춘다. 보스·이벤트는 500 까지 (사람이 늘면 둘 다 늘어난다)
+ * - 살아 있는 적이 300 이상이면 주기적인 스폰은 멈춘다. 보스·이벤트는 500 까지 (사람 수와 상관없이 같다)
  * - 30분이 되면 모든 적이 사라지고, 그 뒤로 1분마다 '월요일 아침'이 하나씩 온다
  */
 function spawnEnemies(world: World, alive: Player[], dt: number): void {
@@ -1191,12 +1191,16 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
   for (const g of world.gone) if (g.tick > after) snap.zr.push(g.id);
   // 끌려오는 경험치는 움직이므로 소수 좌표로 보낸다 (전송 크기는 같다: 어차피 1/16 픽셀 정수로 부호화한다)
   // 색 단계 순서로 싣는다 (이진 스냅샷이 단계별로 묶어 보내므로, 풀었을 때와 같은 순서가 되게)
+  // 넘친 경험치를 모으는 것은 처음부터 빨강이다
+  const tierOf = (g: Gem): 0 | 1 | 2 => (g.big ? 2 : gemTier(g.v));
   for (let tier = 0; tier < 3; tier++) {
-    for (const g of world.gems) if (gemTier(g.v) === tier && near(g.x, g.y)) snap.g.push([g.id, r1(g.x), r1(g.y), tier]);
+    for (const g of world.gems) if (tierOf(g) === tier && near(g.x, g.y)) snap.g.push([g.id, r1(g.x), r1(g.y), tier]);
   }
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);
-  // 필드 아이템은 거리와 상관없이 모두에게 보낸다: 찾아가라고 놓는 것이라 숨길 정보가 아니다 (최대 MAX_FIELD_ITEMS 개)
-  for (const it of world.items) snap.i.push([it.id, FIELD_ITEM_KINDS.indexOf(it.kind), r1(it.x), r1(it.y), it.ttl <= FIELD_ITEM_FADE ? 1 : 0]);
+  // 필드 아이템은 거리와 상관없이 모두에게 보낸다: 찾아가라고 놓는 것이라 숨길 정보가 아니다 (최대 MAX_FIELD_ITEMS 개).
+  // 보물상자는 미니맵 범위의 두 배 안의 것만 (보스는 가까이서 쓰러지므로 대개 그 안이다. 최대 MAX_CHESTS 개)
+  const c2 = (VIEW_RADIUS * 2) ** 2;
+  for (const it of world.items) if (it.kind !== 'chest' || (it.x - cx) ** 2 + (it.y - cy) ** 2 <= c2) snap.i.push([it.id, FIELD_ITEM_KINDS.indexOf(it.kind), r1(it.x), r1(it.y), it.ttl <= FIELD_ITEM_FADE ? 1 : 0]);
   return snap;
 }
 
