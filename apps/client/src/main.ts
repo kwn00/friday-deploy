@@ -7,12 +7,17 @@ import {
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SIZE,
   MAX_PAUSE_SECONDS,
+  PASSIVE_IDS,
+  PASSIVE_SLOTS,
   RELEASES,
   ROOM_CODE_LEN,
   UPGRADES,
+  WEAPON_IDS,
+  WEAPON_SLOTS,
   normalizeRoomCode,
   sanitizeName,
   unseenReleases,
+  upgradeText,
   type BoardId,
   type FieldItemKind,
   type GameMode,
@@ -72,6 +77,7 @@ const el = {
   version: $('btn-version'),
   offers: $('offers'),
   offerTimer: $('offer-timer'),
+  offerSlots: $('offer-slots'),
   result: $('result'),
   place: $('result-place'),
   resultHint: $('result-hint'),
@@ -228,20 +234,32 @@ function updateHud(s: Snapshot): void {
   const key = `${JSON.stringify(me.up)}|${me.revives}`;
   if (key !== loadoutKey) {
     loadoutKey = key;
-    const chips = (Object.entries(me.up) as [UpgradeId, number][]).map(([id, lv]) => {
-      const chip = node('span', 'chip', `${UPGRADES[id].icon} `);
-      chip.append(node('b', '', String(lv)));
-      chip.title = UPGRADES[id].name;
-      return chip;
-    });
-    // 가지고 있는 백업(부활): 강화들 뒤에 눈에 띄게
+    // 무기 칸, 패시브 칸을 따로 묶는다 (각각 최대 6개). 좁은 화면에서는 묶음마다 줄을 바꿔 무기와 패시브가 섞이지 않게 한다
+    const chip = (id: UpgradeId, level: number): HTMLElement => {
+      const def = UPGRADES[id];
+      const c = node('span', `chip chip--${def.kind}`);
+      c.append(node('span', 'chip__icon', def.icon), node('b', '', String(level)));
+      c.title = `${def.name} Lv.${level}`;
+      return c;
+    };
+    const weapons = WEAPON_IDS.filter((id) => (me.up[id] ?? 0) > 0).map((id) => chip(id, me.up[id]!));
+    const passives = PASSIVE_IDS.filter((id) => (me.up[id] ?? 0) > 0).map((id) => chip(id, me.up[id]!));
+    showSlots(weapons.length, passives.length);
+    // 가지고 있는 백업(부활): 패시브 뒤에 눈에 띄게
     if (me.revives > 0) {
-      const chip = node('span', 'chip chip--revive', `${FIELD_ITEMS.revive.icon} `);
-      chip.append(node('b', '', String(me.revives)));
-      chip.title = `${FIELD_ITEMS.revive.name}: ${FIELD_ITEMS.revive.desc}`;
-      chips.push(chip);
+      const c = node('span', 'chip chip--revive');
+      c.append(node('span', 'chip__icon', FIELD_ITEMS.revive.icon), node('b', '', String(me.revives)));
+      c.title = `되살아날 수 있는 횟수 ${me.revives}번 (백업·스냅샷)`;
+      passives.push(c);
     }
-    el.loadout.replaceChildren(...chips);
+    const groups: HTMLElement[] = [];
+    for (const list of [weapons, passives]) {
+      if (list.length === 0) continue;
+      const g = node('span', 'loadout__group');
+      g.append(...list);
+      groups.push(g);
+    }
+    el.loadout.replaceChildren(...groups);
   }
   noticeItems(s);
 }
@@ -262,9 +280,12 @@ function toast(text: string, kind: 'item' | 'peer' = 'item'): void {
 /** 이번 판에서 이미 알린 필드 아이템들, 그리고 직전의 내 백업 수 (새 판이 시작되면 비운다) */
 const knownItems = new Set<number>();
 let lastRevives = 0;
+/** 직전의 스냅샷(패시브) 단계: 스냅샷을 골라서 부활이 늘어난 것은 백업을 주운 것으로 알리지 않는다 */
+let lastSnapshotLv = 0;
 function resetItemNotices(): void {
   knownItems.clear();
   lastRevives = 0;
+  lastSnapshotLv = 0;
   window.clearTimeout(toastTimer);
   el.toast.classList.add('hidden');
 }
@@ -272,9 +293,12 @@ function resetItemNotices(): void {
 /** 새로 놓인 필드 아이템, 백업을 주웠을 때와 썼을 때를 짧게 알려준다 (어디 있는지는 미니맵이 보여준다) */
 function noticeItems(s: Snapshot): void {
   const me = s.me;
-  if (me.revives > lastRevives) toast(`${FIELD_ITEMS.revive.icon} 백업 확보! 쓰러져도 한 번 되살아나요`);
-  else if (me.revives < lastRevives && me.alive) toast(`${FIELD_ITEMS.revive.icon} 백업으로 되살아났어요!`);
+  // 부활 수는 주운 백업과 스냅샷(패시브)으로 받은 것을 합한 값이다. 어느 쪽을 썼는지는 오지 않으므로 쓸 때는 그냥 되살아났다고만 한다
+  const snapshotLv = me.up.snapshot ?? 0;
+  if (me.revives > lastRevives && snapshotLv === lastSnapshotLv) toast(`${FIELD_ITEMS.revive.icon} 백업 확보! 쓰러져도 한 번 되살아나요`);
+  else if (me.revives < lastRevives && me.alive) toast('✨ 되살아났어요!');
   lastRevives = me.revives;
+  lastSnapshotLv = snapshotLv;
 
   let fresh: FieldItemKind | null = null;
   for (const it of s.i) {
@@ -310,17 +334,31 @@ applyMinimap();
 
 /* ───────────── 레벨업 ───────────── */
 
+/** 레벨업 창의 칸 안내: 무기와 패시브를 몇 개까지 가질 수 있는지 (가득 찬 쪽은 새 것이 나오지 않는다) */
+function showSlots(weapons: number, passives: number): void {
+  const part = (label: string, n: number, max: number): HTMLElement => {
+    const span = node('span', n >= max ? 'slots__full' : '', `${label} ${n}/${max}`);
+    span.title = n >= max ? `${label} 칸이 가득 찼어요. 가진 것만 강화할 수 있어요` : '';
+    return span;
+  };
+  el.offerSlots.replaceChildren(part('무기', weapons, WEAPON_SLOTS), ' · ', part('패시브', passives, PASSIVE_SLOTS));
+}
+
 function showOffers(offers: Offer[], timeout: number): void {
   input.reset();
   offerDeadline = performance.now() + timeout * 1000;
+  // 선택지는 보통 3개, 배포 기도로 4개가 되기도 하고, 거의 다 최대 단계면 그보다 적다. 개수에 맞춰 배치한다
+  el.offers.dataset.n = String(offers.length);
   el.offers.replaceChildren(
     ...offers.map((o, i) => {
       const def = UPGRADES[o.id];
-      const btn = node('button', 'offer');
+      const btn = node('button', `offer offer--${def.kind}`);
       btn.type = 'button';
       const name = node('span', 'offer__name', def.name);
-      name.append(node('em', '', o.level === 1 ? 'NEW' : `Lv.${o.level}`));
-      btn.append(node('span', 'offer__icon', def.icon), name, node('span', 'offer__desc', def.desc));
+      // 새 것은 무기인지 패시브인지(어느 칸을 쓰는지), 가진 것은 몇 단계가 되는지
+      const tag = o.level <= 1 ? `NEW ${def.kind === 'weapon' ? '무기' : '패시브'}` : `Lv.${o.level}/${def.max}`;
+      name.append(' ', node('em', o.level >= def.max ? 'offer__max' : '', tag));
+      btn.append(node('span', 'offer__icon', def.icon), name, node('span', 'offer__desc', upgradeText(o.id, o.level)));
       btn.addEventListener('click', () => {
         net.sendPick(i);
         el.levelup.classList.add('hidden');
