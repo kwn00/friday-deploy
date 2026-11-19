@@ -569,6 +569,20 @@ test('관전: 쓰러진 사람은 입력으로 시점만 움직인다. 묘비는
   assert.deepEqual(mine.e.map((e) => e[0]).sort(), [7002]);
 });
 
+test('스냅샷: 경험치는 일반 적처럼 화면 바로 바깥(ENEMY_VIEW_RADIUS)까지만, 회복 아이템과 보스는 관심 영역(VIEW_RADIUS)까지 보낸다', () => {
+  const w = createWorld(33);
+  const a = addPlayer(w, 'a');
+  a.xpNext = 1e9;
+  a.x = a.y = 0;
+  w.gems.push({ id: 8001, x: ENEMY_VIEW_RADIUS - 5, y: 0, v: 1 });
+  w.gems.push({ id: 8002, x: 0, y: -(ENEMY_VIEW_RADIUS + 5), v: 1 });
+  w.gems.push({ id: 8003, x: -(ENEMY_VIEW_RADIUS - 5), y: 0, v: 50 });
+  w.heals.push({ id: 8101, x: 0, y: VIEW_RADIUS - 5 });
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, a.id)!));
+  assert.deepEqual(snap.g.map((g) => [g[0], g[3]]), [[8001, 0], [8003, 2]], '304 밖의 경험치는 싣지 않고, 실은 것은 색 단계 순서');
+  assert.deepEqual(snap.h.map((h) => h[0]), [8101]);
+});
+
 test('관전: 시점은 살아 있는 동료에게서 정해진 거리보다 멀어질 수 없고, 동료가 움직이면 따라 끌려간다', () => {
   const w = createWorld(32);
   const a = addPlayer(w, 'a');

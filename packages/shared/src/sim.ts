@@ -1003,6 +1003,8 @@ function advance(world: World, dt: number): void {
   // 경험치(커밋): 획득 범위에 들어오면 그 플레이어에게 끌려가고, 닿으면 획득한다.
   // 범위는 예전의 "즉시 획득" 범위와 같다. 한번 끌리기 시작한 것은 범위를 벗어나도 계속 따라온다.
   const pullers = active.filter((p) => p.alive);
+  // 경험치가 400 개까지 있으므로 획득 범위는 한 사람에 한 번만 계산한다
+  const pullR2 = pullers.map((q) => pickupOf(q) ** 2);
   const gains = new Map<Player, number>();
   world.gems = world.gems.filter((g) => {
     let p = g.to === undefined ? undefined : world.players.get(g.to);
@@ -1012,9 +1014,10 @@ function advance(world: World, dt: number): void {
       g.to = undefined;
       g.sp = undefined;
       let best = Infinity;
-      for (const q of pullers) {
+      for (let i = 0; i < pullers.length; i++) {
+        const q = pullers[i]!;
         const d2 = (g.x - q.x) ** 2 + (g.y - q.y) ** 2;
-        if (d2 <= pickupOf(q) ** 2 && d2 < best) {
+        if (d2 <= pullR2[i]! && d2 < best) {
           best = d2;
           p = q;
         }
@@ -1193,8 +1196,12 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
   // 색 단계 순서로 싣는다 (이진 스냅샷이 단계별로 묶어 보내므로, 풀었을 때와 같은 순서가 되게)
   // 넘친 경험치를 모으는 것은 처음부터 빨강이다
   const tierOf = (g: Gem): 0 | 1 | 2 => (g.big ? 2 : gemTier(g.v));
+  // 경험치는 화면 바로 바깥(ENEMY_VIEW_RADIUS)까지만 보낸다: 400 개까지 쌓여 스냅샷에서 가장 큰 몫이다.
+  // 끌려오기 전에는 움직이지 않으므로, 화면에 들어올 때 갑자기 나타나 보이지 않는다
+  const gems: Gem[] = [];
+  for (const g of world.gems) if ((g.x - cx) ** 2 + (g.y - cy) ** 2 <= ev2) gems.push(g);
   for (let tier = 0; tier < 3; tier++) {
-    for (const g of world.gems) if (tierOf(g) === tier && near(g.x, g.y)) snap.g.push([g.id, r1(g.x), r1(g.y), tier]);
+    for (const g of gems) if (tierOf(g) === tier) snap.g.push([g.id, r1(g.x), r1(g.y), tier]);
   }
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);
   // 필드 아이템은 거리와 상관없이 모두에게 보낸다: 찾아가라고 놓는 것이라 숨길 정보가 아니다 (최대 MAX_FIELD_ITEMS 개).

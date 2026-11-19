@@ -25,7 +25,8 @@ export const durationMultOf = (p: HasUpgrades): number => 1 + 0.1 * lv(p, 'keep_
 export const amountBonusOf = (p: HasUpgrades): number => lv(p, 'git_fork');
 export const pickupOf = (p: HasUpgrades): number => {
   let r = PLAYER_BASE_PICKUP;
-  for (let i = 0; i < lv(p, 'npm_install'); i++) r *= MAGNET_STEPS[i]!;
+  const n = lv(p, 'npm_install');
+  for (let i = 0; i < n; i++) r *= MAGNET_STEPS[i]!;
   return r;
 };
 /** 테스트 커버리지(방어): 한 대 맞을 때 피해를 단계마다 1 줄인다. 그래도 1 아래로는 줄지 않는다 (뱀서 Armor) */
