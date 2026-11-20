@@ -17,6 +17,7 @@ import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
 import { Predictor } from './predict';
+import { SoundCues, type Cue } from './sound-cues';
 import { THEMES, type Theme } from './themes';
 import { cameraPx, computeView, toScreen } from './view';
 
@@ -158,6 +159,9 @@ export class Renderer {
   readonly predictor = new Predictor();
   /** 마지막으로 그린 장면 (미니맵 등 다른 UI 가 같은 시점을 쓰도록) */
   sample: Sample | null = null;
+  /** 보이는 장면이 바뀔 때 생긴 소리 (맞음, 쓰러짐, 경험치 등). 화면의 반짝임과 같은 순간에 부른다 */
+  onCue: ((cue: Cue) => void) | null = null;
+  private cues = new SoundCues();
 
   private ctx: CanvasRenderingContext2D;
   private base: SpriteSet;
@@ -242,6 +246,7 @@ export class Renderer {
     this.hits.clear();
     this.zones.clear();
     this.facingLeft.clear();
+    this.cues.reset();
   }
 
   push(snap: Snapshot): void {
@@ -317,6 +322,7 @@ export class Renderer {
 
   /** 화면에 보이는 스냅샷이 바뀌는 순간, 사라진 것들에 이펙트를 붙인다 (보이는 시점과 이펙트 시점을 맞춘다) */
   private onShown(prev: Snapshot, next: Snapshot, now: number): void {
+    if (this.onCue) for (const cue of this.cues.diff(prev, next)) this.onCue(cue);
     // 화면의 중심 (내 캐릭터 또는 관전 시점)
     const [vx, vy] = next.view;
     // 방금 맞은 적: 번쩍임 + 밀려남 + 작은 불꽃. 월드가 멈춰 같은 틱이 다시 올 때는 되풀이하지 않는다.

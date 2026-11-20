@@ -1,16 +1,18 @@
 /**
- * 테마별 내용: 화면(CSS) 색, 바닥, 내리는 것(눈 등), 캐릭터 그림, 타이틀 문구.
+ * 테마별 내용: 화면(CSS) 색, 바닥, 내리는 것(눈 등), 캐릭터 그림, 타이틀 문구, 배경음악.
  * 어떤 테마를 쓸지는 @friday-deploy/shared 의 ACTIVE_THEME 이 정한다 (packages/shared/src/theme.ts).
  *
  * 새 테마 추가하기 (봄, 할로윈 등):
  *   1. shared 의 THEME_IDS 에 이름을 넣는다
  *   2. 아래 THEMES 에 같은 이름으로 한 벌을 만든다 (DEFAULT 를 펼쳐 놓고 바꿀 것만 덮어쓰면 된다)
+ *      음악을 바꾸려면 sounds.ts 에 곡을 적고 music 에 넣는다
  *   타입 검사와 themes.test.ts 가 빠진 값, 잘못된 그림을 알려 준다.
  *
  * 이 파일은 화면(DOM)을 쓰지 않는다 (단위 테스트에서 검사한다). 화면에 입히는 것은 apply-theme.ts 가 한다.
  */
 import { GAME_TAGLINE, THEME_IDS, type ThemeId } from '@friday-deploy/shared';
 import { DEV_A, DEV_B } from './art';
+import { CHRISTMAS_MUSIC, type MusicId, type Track } from './sounds';
 
 /**
  * 화면(HUD, 메뉴)에 쓰는 색. 키 이름이 곧 CSS 변수 이름이다 (`bg` → `--bg`).
@@ -76,6 +78,8 @@ export interface Theme {
   weather: Weather | null;
   /** 캐릭터 그림 (2프레임 걷기). art.ts 의 글자 격자와 같은 크기여야 한다 */
   dev: readonly [readonly string[], readonly string[]];
+  /** 바꿀 배경음악 (없는 것은 기본 곡. sounds.ts) */
+  music: Partial<Record<MusicId, Track>>;
 }
 
 const DEFAULT: Theme = {
@@ -111,6 +115,7 @@ const DEFAULT: Theme = {
   },
   weather: null,
   dev: [DEV_A, DEV_B],
+  music: {},
 };
 
 /** 산타 모자: 캐릭터 그림의 머리(위 세 줄)만 바꾼다. 몸은 그대로라 보이는 크기 = 맞는 크기가 유지된다 */
@@ -161,6 +166,7 @@ const CHRISTMAS: Theme = {
     sway: 6,
   },
   dev: [withHat(DEV_A), withHat(DEV_B)],
+  music: CHRISTMAS_MUSIC,
 };
 
 export const THEMES: Record<ThemeId, Theme> = {
