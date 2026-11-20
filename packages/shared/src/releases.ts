@@ -21,6 +21,12 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.1.4',
+    date: '2026-11-20',
+    title: '크리스마스가 왔어요',
+    items: ['화면이 크리스마스 색으로 바뀌고 눈이 내려요.', '캐릭터가 산타 모자를 썼어요.'],
+  },
+  {
     version: '0.1.3',
     date: '2026-11-19',
     title: '순위표에 무기도 보여요',

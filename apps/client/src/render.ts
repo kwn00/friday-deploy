@@ -17,6 +17,7 @@ import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
 import { Predictor } from './predict';
+import { THEMES, type Theme } from './themes';
 import { cameraPx, computeView, toScreen } from './view';
 
 interface Particle {
@@ -36,6 +37,20 @@ const HIT_FLASH_MS = 70;
 /** 밀려나는 거리 (논리 픽셀). 화면 표현일 뿐이고 서버의 적 위치는 바뀌지 않는다 */
 const HIT_RECOIL = 4;
 const MAX_PARTICLES = 500;
+/** 화면 위로 내리는 것(눈 등)의 최대 개수 (큰 화면에서도 이 이상 늘리지 않는다) */
+const MAX_FLAKES = 160;
+
+/** 내리는 것 하나 (화면 좌표, 논리 픽셀) */
+interface Flake {
+  x: number;
+  y: number;
+  /** 떨어지는 속도 (논리 픽셀/초) */
+  v: number;
+  /** 좌우 흔들림의 위상 */
+  phase: number;
+  size: number;
+  color: string;
+}
 
 /** 필드 아이템의 색: [받침 빛 rgb, 주웠을 때의 반짝임 두 색] */
 const ITEM_FX: Record<FieldItemKind, { glow: string; spark: [string, string] }> = {
@@ -102,8 +117,6 @@ interface Index {
 }
 
 const TILE = 32;
-const GLYPHS = ['{ }', '</>', '//', ';', '=>', '0x', '[]', '&&', '()', '#!', '::', '!='];
-const GLYPH_COLORS = ['#3b3f5c', '#33354d'];
 
 function hash(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) | 0;
@@ -150,6 +163,10 @@ export class Renderer {
   private base: SpriteSet;
   private spr!: SpriteSet;
   private glyphs: Sprite[][] = [];
+  /** 바닥 색·글자, 내리는 것, 캐릭터 그림 (themes.ts) */
+  private theme: Theme = THEMES.default;
+  /** 화면 위로 내리는 것 (눈 등). 화면 좌표(논리 픽셀) */
+  private flakes: Flake[] = [];
   private nameSprites = new Map<string, Sprite>();
   private scale = 0;
   private pxW = 1;
@@ -174,7 +191,7 @@ export class Renderer {
     private input: Input,
   ) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
-    this.base = loadSprites();
+    this.base = loadSprites(this.theme.dev);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     window.visualViewport?.addEventListener('resize', () => this.resize());
@@ -191,7 +208,7 @@ export class Renderer {
     if (v.scale !== this.scale) {
       this.scale = v.scale;
       this.spr = scaleSprites(this.base, v.scale);
-      this.glyphs = GLYPH_COLORS.map((color) => GLYPHS.map((g) => upscale(textSprite(g, color), v.scale)));
+      this.glyphs = this.theme.floor.glyphColors.map((color) => this.theme.floor.glyphs.map((g) => upscale(textSprite(g, color), v.scale)));
       this.nameSprites.clear();
     }
     if (this.canvas.width !== v.pxW || this.canvas.height !== v.pxH) {
@@ -199,6 +216,16 @@ export class Renderer {
       this.pxH = this.canvas.height = v.pxH;
     }
     this.ctx.imageSmoothingEnabled = false;
+  }
+
+  /** 테마를 바꾼다: 캐릭터 그림과 바닥 글자를 다시 굽는다 (게임 중에 불러도 된다) */
+  setTheme(theme: Theme): void {
+    if (theme === this.theme) return;
+    this.theme = theme;
+    this.base = loadSprites(theme.dev);
+    this.flakes = [];
+    this.scale = 0; // 다음 resize() 가 현재 배율로 모두 다시 키운다
+    this.resize();
   }
 
   /** 연결이 끊겼거나 화면을 떠난 사람(가만히 서 있다)은 이름 옆에 표시한다 */
@@ -346,7 +373,9 @@ export class Renderer {
 
     if (!sample) {
       this.idleCam += dt * 12;
-      this.drawBackground(this.idleCam, Math.sin(this.idleCam / 40) * 30);
+      const iy = Math.sin(this.idleCam / 40) * 30;
+      this.drawBackground(this.idleCam, iy);
+      this.drawWeather(this.idleCam, iy, dt);
       return;
     }
     const { prev, curr, alpha } = sample;
@@ -568,7 +597,43 @@ export class Renderer {
       }
     }
 
+    this.drawWeather(cx, cy, dt);
     this.drawStick();
+  }
+
+  /**
+   * 화면 위로 내리는 것 (눈 등). 게임과 상관없는 장식이라 화면 좌표로만 다룬다.
+   * 카메라가 움직이면 절반만큼 따라 밀려서(시차) 멀리 있는 것처럼 보인다. "동작 줄이기"가 켜져 있으면 그리지 않는다.
+   */
+  private drawWeather(camX: number, camY: number, dt: number): void {
+    const w = this.theme.weather;
+    if (!w || this.calm) return;
+    const { ctx, pxW, pxH } = this;
+    const S = this.scale;
+    const W = pxW / S;
+    const H = pxH / S;
+    const want = Math.min(MAX_FLAKES, Math.round(((W * H) / 10000) * w.density));
+    while (this.flakes.length < want) {
+      this.flakes.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        v: w.speed[0] + Math.random() * (w.speed[1] - w.speed[0]),
+        phase: Math.random() * Math.PI * 2,
+        size: Math.random() < 0.25 ? 2 : 1,
+        color: w.colors[Math.floor(Math.random() * w.colors.length)]!,
+      });
+    }
+    if (this.flakes.length > want) this.flakes.length = want;
+    const step = Math.min(dt, 0.1);
+    const mod = (a: number, m: number): number => ((a % m) + m) % m;
+    for (const f of this.flakes) {
+      f.y = mod(f.y + f.v * step, H);
+      f.phase += step * 1.3;
+      const x = mod(f.x + Math.sin(f.phase) * w.sway - camX * 0.5, W);
+      const y = mod(f.y - camY * 0.5, H);
+      ctx.fillStyle = f.color;
+      ctx.fillRect(Math.round(x * S), Math.round(y * S), f.size * S, f.size * S);
+    }
   }
 
   /**
@@ -961,7 +1026,8 @@ export class Renderer {
     const camY = cameraPx(cy, S);
     const hx = pxW >> 1;
     const hy = pxH >> 1;
-    ctx.fillStyle = '#1e1e2e';
+    const floor = this.theme.floor;
+    ctx.fillStyle = floor.base;
     ctx.fillRect(0, 0, pxW, pxH);
     const size = TILE * S;
     const x0 = Math.floor((camX - hx) / size);
@@ -973,14 +1039,14 @@ export class Renderer {
         const px = tx * size - camX + hx;
         const py = ty * size - camY + hy;
         if ((tx + ty) & 1) {
-          ctx.fillStyle = '#212133';
+          ctx.fillStyle = floor.tile;
           ctx.fillRect(px, py, size, size);
         }
-        ctx.fillStyle = '#2a2a3d';
+        ctx.fillStyle = floor.dot;
         ctx.fillRect(px, py, S, S);
         const hsh = hash(tx, ty);
         if (hsh % 5 === 0) {
-          const glyph = this.glyphs[hsh % 3 === 0 ? 0 : 1]![(hsh >>> 8) % GLYPHS.length]!;
+          const glyph = this.glyphs[hsh % 3 === 0 ? 0 : 1]![(hsh >>> 8) % floor.glyphs.length]!;
           ctx.drawImage(glyph, px + (4 + ((hsh >>> 4) % 10)) * S, py + (4 + ((hsh >>> 12) % 14)) * S);
         }
       }

@@ -110,6 +110,14 @@ docs/SECURITY.md  치팅 방지 설계와 위협 모델
   (`.github/workflows/release.yml`). 절차는 `.claude/skills/release/SKILL.md`, 작업 규칙은 `CLAUDE.md`.
 - 배포된 서버의 버전은 `/healthz` 로 확인할 수 있습니다.
 
+## 테마 (계절·행사 스킨)
+
+색·바닥·내리는 것(눈 등)·캐릭터 장식·타이틀 문구를 테마 하나로 묶어 두었습니다. 게임 규칙에는 영향이 없습니다.
+
+- **바꾸기**: `packages/shared/src/theme.ts` 의 `ACTIVE_THEME` 한 줄 (`'christmas'` · `'default'`)
+- **새로 만들기**: `THEME_IDS` 에 이름을 넣고 `apps/client/src/themes.ts` 의 `THEMES` 에 한 벌을 추가 (기본 테마를 펼쳐 놓고 바꿀 것만 덮어쓰기)
+- 화면에 입히는 것은 `apps/client/src/apply-theme.ts` 의 `applyTheme()` 입니다. 게임 중에 다시 불러도 되므로, 나중에 관리자 화면에서 고르면 서버가 내려준 값으로 부르기만 하면 됩니다.
+
 ## 실행
 
 ```bash
