@@ -21,6 +21,12 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.2.1',
+    date: '2026-11-20',
+    title: '다녀와도 소리가 나요',
+    items: ['다른 앱이나 탭에 다녀온 뒤 소리가 나지 않던 것을 고쳤어요.', '돌아와서 화면을 한 번 누르면 다시 소리가 나요.'],
+  },
+  {
     version: '0.2.0',
     date: '2026-11-20',
     title: '이제 소리가 나요',
