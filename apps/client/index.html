@@ -54,6 +54,8 @@
         <p id="status-text" class="status" role="status"></p>
         <!-- 버전 표기: 화면 오른쪽 아래 구석 (화면이 낮아 패널이 구석까지 차지할 때는 패널 안쪽 구석). 누르면 새 소식이 열린다 -->
         <button id="btn-version" class="version" type="button" aria-haspopup="dialog"></button>
+        <!-- 소리 켜고 끄기: 버전 표기의 반대쪽 구석 (효과음과 음악을 한꺼번에. 따로는 게임 중 메뉴에서) -->
+        <button id="btn-sound" class="version version--left" type="button"></button>
       </div>
     </section>
 
@@ -92,6 +94,8 @@
         <div class="buttons">
           <button id="btn-resume" class="btn btn--primary" type="button">▶ git stash pop <small>계속하기</small></button>
           <button id="btn-minimap" class="btn" type="button"></button>
+          <button id="btn-sfx" class="btn" type="button"></button>
+          <button id="btn-music" class="btn" type="button"></button>
           <button id="btn-quit" class="btn" type="button">✕ 그만두기</button>
         </div>
         <p class="hint hint--keys">Esc / P 메뉴 · M 미니맵</p>

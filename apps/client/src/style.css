@@ -1199,6 +1199,14 @@ body {
   cursor: pointer;
   touch-action: manipulation;
 }
+.version--left {
+  right: auto;
+  left: calc(var(--safe-l) + 2px);
+  padding: 14px 14px 6px 8px;
+  font-size: 18px;
+  text-align: left;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', var(--font);
+}
 .version:hover,
 .version:focus-visible {
   color: var(--text);
@@ -1263,6 +1271,11 @@ body {
     right: 0;
     bottom: 0;
     padding: 18px 10px 8px 14px;
+  }
+  .version--left {
+    right: auto;
+    left: 0;
+    padding: 14px 14px 6px 10px;
   }
 }
 @media (orientation: portrait) and (max-height: 540px) {

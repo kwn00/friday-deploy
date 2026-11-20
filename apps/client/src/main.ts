@@ -31,6 +31,7 @@ import {
   type UpgradeId,
 } from '@friday-deploy/shared';
 import { applyTheme } from './apply-theme';
+import { Sound } from './audio';
 import { chestText } from './chest';
 import { Input } from './input';
 import { Leaderboard } from './leaderboard';
@@ -69,6 +70,9 @@ const el = {
   pauseCode: $('pause-code'),
   resume: $<HTMLButtonElement>('btn-resume'),
   minimapBtn: $<HTMLButtonElement>('btn-minimap'),
+  sfxBtn: $<HTMLButtonElement>('btn-sfx'),
+  musicBtn: $<HTMLButtonElement>('btn-music'),
+  soundBtn: $<HTMLButtonElement>('btn-sound'),
   quit: $<HTMLButtonElement>('btn-quit'),
   minimap: $<HTMLCanvasElement>('minimap'),
   reconnect: $('screen-reconnect'),
@@ -102,7 +106,11 @@ const input = new Input(el.canvas);
 const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
 // 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 바꾸려면 packages/shared/src/theme.ts 의 ACTIVE_THEME
-applyTheme(ACTIVE_THEME, [renderer]);
+// 효과음과 배경음악 (소리 파일 없이 브라우저가 만든다. audio.ts). 테마가 음악을 바꿀 수 있다
+const sound = new Sound();
+applyTheme(ACTIVE_THEME, [renderer, sound]);
+renderer.onCue = (cue) => sound.cue(cue);
+sound.playMusic('title');
 // 순위표가 열려 있는 동안 뒤 화면은 포커스를 받지 않는다
 const board = new Leaderboard([el.title, el.over, el.lobby]);
 const notes = new ReleaseNotes([el.title, el.over, el.lobby]);
@@ -205,7 +213,10 @@ function setStatus(text: string, info = false): void {
 }
 
 function setPhase(next: Phase): void {
+  if (next === 'playing' && phase !== 'playing') sound.play('start');
   phase = next;
+  // 판이 끝나면 음악을 멈추고 끝나는 소리만 (결과 화면은 조용히). 그 밖에는 타이틀 곡
+  sound.playMusic(next === 'playing' ? 'game' : next === 'over' ? null : 'title');
   // 순위표는 타이틀과 결과 화면에서만 연다. 판이 시작되거나 대기실로 넘어가면(페어에서 방장이 시작한 경우 등) 닫는다.
   if (next !== 'title' && next !== 'over') board.close();
   if (next !== 'title') notes.close();
@@ -351,6 +362,43 @@ function toggleMinimap(): void {
 }
 applyMinimap();
 
+/* ───────────── 소리 ─────────────
+ * 효과음과 음악은 따로 켜고 끈다 (메뉴). 타이틀 구석의 버튼은 둘을 한꺼번에 켜고 끈다. 브라우저에 기억한다. */
+
+let sfxOn = store.get('sfx') !== '0';
+let musicOn = store.get('music') !== '0';
+function applySound(): void {
+  sound.setSfx(sfxOn);
+  sound.setMusicOn(musicOn);
+  el.sfxBtn.textContent = sfxOn ? '🔊 효과음 끄기' : '🔈 효과음 켜기';
+  el.musicBtn.textContent = musicOn ? '🎵 음악 끄기' : '🎵 음악 켜기';
+  const any = sfxOn || musicOn;
+  el.soundBtn.textContent = any ? '🔊' : '🔇';
+  el.soundBtn.setAttribute('aria-label', any ? '소리 끄기' : '소리 켜기');
+  el.soundBtn.setAttribute('aria-pressed', String(!any));
+}
+function setSound(sfx: boolean, music: boolean): void {
+  sfxOn = sfx;
+  musicOn = music;
+  store.set('sfx', sfx ? '1' : '0');
+  store.set('music', music ? '1' : '0');
+  applySound();
+}
+applySound();
+el.sfxBtn.addEventListener('click', () => setSound(!sfxOn, musicOn));
+el.musicBtn.addEventListener('click', () => setSound(sfxOn, !musicOn));
+el.soundBtn.addEventListener('click', () => {
+  const any = sfxOn || musicOn;
+  setSound(!any, !any);
+});
+// 브라우저는 화면을 한 번 누르기 전에는 소리를 내지 못하게 한다: 누를 때마다 깨운다 (휴대폰에서 전화 등으로 멈춘 뒤에도)
+for (const type of ['pointerdown', 'keydown', 'touchend'] as const) window.addEventListener(type, () => sound.unlock(), { capture: true, passive: true });
+// 버튼 누르는 소리 (강화 선택지는 따로 낸다)
+document.addEventListener('click', (e) => {
+  const btn = e.target instanceof Element ? e.target.closest('button') : null;
+  if (btn && !btn.classList.contains('offer')) sound.play('click');
+});
+
 /* ───────────── 레벨업 ───────────── */
 
 /** 레벨업 창의 칸 안내: 무기와 패시브를 몇 개까지 가질 수 있는지 (가득 찬 쪽은 새 것이 나오지 않는다) */
@@ -379,6 +427,7 @@ function showOffers(offers: Offer[], timeout: number): void {
       name.append(' ', node('em', o.level >= def.max ? 'offer__max' : '', tag));
       btn.append(node('span', 'offer__icon', def.icon), name, node('span', 'offer__desc', upgradeText(o.id, o.level)));
       btn.addEventListener('click', () => {
+        sound.play('pick');
         net.sendPick(i);
         el.levelup.classList.add('hidden');
         if (mode === 'solo') resumeUntil = performance.now() + RESUME_GRACE_MS;
@@ -600,6 +649,7 @@ function onMessage(msg: ServerMsg): void {
       updateHud(msg);
       break;
     case 'levelup':
+      sound.play('levelup');
       showOffers(msg.offers, msg.timeout);
       break;
     case 'chest':
@@ -646,6 +696,7 @@ function onMessage(msg: ServerMsg): void {
       }
       // 혼자 하던 판이 자리를 비운 사이에 끝났다면, 이어받는 대신 결과만 온다
       if (reconnecting) stopReconnect();
+      sound.play('over');
       showResult(msg.result, msg.place, msg.unranked);
       break;
     }
@@ -1088,6 +1139,8 @@ function frame(now: number): void {
   if (renderer.predictor.advance(real, canMove(now))) lastSent.at = 0;
   pumpInput(now);
   renderer.draw(now, dt, real);
+  // 메뉴나 선택창이 열려 있으면 음악을 줄인다
+  sound.duck(menuOpen || !el.levelup.classList.contains('hidden'));
   if (minimapOn && phase === 'playing' && renderer.sample) minimap.draw(renderer.sample.curr, renderer.viewSize, now);
   if (!el.levelup.classList.contains('hidden')) {
     const left = pausedSince > 0 ? offerDeadline - pausedSince : offerDeadline - now;
