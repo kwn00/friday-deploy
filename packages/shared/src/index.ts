@@ -7,3 +7,4 @@ export * from './rng';
 export * from './releases';
 export { duckOffset } from './combat';
 export * from './stats';
+export * from './theme';

@@ -79,9 +79,10 @@ export interface SpriteSet {
   items: Record<FieldItemKind, Sprite>;
 }
 
-export function loadSprites(): SpriteSet {
-  const a = bake(DEV_A);
-  const b = bake(DEV_B);
+/** @param dev 캐릭터 그림 2프레임 (테마마다 다를 수 있다. 없으면 기본 그림) */
+export function loadSprites(dev: readonly [readonly string[], readonly string[]] = [DEV_A, DEV_B]): SpriteSet {
+  const a = bake(dev[0]);
+  const b = bake(dev[1]);
   const enemy = mapSprites(ENEMY_IDS, (id) => bake(ENEMY_ART[id]));
   const shots = mapSprites(SHOT_KINDS, (k) => bake(SHOT_ART[k]));
   return {

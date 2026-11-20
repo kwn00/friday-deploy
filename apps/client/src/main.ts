@@ -1,8 +1,8 @@
 import {
+  ACTIVE_THEME,
   APP_VERSION,
   FIELD_ITEMS,
   FIELD_ITEM_KINDS,
-  GAME_TAGLINE,
   GAME_TITLE,
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SIZE,
@@ -30,6 +30,7 @@ import {
   type UnrankedReason,
   type UpgradeId,
 } from '@friday-deploy/shared';
+import { applyTheme } from './apply-theme';
 import { chestText } from './chest';
 import { Input } from './input';
 import { Leaderboard } from './leaderboard';
@@ -96,11 +97,12 @@ const el = {
 
 document.title = GAME_TITLE;
 $('title-text').textContent = GAME_TITLE;
-$('tagline-text').textContent = GAME_TAGLINE;
 
 const input = new Input(el.canvas);
 const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
+// 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 바꾸려면 packages/shared/src/theme.ts 의 ACTIVE_THEME
+applyTheme(ACTIVE_THEME, [renderer]);
 // 순위표가 열려 있는 동안 뒤 화면은 포커스를 받지 않는다
 const board = new Leaderboard([el.title, el.over, el.lobby]);
 const notes = new ReleaseNotes([el.title, el.over, el.lobby]);
