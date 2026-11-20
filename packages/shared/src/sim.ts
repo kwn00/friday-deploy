@@ -143,6 +143,8 @@ export interface Enemy {
   x: number;
   y: number;
   hp: number;
+  /** 나타날 때의 체력 (보스 체력바의 기준). 테스트에서 만든 적처럼 없으면 체력바를 가득으로 본다 */
+  maxHp?: number;
   /** 이동 속도 배율 (저주로 빨라진다) */
   spd: number;
   /** 얼어 있는 남은 시간(초). 얼어 있으면 움직이지도 때리지도 못한다 */
@@ -161,7 +163,7 @@ export interface Enemy {
   chest?: ChestOdds;
   /** 공격별로 다음에 다시 맞을 수 있는 시각 (같은 공격에 너무 자주 맞지 않게) */
   lock?: Map<number, number>;
-  /** 이번 틱에 피해를 입고 살아남았는지. 클라이언트가 피격 이펙트를 그리는 데만 쓴다 (체력은 보내지 않는다) */
+  /** 이번 틱에 피해를 입고 살아남았는지. 클라이언트가 피격 이펙트를 그리는 데만 쓴다 (체력은 보스만 비율로 보낸다) */
   hit: boolean;
 }
 
@@ -217,8 +219,6 @@ export interface Gem {
   to?: number;
   /** 끌려가는 현재 속도 (px/s) */
   sp?: number;
-  /** 땅의 경험치가 너무 많을 때 새 경험치를 모으는 빨간 경험치 (하나뿐이다) */
-  big?: boolean;
 }
 
 export interface Heal {
@@ -662,6 +662,7 @@ function spawnEnemy(world: World, type: EnemyId, anchor: Player, x?: number, y?:
     life: 0,
     hit: false,
   };
+  e.maxHp = e.hp;
   world.enemies.push(e);
   return e;
 }
@@ -1145,6 +1146,7 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
     s: [],
     z: [],
     zr: [],
+    b: [],
     g: [],
     h: [],
     i: [],
@@ -1175,6 +1177,8 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
     const d2 = (e.x - cx) ** 2 + (e.y - cy) ** 2;
     if (d2 > (EN[e.type].boss ? v2 : ev2)) continue;
     snap.e.push([e.id, ENEMY_IDS.indexOf(e.type), r1(e.x), r1(e.y), e.hit ? 1 : 0, e.frozen > 0 ? 1 : 0]);
+    // 보스 체력바: 남은 비율만 (올림: 조금이라도 남았으면 1 이상)
+    if (EN[e.type].boss && !EN[e.type].killRes) snap.b.push([e.id, Math.max(1, Math.min(100, Math.ceil((e.hp / (e.maxHp ?? e.hp)) * 100)))]);
   }
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
   // 카나리아·부엉이: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
@@ -1200,8 +1204,7 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
   for (const g of world.gone) if (g.tick > after) snap.zr.push(g.id);
   // 끌려오는 경험치는 움직이므로 소수 좌표로 보낸다 (전송 크기는 같다: 어차피 1/16 픽셀 정수로 부호화한다)
   // 색 단계 순서로 싣는다 (이진 스냅샷이 단계별로 묶어 보내므로, 풀었을 때와 같은 순서가 되게)
-  // 넘친 경험치를 모으는 것은 처음부터 빨강이다
-  const tierOf = (g: Gem): 0 | 1 | 2 => (g.big ? 2 : gemTier(g.v));
+  const tierOf = (g: Gem): 0 | 1 | 2 => gemTier(g.v);
   // 경험치는 화면 바로 바깥(ENEMY_VIEW_RADIUS)까지만 보낸다: 400 개까지 쌓여 스냅샷에서 가장 큰 몫이다.
   // 일반 적과 같은 범위라, 화면이 스냅샷 중심보다 앞서 갈 때(움직이는 중) 화면 가장자리 몇 픽셀에서 늦게 보일 수 있다
   const gems: Gem[] = [];

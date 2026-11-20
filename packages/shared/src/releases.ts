@@ -21,6 +21,16 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.2.2',
+    date: '2026-11-20',
+    title: '보스 체력이 보여요',
+    items: [
+      '보스 머리 위에 체력바가 생겼어요.',
+      '레벨이 높아지면 버그를 잡아도 경험치가 안 나오던 것을 고쳤어요.',
+      '산타 모자가 더 커졌어요.',
+    ],
+  },
+  {
     version: '0.2.1',
     date: '2026-11-20',
     title: '다녀와도 소리가 나요',

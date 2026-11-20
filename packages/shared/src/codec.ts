@@ -12,7 +12,7 @@ import { DT } from './constants';
 import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 6;
+const VERSION = 7;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 /**
@@ -183,6 +183,14 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
     w.u8((e[1] & 0x3f) | (e[5] ? 0x40 : 0) | (e[4] ? 0x80 : 0));
     w.xy12(e[2] - ox, e[3] - oy);
   }
+  // 보스 체력: 몇 마리 안 된다 (id 는 앞의 것과의 차이, 비율은 한 바이트)
+  prev = 0;
+  w.u8(Math.min(255, s.b.length));
+  for (const b of s.b.slice(0, 255)) {
+    w.varint(b[0] - prev);
+    prev = b[0];
+    w.u8(Math.max(0, Math.min(100, Math.round(b[1]))));
+  }
   prev = 0;
   w.varuint(s.s.length);
   for (const sh of s.s) {
@@ -277,7 +285,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
   };
   const abs = (o: number): number => o + r.i16() / Q;
 
-  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], ack, ackTicks, ackPhase, me, p: [], e: [], s: [], z: [], zr: [], g: [], h: [], i: [] };
+  const snap: Snapshot = { t: 'snap', tick, time: Math.round(tick * DT * 10) / 10, paused: (flags & 1) !== 0, view: [ox, oy], ack, ackTicks, ackPhase, me, p: [], e: [], s: [], z: [], zr: [], b: [], g: [], h: [], i: [] };
   const players = r.u8();
   for (let i = 0; i < players; i++) {
     const id = r.varuint();
@@ -294,6 +302,13 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
     if ((type & 0x3f) >= ENEMY_IDS.length) throw new RangeError('unknown enemy type');
     const [dx, dy] = r.xy12();
     snap.e.push([id, type & 0x3f, ox + dx, oy + dy, type >> 7, (type >> 6) & 1]);
+  }
+  id = 0;
+  for (let i = r.u8(); i > 0; i--) {
+    id += r.varint();
+    const pct = r.u8();
+    if (pct > 100) throw new RangeError('boss hp out of range');
+    snap.b.push([id, pct]);
   }
   id = 0;
   for (let i = count(); i > 0; i--) {

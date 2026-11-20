@@ -11,7 +11,7 @@ function snap(tick: number, over: Partial<Snapshot> = {}, me: Partial<Snapshot['
   return {
     t: 'snap', tick, time: tick / 20, paused: false, view: [0, 0], ack: 0, ackTicks: 0, ackPhase: 0,
     me: { id: 1, hp: 100, maxHp: 100, xp: 0, xpNext: 6, level: 1, kills: 0, alive: true, revives: 0, up: {}, ...me },
-    p: [[1, 0, 0, 1, 1, 100, 0, 0, 0, 0, 0, 0, 0]], e: [], s: [], z: [], zr: [], g: [], h: [], i: [],
+    p: [[1, 0, 0, 1, 1, 100, 0, 0, 0, 0, 0, 0, 0]], e: [], s: [], z: [], zr: [], b: [], g: [], h: [], i: [],
     ...over,
   };
 }

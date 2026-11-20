@@ -150,20 +150,41 @@ export function damage(world: World, e: Enemy, dmg: number, by: Player | undefin
 }
 
 /**
- * 경험치를 떨어뜨린다. 땅에 이미 MAX_GEMS 개가 있으면 새로 떨어뜨리지 않고 빨간 경험치 하나에 모은다 (뱀서: 400 개).
- * 모으는 경험치는 하나뿐이고, 누가 주울 때까지 남는다.
+ * 경험치를 떨어뜨린다. 땅에는 MAX_GEMS 개까지만 둔다 (스냅샷과 서버 계산이 커지지 않게).
+ * 가득 차 있으면, 살아 있는 모두에게서 가장 멀리 있는 경험치 하나를 없애고 그 값을 새로 떨어지는 경험치에 더한다.
+ * 그래서 적을 잡으면 언제나 그 자리에 경험치가 떨어지고, 경험치의 총량도 그대로다 (값이 커지면 색도 빨강이 된다).
+ * 예전에는 넘친 경험치를 처음 넘친 자리의 빨간 경험치 하나에 모았는데(뱀서 규칙), 그 자리가 화면 밖이 되면
+ * 적을 잡아도 경험치가 하나도 떨어지지 않는 것처럼 보였다. 끌려오는 중인 경험치는 없애지 않는다.
  */
 function dropGem(world: World, x: number, y: number, v: number): void {
   if (world.gems.length >= MAX_GEMS) {
-    const big = world.gems.find((g) => g.big);
-    if (big) {
-      big.v += v;
+    const i = farthestGem(world);
+    if (i >= 0) v += world.gems.splice(i, 1)[0]!.v;
+    else {
+      // 모두 끌려오는 중 (거의 없는 일): 새로 만들지 않고 하나에 더한다
+      world.gems[0]!.v += v;
       return;
     }
-    world.gems.push({ id: world.nextId++, x, y, v, big: true });
-    return;
   }
   world.gems.push({ id: world.nextId++, x, y, v });
+}
+
+/** 살아 있는 사람 중 가장 가까운 사람과의 거리가 가장 먼 경험치의 위치 (끌려오는 중인 것은 빼고, 없으면 -1) */
+function farthestGem(world: World): number {
+  const alive = [...world.players.values()].filter((p) => p.alive);
+  let best = -1;
+  let far = -1;
+  for (let i = 0; i < world.gems.length; i++) {
+    const g = world.gems[i]!;
+    if (g.to !== undefined) continue;
+    let near = Infinity;
+    for (const p of alive) near = Math.min(near, (g.x - p.x) ** 2 + (g.y - p.y) ** 2);
+    if (near > far) {
+      far = near;
+      best = i;
+    }
+  }
+  return best;
 }
 
 /** 경험치 없이 지운다 (git clean). 처치 수는 센다. 보스의 보물상자는 그 자리에 떨어진다 */

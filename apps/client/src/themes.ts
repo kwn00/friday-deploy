@@ -76,7 +76,10 @@ export interface Theme {
     glyphs: readonly string[];
   };
   weather: Weather | null;
-  /** 캐릭터 그림 (2프레임 걷기). art.ts 의 글자 격자와 같은 크기여야 한다 */
+  /**
+   * 캐릭터 그림 (2프레임 걷기). art.ts 의 글자 격자와 폭이 같아야 한다.
+   * 모자처럼 위로 솟는 장식은 그만큼 아래에 빈 줄을 붙여, 그림의 가운데가 몸의 가운데에 오게 한다
+   */
   dev: readonly [readonly string[], readonly string[]];
   /** 바꿀 배경음악 (없는 것은 기본 곡. sounds.ts) */
   music: Partial<Record<MusicId, Track>>;
@@ -118,13 +121,25 @@ const DEFAULT: Theme = {
   music: {},
 };
 
-/** 산타 모자: 캐릭터 그림의 머리(위 세 줄)만 바꾼다. 몸은 그대로라 보이는 크기 = 맞는 크기가 유지된다 */
+/**
+ * 산타 모자: 머리 위로 세 줄 솟고 끝의 방울이 옆으로 늘어진다. 머리카락 자리(위 세 줄)도 모자가 덮는다.
+ * 위로 늘어난 만큼 아래에 빈 줄을 붙여 그림의 가운데를 몸과 같은 자리에 둔다 (보이는 몸 = 맞는 몸. themes.test.ts 가 확인한다).
+ */
 const SANTA_HAT = [
-  '....kkkkkkk.k.', //
-  '...krrRrrrrkwk',
-  '..kwwwwwwwwkk.',
+  '.......kkk.kk.', //
+  '......krrRkwwk',
+  '.....krrrRRkk.',
+  '....krrrrrRRk.',
+  '...krrrrrrrRk.',
+  '.kwwwwwwwwwwk.',
 ];
-const withHat = (rows: readonly string[]): string[] => [...SANTA_HAT, ...rows.slice(SANTA_HAT.length)];
+/** 모자가 머리카락 위로 솟는 줄 수 */
+export const HAT_RISE = 3;
+const withHat = (rows: readonly string[]): string[] => [
+  ...SANTA_HAT,
+  ...rows.slice(SANTA_HAT.length - HAT_RISE),
+  ...Array<string>(HAT_RISE).fill('.'.repeat(rows[0]!.length)),
+];
 
 const CHRISTMAS: Theme = {
   ...DEFAULT,
