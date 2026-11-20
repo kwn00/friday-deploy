@@ -77,12 +77,15 @@ test('경험치 (뱀서 Level up): 1→2 는 5, 그 뒤 10씩, 20 레벨과 40 �
   assert.equal(p.xp, 20);
 });
 
-test('경험치가 너무 많으면 (400개) 새 경험치는 빨간 경험치 하나에 모인다 (뱀서 Experience Gem)', () => {
+test('경험치가 너무 많으면 (400개) 가장 먼 경험치를 새 경험치에 합친다: 잡으면 언제나 그 자리에 떨어지고 총량은 같다', () => {
+  // 뱀서는 넘친 경험치를 빨간 경험치 하나에 모으지만, 그 자리가 화면 밖이면 경험치가 안 떨어지는 것처럼 보여서 바꿨다 (0.2.2)
   const { w, p } = quiet(2);
   for (let i = 0; i < MAX_GEMS; i++) w.gems.push({ id: w.nextId++, x: p.x + 5000 + i, y: p.y, v: 1 });
+  const total = (): number => w.gems.reduce((n, g) => n + g.v, 0);
+  const before = total();
   p.up.console_log = 8;
   p.cd.console_log = 0;
-  // 끌어당기는 범위 밖에서 잡는다 (빨간 경험치를 바로 줍지 않게)
+  // 끌어당기는 범위 밖에서 잡는다 (떨어진 경험치를 바로 줍지 않게)
   const bugs = [enemy(9001, p.x + 150, p.y, 'off_by_one', 1), enemy(9002, p.x - 150, p.y, 'off_by_one', 1), enemy(9003, p.x, p.y + 150, 'off_by_one', 1)];
   const at: [number, number][] = [[150, 0], [-150, 0], [0, 150]];
   for (let i = 0; i < 400 && bugs.some((b) => b.hp > 0); i++) {
@@ -93,11 +96,12 @@ test('경험치가 너무 많으면 (400개) 새 경험치는 빨간 경험치 �
     w.enemies = bugs.filter((b) => b.hp > 0);
     still(w);
   }
-  assert.equal(w.gems.length, MAX_GEMS + 1, '하나만 더 생긴다');
-  const big = w.gems.find((g) => g.big)!;
-  assert.equal(big.v, 6, 'Off-by-one 3마리 × 2');
-  const snap = buildSnapshot(w, p.id)!;
-  assert.ok(snap.g.some((g) => g[0] === big.id && g[3] === 2), '넘친 경험치를 모으는 것은 값이 작아도 빨강');
+  assert.equal(w.gems.length, MAX_GEMS, '400 개를 넘지 않는다');
+  assert.equal(total(), before + 6, '총량은 그대로 (Off-by-one 3마리 × 2)');
+  const dropped = w.gems.filter((g) => Math.hypot(g.x - p.x, g.y - p.y) < 200);
+  assert.equal(dropped.length, 3, '잡은 자리마다 하나씩 떨어진다');
+  for (const g of dropped) assert.equal(g.v, 3, '가장 먼 경험치(1)를 합친 값 2 + 1');
+  assert.ok(!w.gems.some((g) => g.x === p.x + 5000 + MAX_GEMS - 1), '가장 먼 것부터 없어진다');
 });
 
 test('맞는 방식 (뱀서): 닿아 있는 적 중 가장 센 한 대만 맞고 0.24초 무적. 많이 붙어도 그대로다', () => {

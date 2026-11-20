@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ACTIVE_THEME, GAME_TAGLINE, THEME_IDS, isThemeId } from '@friday-deploy/shared';
-import { DEV_A, PAL } from './art';
+import { DEV_A, DEV_B, PAL } from './art';
 import { ALL_THEMES, THEMES, type UiToken } from './themes';
 
 const COLOR = /^#[0-9a-f]{6}$/i;
@@ -47,16 +47,27 @@ test('theme: 기본 테마는 원래 문구를 쓰고, style.css 의 첫 화면 
   }
 });
 
-test('theme: 캐릭터 그림은 기본 그림과 크기가 같고 팔레트에 있는 색만 쓴다 (보이는 크기 = 맞는 크기)', () => {
+test('theme: 캐릭터 그림은 폭이 같고, 팔레트에 있는 색만 쓰고, 몸은 기본 그림과 같은 자리에 있다 (보이는 몸 = 맞는 몸)', () => {
   for (const t of ALL_THEMES) {
-    for (const rows of t.dev) {
-      assert.equal(rows.length, DEV_A.length, t.id);
+    for (const [f, rows] of t.dev.entries()) {
+      const extra = rows.length - DEV_A.length;
+      assert.ok(extra >= 0 && extra % 2 === 0, `${t.id}: 위로 솟은 만큼 아래에 빈 줄을 붙여 가운데를 맞춘다 (${rows.length}줄)`);
+      const rise = extra / 2;
       for (const row of rows) {
         assert.equal(row.length, DEV_A[0]!.length, `${t.id}: ${row}`);
         for (const ch of row) assert.ok(ch === '.' || Object.hasOwn(PAL, ch), `${t.id}: 팔레트에 없는 글자 ${ch}`);
       }
+      for (const row of rows.slice(rows.length - rise)) assert.match(row, /^\.+$/, `${t.id}: 아래에 붙인 줄은 비어 있다`);
+      // 다리·몸통(아래 절반)은 기본 그림과 같다: 장식은 위쪽만 바꾼다
+      const base = f === 0 ? DEV_A : DEV_B;
+      const half = Math.floor(base.length / 2);
+      assert.deepEqual(rows.slice(rise + half, rise + base.length), base.slice(half), `${t.id}: 몸 아래 절반`);
     }
   }
+});
+
+test('theme: 크리스마스 산타 모자는 머리 위로 솟는다', () => {
+  assert.ok(THEMES.christmas.dev[0].length > DEV_A.length);
 });
 
 test('theme: 내리는 것은 너무 많지 않다 (화면 1만 픽셀당 3개 이하, 속도는 낮은 값이 먼저)', () => {

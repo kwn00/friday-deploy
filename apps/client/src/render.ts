@@ -492,12 +492,12 @@ export class Renderer {
       return [ex, ey, sprite];
     };
     // 보스는 졸개 위에 그린다 (가려지지 않게). 그 밑에는 그림자와 보라 고리, 월요일 아침은 붉게 일렁이는 빛을 먼저 깐다
-    const bosses: [EnemyId, number, number, Sprite][] = [];
+    const bosses: [EnemyId, number, number, Sprite, number][] = [];
     for (const e of curr.e) {
       const id = ENEMY_IDS[e[1]];
       if (!id || !IS_BOSS[e[1]]) continue;
       const [ex, ey, sprite] = enemySpot(e, id);
-      bosses.push([id, ex, ey, sprite]);
+      bosses.push([id, ex, ey, sprite, e[0]]);
       this.drawBossGround(id, sx(ex), sy(ey), sprite.height, ex, ey, now);
     }
     for (const e of curr.e) {
@@ -509,7 +509,14 @@ export class Renderer {
       blit(sprite, ex, ey);
       ctx.globalAlpha = 1;
     }
-    for (const [, ex, ey, sprite] of bosses) blit(sprite, ex, ey);
+    // 보스 머리 위 체력바: 서버가 보낸 남은 비율 (두 스냅샷 사이를 이어서 부드럽게 줄어든다)
+    const hpNow = new Map(curr.b);
+    const hpWas = new Map(prev.b);
+    for (const [, ex, ey, sprite, bid] of bosses) {
+      blit(sprite, ex, ey);
+      const pct = hpNow.get(bid);
+      if (pct !== undefined) this.drawBossHp(sx(ex), sy(ey) - (sprite.height >> 1), sprite.width, mix(hpWas.get(bid), pct) / 100);
+    }
 
     // 러버덕은 서버가 위치를 보내지 않는다. 보간된 주인 위치와 보간된 서버 시간으로 직접 계산하므로
     // 다른 것들과 같은 프레임률로 매끄럽게 돈다. (판정은 서버가 같은 식으로 한다)
@@ -538,13 +545,15 @@ export class Renderer {
       // 동작 줄이기 설정에서는 반투명으로만
       if (p[7]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 90) % 2 ? 0.35 : 0.9;
       else if (p[12]) ctx.globalAlpha = this.calm ? 0.6 : Math.floor(now / 50) % 2 ? 0.2 : 1;
-      blit(this.spr.dev[face < 0 ? 'l' : 'r'][frame], x, y);
+      const body = this.spr.dev[face < 0 ? 'l' : 'r'][frame];
+      blit(body, x, y);
       ctx.globalAlpha = 1;
       // 2단계 인증: 남은 방패 수만큼 색이 바뀌는 고리 (1 파랑, 2 초록, 3 노랑)
       if (p[11] > 0) this.drawShield(px, py, S, p[11], now);
       // 머리 위 체력바 / 이름
+      // 그림 꼭대기에서 4픽셀 위 (테마의 모자처럼 그림이 위로 솟으면 그만큼 올라간다. 기본 그림은 11픽셀 위)
       const bx = px - 7 * S;
-      const by = py - 11 * S;
+      const by = sy(y) - (body.height >> 1) - 4 * S;
       ctx.fillStyle = '#11111b';
       ctx.fillRect(bx, by, 14 * S, 2 * S);
       ctx.fillStyle = p[0] === curr.me.id ? '#a6e3a1' : '#89b4fa';
@@ -1057,6 +1066,27 @@ export class Renderer {
         }
       }
     }
+  }
+
+  /**
+   * 보스 체력바: 그림 위 가운데에 (기기 픽셀). 폭은 그림 폭과 같고(최소 20 논리 픽셀), 높이는 3 논리 픽셀.
+   * 어두운 테두리 안에 남은 만큼 빨강, 줄어든 자리는 어두운 빨강으로 남긴다
+   */
+  private drawBossHp(cx: number, top: number, spriteW: number, ratio: number): void {
+    const { ctx } = this;
+    const S = this.scale;
+    const w = Math.max(20 * S, spriteW);
+    const h = 3 * S;
+    const x = Math.round(cx - w / 2);
+    const y = Math.round(top - h - 3 * S);
+    ctx.fillStyle = '#11111b';
+    ctx.fillRect(x - S, y - S, w + 2 * S, h + 2 * S);
+    ctx.fillStyle = '#5c1a2b';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#e64553';
+    ctx.fillRect(x, y, Math.max(S, Math.round(w * Math.max(0, Math.min(1, ratio)))), h);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(x, y, Math.max(S, Math.round(w * Math.max(0, Math.min(1, ratio)))), S);
   }
 
   private drawStick(): void {

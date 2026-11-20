@@ -130,6 +130,8 @@ export interface Snapshot {
   p: [number, number, number, number, number, number, number, number, number, number, number, number, number][];
   /** [id, enemyTypeIndex, x, y, 이번 틱에 맞았는지(0|1), 얼어 있는지(0|1)] */
   e: [number, number, number, number, number, number][];
+  /** 보스의 남은 체력 [적 id, 남은 비율(1~100, 올림)]. e 에 있는 보스만 (월요일 아침처럼 쓰러뜨릴 수 없는 것은 빠진다). 화면의 체력바용 */
+  b: [number, number][];
   /** 투사체·소환물 [id, 종류 번호(SHOT_KINDS 의 순서), x, y] */
   s: [number, number, number, number][];
   /**
