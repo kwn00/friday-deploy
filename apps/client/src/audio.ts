@@ -60,38 +60,72 @@ export class Sound implements ThemeTarget {
   private nextAt = 0;
   private timer = 0;
 
+  /** 화면을 떠났다 돌아온 뒤 아직 화면을 누르지 않았다 (다음에 누를 때 오디오를 새로 만든다) */
+  private stale = false;
+
   constructor() {
     document.addEventListener('visibilitychange', () => {
-      if (!this.ctx) return;
-      if (document.hidden) void this.ctx.suspend();
-      else void this.ctx.resume();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      if (document.hidden) {
+        this.stale = true;
+        ctx.suspend().catch(() => {});
+        return;
+      }
+      // 돌아왔다: 먼저 이어서 내 본다 (대부분의 브라우저는 이것으로 된다).
+      // 아이폰 Safari 는 화면을 떠나면 오디오가 'interrupted' 로 멈추고 이어지지 않거나, 'running' 이라면서 소리가 안 나기도 한다.
+      // 멈춘 채면 한 번 멈췄다 다시 켜 보고(알려진 우회법), 그래도 안 되면 다음에 화면을 누를 때 unlock() 이 새로 만든다.
+      if (ctx.state === 'running') return;
+      ctx
+        .suspend()
+        .catch(() => {})
+        .then(() => ctx.resume())
+        .catch(() => {});
     });
   }
 
-  /** 사용자가 화면을 눌렀을 때 부른다 (그 전에는 소리를 낼 수 없다). 여러 번 불러도 된다 */
+  /**
+   * 사용자가 화면을 눌렀을 때 부른다 (그 전에는 소리를 낼 수 없다). 여러 번 불러도 된다.
+   * 화면을 떠났다 돌아온 뒤 처음 누를 때는 오디오를 새로 만든다: 멈춘 오디오가 되살아났는지 페이지에서는 알 수 없는 경우가 있어서
+   * (아이폰 Safari 는 'running' 이라면서 소리가 안 나기도 한다), 누르는 순간 새로 만드는 것이 확실하다. 음악은 처음부터 다시 나온다.
+   */
   unlock(): void {
-    if (!this.ctx) {
-      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
-      const comp = ctx.createDynamicsCompressor();
-      const master = ctx.createGain();
-      master.gain.value = MASTER;
-      comp.connect(master).connect(ctx.destination);
-      this.sfxBus = ctx.createGain();
-      this.sfxBus.gain.value = this.sfxOn ? SFX_BUS : 0;
-      this.sfxBus.connect(comp);
-      this.musicBus = ctx.createGain();
-      this.musicBus.gain.value = this.musicGain();
-      this.musicBus.connect(comp);
-      const len = ctx.sampleRate;
-      this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = this.noise.getChannelData(0);
-      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      this.ctx = ctx;
-      this.timer = window.setInterval(() => this.schedule(), 25);
+    if (document.hidden) return;
+    if (this.ctx && this.stale) {
+      this.stale = false;
+      const old = this.ctx;
+      this.ctx = null;
+      old.close().catch(() => {});
     }
-    if (this.ctx.state !== 'running' && !document.hidden) void this.ctx.resume();
+    if (!this.ctx) this.build();
+    const ctx = this.ctx;
+    if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+  }
+
+  /** 오디오와 소리 길(효과음·음악 → 압축기 → 전체 크기 → 스피커)을 만든다. 켜고 끈 설정은 지금 값을 따른다 */
+  private build(): void {
+    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const comp = ctx.createDynamicsCompressor();
+    const master = ctx.createGain();
+    master.gain.value = MASTER;
+    comp.connect(master).connect(ctx.destination);
+    this.sfxBus = ctx.createGain();
+    this.sfxBus.gain.value = this.sfxOn ? SFX_BUS : 0;
+    this.sfxBus.connect(comp);
+    this.musicBus = ctx.createGain();
+    this.musicBus.gain.value = this.musicGain();
+    this.musicBus.connect(comp);
+    const len = ctx.sampleRate;
+    this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = this.noise.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    this.ctx = ctx;
+    // 지난 오디오에서 울리던 소리의 기록과 곡의 위치는 새 오디오에서 의미가 없다
+    this.playing.clear();
+    this.songId = null;
+    if (!this.timer) this.timer = window.setInterval(() => this.schedule(), 25);
   }
 
   setTheme(theme: Theme): void {
