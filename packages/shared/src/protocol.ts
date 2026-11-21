@@ -64,6 +64,8 @@ export interface LeaderboardEntry {
   level: number;
   /** 판이 끝난 시각 (epoch ms) */
   at: number;
+  /** 기록을 세운 게임 버전 (x.y.z). 이 값을 남기기 전의 기록에는 없다 */
+  version?: string;
 }
 
 /** GET /api/leaderboard?board=solo|coop&season=N 의 응답 (season 을 빼면 지금 시즌) */
@@ -113,11 +115,17 @@ export interface TopRunUpgrade {
   avgLevel: number;
 }
 
-/** GET /api/stats/upgrades?season=N&kind=weapon|passive 의 응답 (누구나 볼 수 있다. 이름·IP 같은 개인 정보는 없다) */
+/** GET /api/stats/upgrades?season=N&version=x.y.z&kind=weapon|passive 의 응답 (누구나 볼 수 있다. 이름·IP 같은 개인 정보는 없다) */
 export interface UpgradeStatsResponse {
   season: number;
   current: number;
   seasons: number[];
+  /** 보고 있는 게임 버전 (x.y.z). null 이면 시즌 전체 (모든 버전의 합) */
+  version: string | null;
+  /** 지금 서버의 게임 버전 (새로 세는 판이 붙는 버전) */
+  currentVersion: string;
+  /** 이 시즌에 통계가 있는 버전들 (최신 버전부터). 지금 시즌에는 지금 버전이 판이 없어도 들어 있다 */
+  versions: { version: string; runs: number; since: string | null }[];
   /** 이 시즌에 세기 시작한 날 (YYYY-MM-DD, UTC). 아직 센 판이 없으면 null */
   since: string | null;
   /** 센 판 수: 30초 이상 버틴 판에서 처음부터 함께 한 사람마다 하나 */
@@ -131,7 +139,7 @@ export interface UpgradeStatsResponse {
   loading: boolean;
   /** 선택률 높은 순 (같으면 많이 나온 순) */
   upgrades: UpgradeStat[];
-  /** 그 시즌의 순위표 기록(혼자·함께)에서 계산: 끝날 때 가진 아이템. 아이템을 남기기 전의 기록은 빠진다 */
+  /** 그 시즌의 순위표 기록(혼자·함께)에서 계산: 끝날 때 가진 아이템. 아이템을 남기기 전의 기록은 빠지고, 버전을 고르면 그 버전의 기록만 */
   topRuns: { runs: number; owned: TopRunUpgrade[] };
 }
 

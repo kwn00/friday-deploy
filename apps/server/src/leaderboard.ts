@@ -1,4 +1,5 @@
 import {
+  APP_VERSION,
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SEASON,
   LEADERBOARD_SIZE,
@@ -39,13 +40,18 @@ export interface RunRecord {
   pausedSeconds: number;
   /** epoch ms */
   endedAt: number;
+  /** 기록을 세운 게임 버전 (x.y.z). 이 값을 남기기 전의 기록에는 없다 */
+  version?: string;
 }
 
 /**
- * Room 이 판이 끝났을 때 넘기는 내용 (시즌은 리더보드가 붙인다).
+ * Room 이 판이 끝났을 때 넘기는 내용 (시즌과 버전은 리더보드가 붙인다).
  * tallies: names 와 같은 순서의 사람별 횟수 (아이템 통계용. 리더보드에는 남기지 않는다)
  */
-export type RunReport = Omit<RunRecord, 'season'> & { tallies?: UpgradeTally[] };
+export type RunReport = Omit<RunRecord, 'season' | 'version'> & { tallies?: UpgradeTally[] };
+
+/** 버전(x.y.z)별 아이템 통계 */
+export type StatsByVersion = Record<string, StoredStats>;
 
 /** 아이템 하나의 누적 횟수 (아이템 통계. 시즌마다) */
 export interface UpgradeCounts {
@@ -70,6 +76,20 @@ export interface StoredStats {
 
 export const emptyStats = (): StoredStats => ({ runs: 0, since: null, upgrades: {} });
 export const emptyCounts = (): UpgradeCounts => ({ offered: 0, picked: 0, autoPicked: 0, chest: 0, finalOwned: 0, finalLevelSum: 0 });
+
+/** 버전별 통계의 깊은 복사 (저장소 안의 값을 밖에서 바꾸지 못하게) */
+export function copyStatsByVersion(src: StatsByVersion): StatsByVersion {
+  const out: StatsByVersion = {};
+  for (const [v, s] of Object.entries(src)) out[v] = addStatsInto(emptyStats(), s);
+  return out;
+}
+
+/** 버전별 통계를 모두 더한 것 (시즌 전체) */
+export function sumStats(byVersion: StatsByVersion): StoredStats {
+  const out = emptyStats();
+  for (const s of Object.values(byVersion)) addStatsInto(out, s);
+  return out;
+}
 
 /** a 에 b 를 더한다 (a 를 바꾼다) */
 export function addStatsInto(a: StoredStats, b: StoredStats): StoredStats {
@@ -105,13 +125,13 @@ export interface LeaderboardStore {
   save(record: RunRecord): Promise<void>;
   /** 기록이나 아이템 통계가 있는 시즌들 */
   seasons(): Promise<number[]>;
-  /** 한 시즌의 아이템 통계 합계 */
-  loadStats(season: number): Promise<StoredStats>;
+  /** 한 시즌의 아이템 통계를 게임 버전별로 */
+  loadStats(season: number): Promise<StatsByVersion>;
   /**
-   * 한 시즌의 아이템 통계에 더한다. batch 는 묶음마다 다른 id 로, 같은 id 로 다시 보내면 두 번 더하지 않는다
+   * 한 시즌·버전의 아이템 통계에 더한다. batch 는 묶음마다 다른 id 로, 같은 id 로 다시 보내면 두 번 더하지 않는다
    * (확인 응답만 잃은 경우: 실패로 보였지만 실제로는 더해졌을 수 있다)
    */
-  addStats(season: number, delta: StoredStats, batch: string): Promise<void>;
+  addStats(season: number, version: string, delta: StoredStats, batch: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -125,21 +145,22 @@ export class MemoryStore implements LeaderboardStore {
   async save(record: RunRecord): Promise<void> {
     if (!this.rows.has(record.id)) this.rows.set(record.id, record);
   }
-  private stats = new Map<number, StoredStats>();
+  private stats = new Map<number, StatsByVersion>();
   /** 최근에 더한 묶음 id (메모리 저장소는 더한 뒤에 실패할 일이 없어 오래 기억할 필요가 없다: 최근 것만) */
   private batches = new Set<string>();
   async seasons(): Promise<number[]> {
     return [...new Set([...[...this.rows.values()].map((r) => r.season), ...this.stats.keys()])].sort((a, b) => a - b);
   }
-  async loadStats(season: number): Promise<StoredStats> {
-    return addStatsInto(emptyStats(), this.stats.get(season) ?? emptyStats());
+  async loadStats(season: number): Promise<StatsByVersion> {
+    return copyStatsByVersion(this.stats.get(season) ?? {});
   }
-  async addStats(season: number, delta: StoredStats, batch: string): Promise<void> {
+  async addStats(season: number, version: string, delta: StoredStats, batch: string): Promise<void> {
     if (this.batches.has(batch)) return;
     this.batches.add(batch);
     if (this.batches.size > 1000) this.batches.delete(this.batches.values().next().value!);
-    if (!this.stats.has(season)) this.stats.set(season, emptyStats());
-    addStatsInto(this.stats.get(season)!, delta);
+    const byVersion = this.stats.get(season) ?? {};
+    this.stats.set(season, byVersion);
+    addStatsInto((byVersion[version] ??= emptyStats()), delta);
   }
   async close(): Promise<void> {}
 }
@@ -174,6 +195,7 @@ function toEntries(rows: readonly RunRecord[]): LeaderboardEntry[] {
     kills: r.kills,
     level: r.level,
     at: r.endedAt,
+    ...(r.version ? { version: r.version } : {}),
   }));
 }
 
@@ -203,6 +225,8 @@ export class Leaderboard {
   constructor(
     private readonly store: LeaderboardStore,
     readonly season: number = LEADERBOARD_SEASON,
+    /** 새로 남기는 기록에 붙일 게임 버전 */
+    readonly version: string = APP_VERSION,
   ) {}
 
   get persistent(): boolean {
@@ -261,6 +285,7 @@ export class Leaderboard {
       level: int(report.level, 1, 10_000),
       pausedSeconds: int(report.pausedSeconds, 0, 24 * 3600),
       endedAt: int(report.endedAt, 0, Number.MAX_SAFE_INTEGER),
+      version: this.version,
     };
     if (record.time < LEADERBOARD_MIN_SECONDS || this.seen.has(record.id)) return null;
     const index = this.insert(record);

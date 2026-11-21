@@ -207,11 +207,16 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const rawKind = queryOf(req.url, 'kind');
     if (rawKind !== null && rawKind !== 'weapon' && rawKind !== 'passive') return json(res, 400, { error: 'bad_kind' }, PUBLIC_API);
     const kind: StatsKind = rawKind;
+    // 게임 버전 (x.y.z). 없으면 시즌 전체
+    const version = queryOf(req.url, 'version');
+    if (version !== null && !/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(version)) return json(res, 400, { error: 'bad_version' }, PUBLIC_API);
     return answer(res, async () => {
       // 지금 시즌은 DB 를 기다리지 않는다 (아는 시즌 목록으로 답한다)
       const seasons = season === leaderboard.season ? leaderboard.knownSeasons() : await pastSeasonsOrReply(res, season);
       if (!seasons) return;
-      const body: UpgradeStatsResponse = await stats.response(season, kind, seasons, leaderboard);
+      const out = await stats.response(season, version, kind, seasons, leaderboard);
+      if ('unknownVersion' in out) return json(res, 404, { error: 'unknown_version', versions: out.unknownVersion }, PUBLIC_API);
+      const body: UpgradeStatsResponse = out;
       // 1분 동안은 브라우저가 다시 묻지 않아도 된다 (통계는 천천히 바뀐다). 아직 다 불러오지 못한 응답은 담아 두지 않게 한다
       json(res, 200, body, { ...PUBLIC_API, 'Cache-Control': body.loading ? 'no-store' : 'public, max-age=60' });
     });
