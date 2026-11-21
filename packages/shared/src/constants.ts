@@ -15,10 +15,12 @@ export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const ROOM_CODE_LEN = 6;
 
 /**
- * 리더보드 시즌. 난이도가 달라지는 변경(무기·적·아이템 수치 등)을 하면 올린다.
+ * 리더보드 시즌 = 게임 버전(x.y.z)의 메이저(x). 순위표와 아이템 통계를 시즌별로 나눈다.
  * 서로 다른 규칙에서 나온 기록이 한 순위표에 섞이지 않게 하기 위한 것이다.
+ * 시즌을 바꾸는 것은 메이저 버전을 올리는 것이고, 그러면 지난 시즌 기록은 기본 순위표에서 빠진다 (지우지는 않는다).
+ * 사용자가 분명하게 승인했을 때만 바꾼다 (CLAUDE.md). 버전과 어긋나지 않는지 releases.test.ts 가 확인한다.
  */
-export const LEADERBOARD_SEASON = 3;
+export const LEADERBOARD_SEASON = 0;
 /** 순위표에 보여주는 기록 수 */
 export const LEADERBOARD_SIZE = 50;
 /** 이보다 짧게 끝난 판은 기록하지 않는다 (시작하자마자 끝난 판으로 순위표가 채워지지 않게) */

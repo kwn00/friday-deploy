@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
-import { APP_VERSION, RELEASES, compareVersions, unseenReleases } from './index';
+import { APP_VERSION, LEADERBOARD_SEASON, RELEASES, compareVersions, unseenReleases } from './index';
 
 const ROOT = new URL('../../../', import.meta.url);
 const read = (path: string): string => readFileSync(new URL(path, ROOT), 'utf8');
@@ -14,6 +14,10 @@ test('버전: 현재 버전은 릴리즈 목록의 맨 위이고, 모든 package
   const lock = JSON.parse(read('package-lock.json')) as { version: string; packages: Record<string, { version?: string }> };
   assert.equal(lock.version, APP_VERSION, 'package-lock.json');
   for (const path of ['', 'apps/client', 'apps/server', 'packages/shared']) assert.equal(lock.packages[path]!.version, APP_VERSION, `package-lock.json packages["${path}"]`);
+});
+
+test('시즌: 리더보드 시즌은 게임 버전의 메이저와 같다 (시즌을 바꾸려면 메이저를 올린다)', () => {
+  assert.equal(LEADERBOARD_SEASON, Number(APP_VERSION.split('.')[0]));
 });
 
 test('릴리즈 목록: 최신순이고 버전이 겹치지 않으며, 버전마다 GitHub 릴리즈 본문 파일이 있다', () => {

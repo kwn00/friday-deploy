@@ -1,6 +1,17 @@
 import pg from 'pg';
-import { ownedUpgrades, type BoardId } from '@friday-deploy/shared';
-import type { LeaderboardStore, RunRecord } from './leaderboard';
+import { UPGRADE_IDS, ownedUpgrades, type BoardId, type UpgradeId } from '@friday-deploy/shared';
+import { emptyStats, type LeaderboardStore, type RunRecord, type StoredStats, type UpgradeCounts } from './leaderboard';
+
+/** upgrade_stats 의 한 줄 (bigint 는 문자열로 온다) */
+interface StatRow {
+  upgrade_id: string;
+  offered: string;
+  picked: string;
+  auto_picked: string;
+  chest: string;
+  final_owned: string;
+  final_level_sum: string;
+}
 
 /**
  * PostgreSQL 저장소 (DATABASE_URL 이 설정됐을 때만 쓴다).
@@ -24,10 +35,10 @@ import type { LeaderboardStore, RunRecord } from './leaderboard';
  *  - 세션 단위 기능(세션 잠금, SET, LISTEN 등)을 쓰지 않는다.
  */
 
-/** 순위표·시즌마다 이 개수까지만 남긴다. Leaderboard 가 메모리에 들고 있는 수(보여주는 수의 4배)보다 훨씬 넉넉하게 */
-const KEEP_PER_BOARD = 1000;
-/** 저장 이 횟수마다 한 번 정리한다 (매번 지우면 쓸데없이 DB 를 두드린다) */
-const PRUNE_EVERY = 50;
+/*
+ * 리더보드 기록은 지우지 않는다 (CLAUDE.md). 예전에는 순위표·시즌마다 상위 1000개 밖의 기록을 자동으로 지웠는데,
+ * 시즌을 합치면(시즌 0) 그 정리가 기록을 지울 수 있어서 없앴다. 기록 하나는 200바이트 남짓이라 쌓여도 작다.
+ */
 
 const POOL_MAX = 2;
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -58,10 +69,56 @@ const ADD_MEMBER_KILLS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS 
 const HAS_MEMBER_ITEMS = `SELECT 1 FROM pg_attribute
    WHERE attrelid = 'leaderboard_runs'::regclass AND attname = 'member_items' AND NOT attisdropped`;
 const ADD_MEMBER_ITEMS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_items jsonb`;
-/** 상위 N 조회와 정리 쿼리가 그대로 이 인덱스를 따라 읽는다 */
+/** 상위 N 조회가 그대로 이 인덱스를 따라 읽는다 */
 const HAS_INDEX = `SELECT to_regclass('leaderboard_runs_top') IS NOT NULL AS present`;
 const CREATE_INDEX = `CREATE INDEX IF NOT EXISTS leaderboard_runs_top
     ON leaderboard_runs (board, season, time DESC, kills DESC, level DESC, ended_at ASC, (id COLLATE "C") ASC)`;
+/**
+ * 서버가 어느 시즌으로 떠 본 적이 있는지 (뜰 때마다 지금 시즌을 남긴다). 아래 "시즌 0 으로 합치기"가
+ * 새 규칙의 시즌(1 이상)이 생긴 뒤에는 절대 돌지 않게 하는 표시다.
+ */
+const CREATE_SEASON_MARKS = `CREATE TABLE IF NOT EXISTS season_marks (
+    season     integer PRIMARY KEY,
+    first_seen bigint  NOT NULL
+  )`;
+const MARK_SEASON = 'INSERT INTO season_marks (season, first_seen) VALUES ($1, $2) ON CONFLICT (season) DO NOTHING';
+/**
+ * 시즌 0 으로 합치기: 버전의 메이저(x)를 시즌으로 쓰기로 하면서(0.x = 시즌 0), 그 전 규칙으로 쌓인 기록
+ * (시즌 1~3)의 시즌 번호를 0 으로 바꾼다. 기록은 지우지 않고 번호만 바꾼다.
+ * 새 규칙의 시즌 1 이상으로 떠 본 서버가 아직 하나도 없을 때만 한다 (season_marks): 그때까지 0 이 아닌 시즌의 기록은
+ * 모두 예전 규칙의 것이다. 그래서 서버가 뜰 때마다 해도 안전하고, 배포하는 동안 아직 내려가지 않은 예전 서버가
+ * 예전 시즌 번호로 남긴 기록도 다음에 뜰 때 합쳐진다. 1.x 가 한 번이라도 뜬 뒤에는 0.x 로 되돌려 띄워도(롤백) 하지 않는다.
+ */
+const FOLD_INTO_SEASON_ZERO = `UPDATE leaderboard_runs SET season = 0
+   WHERE season <> 0 AND NOT EXISTS (SELECT 1 FROM season_marks WHERE season > 0)`;
+/** 아이템 통계: 시즌·아이템마다 누적 횟수 */
+const CREATE_UPGRADE_STATS = `CREATE TABLE IF NOT EXISTS upgrade_stats (
+    season          integer NOT NULL,
+    upgrade_id      text    NOT NULL,
+    offered         bigint  NOT NULL DEFAULT 0,
+    picked          bigint  NOT NULL DEFAULT 0,
+    auto_picked     bigint  NOT NULL DEFAULT 0,
+    chest           bigint  NOT NULL DEFAULT 0,
+    final_owned     bigint  NOT NULL DEFAULT 0,
+    final_level_sum bigint  NOT NULL DEFAULT 0,
+    PRIMARY KEY (season, upgrade_id)
+  )`;
+/**
+ * 아이템 통계를 더한 묶음의 id. 더하기와 같은 트랜잭션에서 남긴다: 확인 응답만 잃은 묶음을 다시 보내도 두 번 더하지 않는다.
+ * 다시 보내는 것은 길어야 몇십 분 안이므로, 오래된 id 는 서버가 뜰 때 지운다 (기록이 아니라 중복 확인용 표시다).
+ */
+const CREATE_STAT_BATCHES = `CREATE TABLE IF NOT EXISTS stat_batches (
+    id     text   PRIMARY KEY,
+    season integer NOT NULL,
+    at     bigint NOT NULL
+  )`;
+const STAT_BATCH_KEEP_MS = 7 * 24 * 3600_000;
+/** 아이템 통계: 시즌마다 센 판 수와 세기 시작한 때 */
+const CREATE_STAT_RUNS = `CREATE TABLE IF NOT EXISTS stat_runs (
+    season integer PRIMARY KEY,
+    runs   bigint  NOT NULL DEFAULT 0,
+    since  bigint  NOT NULL
+  )`;
 /** 열을 더할 때 테이블 잠금을 기다리는 최대 시간. 못 잡으면 물러났다가 다음 기회에 다시 한다 (그동안 다른 쿼리를 줄 세우지 않게) */
 const MIGRATE_LOCK_TIMEOUT_MS = 3_000;
 
@@ -93,6 +150,11 @@ function itemsOf(raw: unknown, members: number): Pick<RunRecord, 'itemsBy'> {
 export interface PostgresStoreOptions {
   /** DB 쪽 문장 시간 제한(ms). 기본 10초. 테스트에서 짧게 잡을 때만 바꾼다 */
   statementTimeoutMs?: number;
+  /**
+   * 지금 시즌 (서버는 LEADERBOARD_SEASON 을 넘긴다). 0 이면 서버가 뜰 때 예전 시즌의 기록을 시즌 0 으로 합친다.
+   * 넘기지 않으면 아무 시즌도 건드리지 않는다 (테스트는 시즌 번호로 서로의 데이터를 나누므로 넘기지 않는다)
+   */
+  currentSeason?: number;
 }
 
 export async function createPostgresStore(url: string, options: PostgresStoreOptions = {}): Promise<LeaderboardStore> {
@@ -103,13 +165,14 @@ class PostgresStore implements LeaderboardStore {
   readonly persistent = true;
   private readonly pool: pg.Pool;
   private ready: Promise<void> | null = null;
-  private saves = 0;
   private closed = false;
   private inflight = new Set<Promise<unknown>>();
   /** 트랜잭션을 열면서 그 트랜잭션에만 시간 제한을 거는 문장 (숫자는 코드의 상수라 문자열에 넣어도 안전하다) */
   private readonly begin: string;
+  private readonly currentSeason: number | undefined;
 
   constructor(url: string, options: PostgresStoreOptions) {
+    this.currentSeason = Number.isInteger(options.currentSeason) && options.currentSeason! >= 0 ? options.currentSeason : undefined;
     const limit = Math.max(1, Math.floor(Number(options.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS)) || STATEMENT_TIMEOUT_MS);
     this.begin = `BEGIN; SET LOCAL statement_timeout = ${limit}; SET LOCAL idle_in_transaction_session_timeout = ${limit}`;
     this.pool = new pg.Pool({
@@ -167,7 +230,88 @@ class PostgresStore implements LeaderboardStore {
         ),
       );
     });
-    if (++this.saves % PRUNE_EVERY === 0) void this.prune(r.board, r.season);
+  }
+
+  async seasons(): Promise<number[]> {
+    return this.track(async () => {
+      await this.ensureSchema();
+      const res = await this.tx((client) =>
+        client.query<{ season: number }>('SELECT DISTINCT season FROM leaderboard_runs UNION SELECT season FROM stat_runs ORDER BY season'),
+      );
+      return res.rows.map((r) => r.season);
+    });
+  }
+
+  async loadStats(season: number): Promise<StoredStats> {
+    return this.track(async () => {
+      await this.ensureSchema();
+      return this.tx(async (client) => {
+        const head = await client.query<{ runs: string; since: string }>('SELECT runs, since FROM stat_runs WHERE season = $1', [season]);
+        const rows = await client.query<StatRow>(
+          'SELECT upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum FROM upgrade_stats WHERE season = $1',
+          [season],
+        );
+        const out = emptyStats();
+        if (head.rows[0]) {
+          out.runs = Number(head.rows[0].runs);
+          out.since = Number(head.rows[0].since);
+        }
+        for (const r of rows.rows) {
+          // 지금 게임에 없는 아이템(이름이 바뀌었거나 빠진 것)은 건너뛴다
+          if (!(UPGRADE_IDS as readonly string[]).includes(r.upgrade_id)) continue;
+          out.upgrades[r.upgrade_id as UpgradeId] = {
+            offered: Number(r.offered),
+            picked: Number(r.picked),
+            autoPicked: Number(r.auto_picked),
+            chest: Number(r.chest),
+            finalOwned: Number(r.final_owned),
+            finalLevelSum: Number(r.final_level_sum),
+          };
+        }
+        return out;
+      }, true); // 두 표를 한 시점에서 읽는다 (그 사이에 다른 서버가 더한 것이 반만 섞이지 않게)
+    });
+  }
+
+  async addStats(season: number, d: StoredStats, batch: string): Promise<void> {
+    await this.track(async () => {
+      await this.ensureSchema();
+      await this.tx(async (client) => {
+        // 이미 더한 묶음이면(확인 응답만 잃고 다시 보낸 것) 아무것도 하지 않는다
+        const fresh = await client.query('INSERT INTO stat_batches (id, season, at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING', [batch, season, Date.now()]);
+        if (fresh.rowCount === 0) return;
+        await client.query(
+          `INSERT INTO stat_runs (season, runs, since) VALUES ($1, $2, $3)
+           ON CONFLICT (season) DO UPDATE SET runs = stat_runs.runs + EXCLUDED.runs, since = LEAST(stat_runs.since, EXCLUDED.since)`,
+          [season, d.runs, d.since ?? Date.now()],
+        );
+        const ids = Object.keys(d.upgrades) as UpgradeId[];
+        if (ids.length === 0) return;
+        const col = (f: (c: UpgradeCounts) => number): number[] => ids.map((id) => f(d.upgrades[id]!));
+        // 아이템마다 한 줄씩 한 문장으로 더한다 (판 하나에 최대 38줄)
+        await client.query(
+          `INSERT INTO upgrade_stats (season, upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum)
+           SELECT $1, * FROM unnest($2::text[], $3::bigint[], $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[])
+           ON CONFLICT (season, upgrade_id) DO UPDATE SET
+             offered = upgrade_stats.offered + EXCLUDED.offered,
+             picked = upgrade_stats.picked + EXCLUDED.picked,
+             auto_picked = upgrade_stats.auto_picked + EXCLUDED.auto_picked,
+             chest = upgrade_stats.chest + EXCLUDED.chest,
+             final_owned = upgrade_stats.final_owned + EXCLUDED.final_owned,
+             final_level_sum = upgrade_stats.final_level_sum + EXCLUDED.final_level_sum`,
+          [
+            season,
+            ids,
+            col((c) => c.offered),
+            col((c) => c.picked),
+            col((c) => c.autoPicked),
+            col((c) => c.chest),
+            col((c) => c.finalOwned),
+            col((c) => c.finalLevelSum),
+          ],
+        );
+      });
+    });
   }
 
   async close(): Promise<void> {
@@ -178,25 +322,6 @@ class PostgresStore implements LeaderboardStore {
       await this.pool.end();
     } catch {
       /* 이미 끊긴 연결 때문에 종료가 실패해도 무시한다 */
-    }
-  }
-
-  /** 상위 KEEP_PER_BOARD 밖의 기록만 지운다. 순위표에 보이는 기록과 겹칠 수 없다. 실패해도 다음 기회에 한다 */
-  private async prune(board: BoardId, season: number): Promise<void> {
-    try {
-      await this.track(async () => {
-        await this.ensureSchema();
-        await this.tx((client) =>
-          client.query(
-            `DELETE FROM leaderboard_runs WHERE id IN (
-               SELECT id FROM leaderboard_runs WHERE board = $1 AND season = $2
-                ORDER BY ${ORDER} OFFSET $3)`,
-            [board, season, KEEP_PER_BOARD],
-          ),
-        );
-      });
-    } catch (err) {
-      console.error('[leaderboard] 오래된 기록 정리 실패 (다음에 다시 시도합니다)', err instanceof Error ? err.message : err);
     }
   }
 
@@ -230,6 +355,21 @@ class PostgresStore implements LeaderboardStore {
       }
       const index = await client.query<{ present: boolean }>(HAS_INDEX);
       if (!index.rows[0]?.present) await client.query(CREATE_INDEX);
+      await client.query(CREATE_UPGRADE_STATS);
+      await client.query(CREATE_STAT_RUNS);
+      await client.query(CREATE_STAT_BATCHES);
+      await client.query(CREATE_SEASON_MARKS);
+      await client.query('DELETE FROM stat_batches WHERE at < $1', [Date.now() - STAT_BATCH_KEEP_MS]);
+      if (this.currentSeason !== undefined) {
+        // 이 시즌으로 떠 본 적이 있다고 남긴다 (기록을 쓰기 전에: 1.x 가 남긴 표시가 있으면 아래 합치기는 돌지 않는다)
+        await client.query(MARK_SEASON, [this.currentSeason, Date.now()]);
+        // 기록을 불러오기 전에 합친다 (같은 트랜잭션: 합치지 못하면 준비도 실패하고, 다음 호출이 다시 한다)
+        if (this.currentSeason === 0) {
+          await client.query(`SET LOCAL lock_timeout = ${MIGRATE_LOCK_TIMEOUT_MS}`);
+          const moved = await client.query(FOLD_INTO_SEASON_ZERO);
+          if ((moved.rowCount ?? 0) > 0) console.log(`[leaderboard] 시즌 0: 예전 시즌의 기록 ${moved.rowCount}개를 시즌 0 으로 합쳤습니다 (지운 기록은 없습니다)`);
+        }
+      }
     });
   }
 
@@ -237,10 +377,11 @@ class PostgresStore implements LeaderboardStore {
    * 작업 하나를 트랜잭션 하나로 실행한다. 시간 제한은 이 트랜잭션에만 건다 (SET LOCAL):
    * 직접 주소에서도, 트랜잭션 단위로 연결을 나눠 쓰는 풀러 뒤에서도 똑같이 적용된다.
    */
-  private async tx<T>(work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  private async tx<T>(work: (client: pg.PoolClient) => Promise<T>, snapshot = false): Promise<T> {
     const client = await this.pool.connect();
     try {
-      await client.query(this.begin);
+      // snapshot: 여러 문장이 한 시점의 데이터를 읽어야 할 때 (트랜잭션 단위라 연결 풀러 뒤에서도 된다)
+      await client.query(snapshot ? this.begin.replace('BEGIN;', 'BEGIN ISOLATION LEVEL REPEATABLE READ;') : this.begin);
       const out = await work(client);
       await client.query('COMMIT');
       client.release();
