@@ -4,6 +4,7 @@ import {
   DT,
   ENEMY_VIEW_RADIUS,
   EVOLUTIONS,
+  MAX_GEMS,
   PASSIVE_IDS,
   SHOT_KINDS,
   UPGRADES,
@@ -23,7 +24,9 @@ import {
   ownedUpgrades,
   pickOffer,
   readyEvolutions,
+  removePlayer,
   step,
+  xpForLevel,
   upgradesOf,
   type ChestOdds,
   type Enemy,
@@ -247,33 +250,98 @@ test('rm -rf node_modules: 화면을 지워도 경험치와 아이템은 언제�
   assert.ok(p.xp >= 3 + 1 + 1, `먹은 경험치 ${p.xp}`);
 });
 
-test('rm -rf node_modules: 함께 하는 판에서 끌려오던 경험치는 내가 레벨업을 고르는 동안 기다렸다가 마저 끌려온다', () => {
-  const w = createWorld(320);
+/** 함께 하는 방: a 가 rm -rf 를 쓰고, b 는 멀리서 계속 움직인다 (고르지 않으므로 월드는 멈추지 않는다) */
+function coopRmRf(seed: number): { w: World; a: Player; b: Player } {
+  const w = createWorld(seed);
   w.itemCd = 1e9;
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
-  // 동료는 멀리서 계속 움직인다 (고르지 않으므로 월드는 멈추지 않는다)
   b.x = a.x + 3000;
   b.up = {};
+  b.xpNext = 1e9;
   a.up = { rm_rf: 1, npm_install: 1 };
+  return { w, a, b };
+}
+
+test('rm -rf node_modules: 함께 하는 판에서 끌려오던 경험치는 내가 레벨업을 고르는 동안 그 자리에서 기다렸다가 마저 끌려온다', () => {
+  const { w, a } = coopRmRf(320);
   a.xpNext = 3;
   const bugs = Array.from({ length: 20 }, (_, k) => enemy(9900 + k, a.x + Math.cos(k) * (60 + k * 10), a.y + Math.sin(k) * (60 + k * 10), 'bug', 1));
   tick(w, bugs);
   assert.ok(bugs.every((e) => e.hp <= 0), '화면의 버그를 지웠다');
   assert.ok(w.gems.length >= 20 && w.gems.every((g) => g.to === a.id && g.hold), '모두 나에게 끌려온다');
-  // 먼저 닿은 것으로 레벨업. 고르는 동안(1초)에도 월드는 돈다
-  let chose = 0;
+  const total = w.gems.reduce((n, g) => n + g.v, 0);
+  // 받은 경험치 = 오른 레벨마다 필요했던 양 + 지금 모은 양 (1레벨의 필요량만 3 으로 바꿔 두었다)
+  const gained = (): number => {
+    let n = a.xp;
+    for (let l = 1; l < a.level; l++) n += l === 1 ? 3 : xpForLevel(l);
+    return n;
+  };
+  let choosing = 0;
+  let frozen: string | null = null;
   for (let i = 0; i < 20 * 8; i++) {
     tick(w, []);
     assert.ok(!w.paused, '동료가 있으니 월드는 멈추지 않는다');
-    if (a.offers) {
-      // 고르는 동안 끌려오던 것은 놓이지 않는다
-      assert.ok(w.gems.every((g) => g.to === a.id), '고르는 동안에도 내 것');
-      if (++chose % 20 === 0) pickOffer(w, a.id, 0);
+    if (!a.offers) {
+      frozen = null;
+      continue;
     }
+    // 고르는 동안: 끌려오던 것은 놓이지도, 움직이지도, 먹히지도 않는다
+    const now = JSON.stringify([w.gems.map((g) => [g.id, g.x, g.y, g.to, g.hold]), gained()]);
+    if (frozen !== null) assert.equal(now, frozen, '고르는 동안 그대로 기다린다');
+    frozen = now;
+    if (++choosing % 20 === 0) pickOffer(w, a.id, 0);
   }
-  assert.ok(chose > 0, '중간에 레벨업했다');
+  assert.ok(choosing >= 20, `중간에 레벨업을 골랐다 (${choosing}틱)`);
   assert.equal(w.gems.length, 0, `모두 먹었다 (남은 것 ${w.gems.length})`);
+  assert.ok(Math.abs(gained() - total) < 1e-6, `받은 경험치 ${gained()} = 끌려온 경험치 ${total}`);
+});
+
+test('rm -rf node_modules: 기다리던 경험치는 주인이 나가면 놓인다 (다른 사람이 평소처럼 줍고, 기다리게 하지 않는다)', () => {
+  const { w, a, b } = coopRmRf(321);
+  a.xpNext = 1;
+  const bugs = Array.from({ length: 6 }, (_, k) => enemy(9950 + k, a.x + 80 + k * 20, a.y, 'bug', 1));
+  tick(w, bugs);
+  for (let i = 0; i < 20 && !a.offers; i++) tick(w, []);
+  assert.ok(a.offers && w.gems.some((g) => g.hold), '레벨업을 고르는 동안 기다리는 것이 있다');
+  // b 가 그 자리로 온다. a 는 나간다. c 는 멀리서 계속 움직인다 (b 가 고를 때 월드가 멈추지 않게)
+  const c = addPlayer(w, 'c');
+  c.x = a.x - 3000;
+  c.up = {};
+  c.xpNext = 1e9;
+  b.x = a.x + 100;
+  b.y = a.y;
+  b.xpNext = 1e9;
+  removePlayer(w, a.id);
+  tick(w, []);
+  assert.ok(w.gems.every((g) => !g.hold), '주인이 나가면 hold 도 지운다');
+  assert.ok(w.gems.some((g) => g.to === b.id), '가까운 사람이 평소처럼 끈다');
+  b.offers = ['coffee'];
+  tick(w, []);
+  assert.ok(w.gems.every((g) => g.to === undefined), 'b 가 고르는 동안에는 평소처럼 놓는다 (기다리는 것은 rm -rf 가 끈 것만)');
+});
+
+test('rm -rf node_modules: 땅이 가득한데 모두 기다리는 중이어도, 동료가 잡은 적은 그 자리에 경험치를 떨어뜨린다', () => {
+  const { w, a, b } = coopRmRf(322);
+  // 땅을 a 가 끄는(기다리는) 경험치로 가득 채운다
+  w.gems = Array.from({ length: MAX_GEMS }, (_, k) => ({ id: 50_000 + k, x: a.x + 100 + (k % 20) * 5, y: a.y + Math.floor(k / 20) * 5, v: 1, to: a.id, sp: 120, hold: true as const }));
+  a.offers = ['coffee'];
+  const held = (): number => w.gems.filter((g) => g.to === a.id).reduce((n, g) => n + g.v, 0);
+  b.up = { console_log: 8 };
+  const victims = Array.from({ length: 5 }, (_, k) => enemy(9970 + k, b.x + 40, b.y + k * 3, 'bug', 1));
+  for (let i = 0; i < 40 && victims.some((e) => e.hp > 0); i++) {
+    for (const e of victims) if (e.hp > 0) [e.x, e.y] = [b.x + 40, b.y + (e.id - 9970) * 3];
+    tick(w, victims);
+    assert.ok(!w.paused);
+  }
+  assert.ok(victims.every((e) => e.hp <= 0), 'b 가 잡았다');
+  // 잡은 만큼의 경험치가 b 쪽에 생긴다 (가득 찬 땅에서는 새로 떨어지는 것끼리 평소 규칙대로 합쳐진다) — b 가 이미 주운 것도 센다
+  const fresh = w.gems.filter((g) => g.to !== a.id);
+  assert.ok(fresh.length >= 1, '잡은 자리에 경험치가 떨어진다');
+  assert.ok(fresh.every((g) => Math.hypot(g.x - b.x, g.y - b.y) < 80), '잡은 자리에');
+  assert.equal(fresh.reduce((n, g) => n + g.v, 0) + b.xp, victims.length, '잡은 만큼');
+  assert.equal(held(), MAX_GEMS, 'a 를 기다리던 경험치의 합은 그대로 (동료의 몫이 섞이지 않는다)');
+  assert.ok(w.gems.length <= MAX_GEMS, '땅의 개수 상한은 그대로');
 });
 
 test('24시간 모니터링: 카나리아와 부엉이가 함께, 쉬지 않고 폭탄을 떨어뜨린다. 두 마리 모두 화면에 보낸다', () => {

@@ -6,7 +6,7 @@
  */
 import { ENEMY_VIEW_RADIUS, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED } from './constants';
 import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, type WeaponDef, type WeaponId, type WeaponStats, type ZoneKind } from './content';
-import type { Enemy, Player, Shot, World, Zone } from './sim';
+import type { Enemy, Gem, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf } from './stats';
 
 /** 적 정의를 지역 상수로 잡아 둔다 (모듈 경계 너머의 이름은 틱마다 수천 번 읽으면 그 자체로 무겁다) */
@@ -164,13 +164,35 @@ function dropGem(world: World, x: number, y: number, v: number): void {
   if (world.gems.length >= MAX_GEMS) {
     const i = farthestGem(world);
     if (i >= 0) v += world.gems.splice(i, 1)[0]!.v;
-    else {
+    else if (!mergeHeld(world)) {
       // 모두 끌려오는 중 (거의 없는 일): 새로 만들지 않고 하나에 더한다
       world.gems[0]!.v += v;
       return;
     }
   }
   world.gems.push({ id: world.nextId++, x, y, v });
+}
+
+/**
+ * 땅이 가득한데 모두 끌려오는 중일 때: rm -rf node_modules 가 끌어 같은 주인을 기다리는 경험치 둘을 하나로 합쳐 자리를 만든다
+ * (주인이 레벨업을 고르는 동안 오래 기다릴 수 있다: 그동안 동료가 잡은 적도 그 자리에 경험치를 떨어뜨리게).
+ * 합친 값과 주인은 그대로라 아무것도 잃지 않는다. 합칠 것이 없으면 false
+ */
+function mergeHeld(world: World): boolean {
+  const first = new Map<number, Gem>();
+  for (let i = 0; i < world.gems.length; i++) {
+    const g = world.gems[i]!;
+    if (!g.hold || g.to === undefined) continue;
+    const keep = first.get(g.to);
+    if (!keep) {
+      first.set(g.to, g);
+      continue;
+    }
+    keep.v += g.v;
+    world.gems.splice(i, 1);
+    return true;
+  }
+  return false;
 }
 
 /** 살아 있는 사람 중 가장 가까운 사람과의 거리가 가장 먼 경험치의 위치 (끌려오는 중인 것은 빼고, 없으면 -1) */
