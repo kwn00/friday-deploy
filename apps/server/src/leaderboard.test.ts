@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LEADERBOARD_MIN_SECONDS, LEADERBOARD_SIZE } from '@friday-deploy/shared';
-import { Leaderboard, MemoryStore, compareRuns, type LeaderboardStore, type RunRecord, type RunReport } from './leaderboard';
+import { Leaderboard, MemoryStore, compareRuns, emptyStats, type LeaderboardStore, type RunRecord, type RunReport } from './leaderboard';
+
+/** 아이템 통계를 쓰지 않는 가짜 저장소에 붙이는 빈 구현 */
+const noStats = { seasons: async () => [], loadStats: async () => emptyStats(), addStats: async () => {} };
 
 let seq = 0;
 const run = (over: Partial<RunReport> = {}): RunReport => ({
@@ -82,6 +85,7 @@ test('저장소가 실패해도 예외가 새지 않고, 순위는 계속 계산
   const saved: RunRecord[] = [];
   let down = true;
   const flaky: LeaderboardStore = {
+    ...noStats,
     persistent: true,
     load: async () => { if (down) throw new Error('db down'); return []; },
     save: async (r) => { if (down) throw new Error('db down'); saved.push(r); },
@@ -118,6 +122,7 @@ test('불러오기 전에 받은 기록은 불러온 기록과 합쳐지고, 순
   let down = true;
   const old: RunRecord[] = [500, 450, 420].map((time, i) => ({ id: `old${i}`, board: 'solo', season: 1, names: ['old'], time, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1000 + i }));
   const store: LeaderboardStore = {
+    ...noStats,
     persistent: true,
     load: async (board) => { if (down) throw new Error('db asleep'); return board === 'solo' ? old : []; },
     save: async () => {},
@@ -147,6 +152,7 @@ test('DB 가 잠깐 안 되는 동안 판이 여러 번 끝나도 기록을 버�
   let calls = 0;
   let down = true;
   const store: LeaderboardStore = {
+    ...noStats,
     persistent: true,
     load: async () => [],
     save: async (r) => { calls++; if (down) throw new Error('db down'); saved.push(r.names[0]!); },
@@ -185,6 +191,7 @@ test('close: 저장이 진행 중이어도 밀린 기록을 전부 쓴 뒤에 �
   const saved: string[] = [];
   let closedAt = -1;
   const slow: LeaderboardStore = {
+    ...noStats,
     persistent: true,
     load: async () => [],
     save: async (r) => {
@@ -207,7 +214,7 @@ test('close: 저장이 진행 중이어도 밀린 기록을 전부 쓴 뒤에 �
 
 test('close: DB 가 죽어 있으면 정해진 시간 안에 포기하고 끝난다 (종료가 매달리지 않는다)', async (t) => {
   const errors = t.mock.method(console, 'error', () => {});
-  const dead: LeaderboardStore = { persistent: true, load: async () => [], save: async () => { throw new Error('db down'); }, close: async () => {} };
+  const dead: LeaderboardStore = { ...noStats, persistent: true, load: async () => [], save: async () => { throw new Error('db down'); }, close: async () => {} };
   const lb = new Leaderboard(dead);
   lb.record(run({ time: 100 }));
   const t0 = Date.now();
@@ -271,4 +278,52 @@ test('아이템: 사람별 무기·패시브가 이름과 함께 정렬되고, �
   // 목록이 배열이 아니면 그 사람은 빈 목록
   lb.record(run({ names: ['solo'], itemsBy: ['bad' as never], time: 160 }));
   assert.deepEqual(lb.top('solo')[0]!.itemsBy, [[]]);
+});
+
+test('시즌: 지난 시즌 순위표는 저장소에서 읽고, 같은 시즌을 동시에 여러 번 물어도 한 번만 읽는다', async () => {
+  const inner = new MemoryStore();
+  const old: RunRecord[] = [300, 500, 400].map((time, i) => ({ id: `s3-${i}`, board: 'solo', season: 3, names: [`p${i}`], time, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1000 + i }));
+  for (const r of old) await inner.save(r);
+  let loads = 0;
+  const store: LeaderboardStore = {
+    persistent: true,
+    load: async (...a) => (a[1] !== 0 && loads++, inner.load(...a)),
+    save: (r) => inner.save(r),
+    seasons: () => inner.seasons(),
+    loadStats: (s) => inner.loadStats(s),
+    addStats: (s, d) => inner.addStats(s, d),
+    close: async () => {},
+  };
+  const lb = new Leaderboard(store, 0);
+  await lb.init();
+  lb.record(run({ time: 90 }));
+  assert.deepEqual(lb.top('solo').map((e) => e.time), [90], '지금 시즌(0)에는 지난 시즌 기록이 섞이지 않는다');
+  const [a, b] = await Promise.all([lb.view('solo', 3), lb.view('solo', 3)]);
+  assert.deepEqual(a.map((e) => [e.rank, e.time]), [[1, 500], [2, 400], [3, 300]]);
+  assert.deepEqual(b, a);
+  assert.equal(loads, 1, '동시에 물어도 저장소는 한 번 읽는다');
+  await lb.view('solo', 3);
+  assert.equal(loads, 1, '잠시 들고 있다');
+  assert.deepEqual(await lb.view('solo', 0), lb.top('solo'), '지금 시즌은 메모리의 순위표');
+});
+
+test('시즌: 시즌 목록은 저장소의 시즌과 지금 시즌을 합친 것이고, 저장소를 못 읽으면 지금 시즌만 돌려준다', async (t) => {
+  const inner = new MemoryStore();
+  await inner.save({ id: 'x', board: 'coop', season: 2, names: ['x'], time: 40, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1 });
+  await inner.addStats(5, { runs: 1, since: 1, upgrades: {} });
+  assert.deepEqual(await new Leaderboard(inner, 0).seasons(), [0, 2, 5]);
+  t.mock.method(console, 'error', () => {});
+  const broken: LeaderboardStore = { ...noStats, persistent: true, load: async () => [], save: async () => {}, close: async () => {}, seasons: async () => { throw new Error('db down'); } };
+  assert.deepEqual(await new Leaderboard(broken, 0).seasons(), [0]);
+});
+
+test('시즌: 지난 시즌을 읽다 실패하면 기억하지 않고, 다음 요청이 다시 읽는다', async () => {
+  let fail = true;
+  let loads = 0;
+  const store: LeaderboardStore = { ...noStats, persistent: true, save: async () => {}, close: async () => {}, load: async (_b, season) => { if (season === 0) return []; loads++; if (fail) throw new Error('db down'); return []; } };
+  const lb = new Leaderboard(store, 0);
+  await assert.rejects(lb.view('solo', 3));
+  fail = false;
+  assert.deepEqual(await lb.view('solo', 3), []);
+  assert.equal(loads, 2);
 });

@@ -392,7 +392,11 @@ export async function fetchLeaderboard(board: BoardId, signal?: AbortSignal): Pr
     const o = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
     const entries = parseEntries(o.entries);
     if (!entries || (o.board !== 'solo' && o.board !== 'coop')) throw new LeaderboardError('bad', '순위표 응답을 읽지 못했어요.');
-    return { board: o.board, season: isNum(o.season) ? o.season : 0, persistent: o.persistent === true, loading: o.loading === true, entries };
+    const season = isNum(o.season) ? o.season : 0;
+    // 지금 화면은 시즌을 고르지 않는다 (지금 시즌만 본다). 예전 서버라 없으면 보고 있는 시즌으로 채운다
+    const current = isNum(o.current) ? o.current : season;
+    const seasons = Array.isArray(o.seasons) ? o.seasons.filter(isNum) : [season];
+    return { board: o.board, season, current, seasons, persistent: o.persistent === true, loading: o.loading === true, entries };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

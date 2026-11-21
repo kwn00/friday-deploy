@@ -268,6 +268,10 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   room.world.players.get(late.conn.pid)!.kills = 99;
   room.world.players.get(a.conn.pid)!.up = { console_log: 3, coffee: 2 };
   room.world.players.get(b.conn.pid)!.up = { rubber_duck: 1 };
+  // 판이 끝나면 방은 새 월드로 돌아가므로, 이번 판의 횟수를 미리 잡아 둔다
+  const tallyA = room.world.players.get(a.conn.pid)!.tally;
+  const tallyB = room.world.players.get(b.conn.pid)!.tally;
+  tallyA.picked.console_log = 2;
   down(room, a.conn);
   down(room, b.conn);
   down(room, late.conn);
@@ -281,6 +285,12 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
     [{ id: 'rubber_duck', level: 1 }],
   ], '쓰러질 때 가지고 있던 무기·패시브 (서버가 가진 값)');
   assert.deepEqual(lb.top('coop')[0]!.itemsBy, reports[0]!.itemsBy);
+  // 아이템 통계용 횟수: 이름이 오르는 사람마다, 서버가 센 값 그대로 (도중에 들어온 사람의 것은 없다)
+  assert.equal(reports[0]!.tallies!.length, 2);
+  assert.equal(reports[0]!.tallies![0], tallyA);
+  assert.equal(reports[0]!.tallies![1], tallyB);
+  assert.equal(reports[0]!.tallies![0]!.picked.console_log, 2);
+  assert.ok(!('tallies' in lb.top('coop')[0]!), '리더보드에는 남지 않는다');
   assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.deepEqual(last(b.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.equal(last(late.ws, 'over')!.place, undefined, '도중에 들어온 사람에게는 순위를 주지 않는다');

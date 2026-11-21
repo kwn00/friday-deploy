@@ -66,6 +66,22 @@ import { derivedSecret, sfc32, type Rand, type Seed } from './rng';
 /** 적 정의를 지역 상수로 잡아 둔다 (모듈 경계 너머의 이름은 틱마다 수천 번 읽으면 그 자체로 무겁다) */
 const EN = ENEMIES;
 
+/**
+ * 한 판 동안 무기·패시브마다 센 횟수 (통계용. 서버가 판이 끝날 때 모아서 저장한다. 판정에는 쓰지 않는다)
+ * - offered: 레벨업 선택지에 나온 횟수
+ * - picked: 직접 고른 횟수 / auto: 시간이 지나 자동으로 골라진 횟수
+ * - chest: 보물상자로 오른 횟수
+ */
+export interface UpgradeTally {
+  offered: Partial<Record<UpgradeId, number>>;
+  picked: Partial<Record<UpgradeId, number>>;
+  auto: Partial<Record<UpgradeId, number>>;
+  chest: Partial<Record<UpgradeId, number>>;
+}
+
+export const newTally = (): UpgradeTally => ({ offered: {}, picked: {}, auto: {}, chest: {} });
+const tallyUp = (map: Partial<Record<UpgradeId, number>>, id: UpgradeId): void => void (map[id] = (map[id] ?? 0) + 1);
+
 export interface Player {
   id: number;
   name: string;
@@ -135,6 +151,8 @@ export interface Player {
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
   offerTimer: number;
+  /** 이번 판에서 센 무기·패시브 횟수 (통계용) */
+  tally: UpgradeTally;
 }
 
 export interface Enemy {
@@ -401,6 +419,7 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     cd: {},
     offers: null,
     offerTimer: 0,
+    tally: newTally(),
   };
   world.players.set(id, p);
   return p;
@@ -433,12 +452,16 @@ export function setInput(world: World, id: number, dx: number, dy: number, at = 
   p.held = 0;
 }
 
-/** 레벨업 선택. 서버가 제시한 선택지의 인덱스만 받는다. 유효하지 않으면 false. */
-export function pickOffer(world: World, id: number, choice: number): boolean {
+/**
+ * 레벨업 선택. 서버가 제시한 선택지의 인덱스만 받는다. 유효하지 않으면 false.
+ * auto: 시간이 지나 서버가 대신 고른 것 (통계에서 따로 센다)
+ */
+export function pickOffer(world: World, id: number, choice: number, auto = false): boolean {
   const p = world.players.get(id);
   if (!p || !p.offers) return false;
   const up = p.offers[choice];
   if (up === undefined) return false;
+  tallyUp(auto ? p.tally.auto : p.tally.picked, up);
   levelUp(p, up);
   p.offers = null;
   p.offerTimer = 0;
@@ -542,6 +565,7 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
       continue;
     }
     const up = owned[Math.floor(world.secret() * owned.length)]!;
+    tallyUp(p.tally.chest, up);
     levelUp(p, up);
     items.push(up);
   }
@@ -626,6 +650,7 @@ function checkLevelUp(world: World, p: Player): void {
     }
     p.offers = picked;
     p.offerTimer = 0;
+    for (const u of picked) tallyUp(p.tally.offered, u);
     world.events.push({ type: 'offers', pid: p.id });
   }
 }
@@ -799,7 +824,7 @@ function advance(world: World, dt: number): void {
   for (const p of players) {
     if (!p.offers) continue;
     p.offerTimer += dt;
-    if (p.offerTimer >= OFFER_TIMEOUT) pickOffer(world, p.id, 0);
+    if (p.offerTimer >= OFFER_TIMEOUT) pickOffer(world, p.id, 0, true);
   }
 
   const alive = players.filter((p) => p.alive);

@@ -66,15 +66,70 @@ export interface LeaderboardEntry {
   at: number;
 }
 
-/** GET /api/leaderboard?board=solo|coop 의 응답 */
+/** GET /api/leaderboard?board=solo|coop&season=N 의 응답 (season 을 빼면 지금 시즌) */
 export interface LeaderboardResponse {
   board: BoardId;
+  /** 보고 있는 시즌 */
   season: number;
+  /** 지금 시즌 (새 기록이 쌓이는 곳). 지난 시즌은 읽기만 한다 */
+  current: number;
+  /** 기록이나 통계가 있는 시즌들 (오름차순, 지금 시즌은 늘 들어 있다) */
+  seasons: number[];
   /** false 면 기록이 서버 메모리에만 있어서 서버가 다시 시작되면 사라진다 */
   persistent: boolean;
   /** true 면 저장된 기록을 아직 불러오지 못했다 (DB 가 깨어나는 중이거나 잠깐 안 됨). 지금 목록은 일부일 수 있다 */
   loading: boolean;
   entries: LeaderboardEntry[];
+}
+
+/** 아이템 통계의 아이템 하나 (GET /api/stats/upgrades) */
+export interface UpgradeStat {
+  id: UpgradeId;
+  name: string;
+  icon: string;
+  kind: 'weapon' | 'passive';
+  /** 레벨업 선택지에 나온 횟수 */
+  offered: number;
+  /** 직접 고른 횟수 */
+  picked: number;
+  /** 시간이 지나 자동으로 골라진 횟수 */
+  autoPicked: number;
+  /** (picked + autoPicked) / offered. 나온 적이 없으면 0 (0~1, 소수 셋째 자리) */
+  pickRate: number;
+  /** 보물상자로 오른 횟수 */
+  chest: number;
+  /** 판이 끝날 때 가지고 있던 판의 비율 (0~1) */
+  finalOwnedRate: number;
+  /** 가지고 있던 판에서의 평균 단계 (없으면 0) */
+  avgFinalLevel: number;
+}
+
+/** 순위 기록(끝날 때 가진 아이템)에서 계산한 아이템 하나 */
+export interface TopRunUpgrade {
+  id: UpgradeId;
+  /** 그 아이템을 가진 사람의 비율 (0~1) */
+  rate: number;
+  /** 가진 사람의 평균 단계 */
+  avgLevel: number;
+}
+
+/** GET /api/stats/upgrades?season=N&kind=weapon|passive 의 응답 (누구나 볼 수 있다. 이름·IP 같은 개인 정보는 없다) */
+export interface UpgradeStatsResponse {
+  season: number;
+  current: number;
+  seasons: number[];
+  /** 이 시즌에 세기 시작한 날 (YYYY-MM-DD, UTC). 아직 센 판이 없으면 null */
+  since: string | null;
+  /** 센 판 수: 30초 이상 버틴 판에서 처음부터 함께 한 사람마다 하나 */
+  runs: number;
+  /** false 면 통계가 서버 메모리에만 있어서 서버가 다시 시작되면 사라진다 */
+  persistent: boolean;
+  /** true 면 저장된 합계를 아직 불러오지 못했다 (DB 가 깨어나는 중 등). 지금 숫자는 일부일 수 있다 */
+  loading: boolean;
+  /** 선택률 높은 순 (같으면 많이 나온 순) */
+  upgrades: UpgradeStat[];
+  /** 그 시즌의 순위표 기록(혼자·함께)에서 계산: 끝날 때 가진 아이템. 아이템을 남기기 전의 기록은 빠진다 */
+  topRuns: { runs: number; owned: TopRunUpgrade[] };
 }
 
 /**

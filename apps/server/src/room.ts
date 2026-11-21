@@ -510,6 +510,8 @@ export class Room {
         // 판이 끝날 때 가진 무기·패시브. 쓰러진 뒤에는 경험치를 얻지 못하므로 쓰러질 때의 것이다
         // (쓰러지기 전에 뜬 선택지를 쓰러진 뒤에 고르면 그 하나는 들어간다)
         itemsBy: players.map((p) => upgradesOf(p.up)),
+        // 사람별 아이템 통계용 횟수 (선택지에 나온 것·고른 것·자동 선택·보물상자). 리더보드에는 남지 않는다
+        tallies: players.map((p) => p.tally),
         time: Math.floor(this.world.time),
         kills: players.reduce((sum, p) => sum + p.kills, 0),
         level: Math.max(...players.map((p) => p.level)),

@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { APP_VERSION, PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
 import { RoomManager, type Conn, type Room } from './room';
-import { LEADERBOARD_SEASON, type LeaderboardResponse } from '@friday-deploy/shared';
+import { LEADERBOARD_SEASON, type LeaderboardResponse, type UpgradeStatsResponse } from '@friday-deploy/shared';
 import { Leaderboard, MemoryStore, type LeaderboardStore } from './leaderboard';
+import { UpgradeStats, type StatsKind } from './stats';
 import { IpLimiter, SECURITY_HEADERS, TokenBucket, clientIp, issueSession, originAllowed, pathnameOf, queryOf, verifySession } from './security';
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -32,17 +33,25 @@ async function openStore(): Promise<LeaderboardStore> {
   if (!url) return new MemoryStore();
   try {
     const { createPostgresStore } = await import('./store-postgres');
-    return await createPostgresStore(url);
+    return await createPostgresStore(url, { currentSeason: LEADERBOARD_SEASON });
   } catch (err) {
     console.error('[leaderboard] DATABASE_URL 로 저장소를 열지 못했습니다. 이번 실행에서는 메모리에만 기록합니다.', err);
     return new MemoryStore();
   }
 }
 
-const leaderboard = new Leaderboard(await openStore(), LEADERBOARD_SEASON);
+const store = await openStore();
+const leaderboard = new Leaderboard(store, LEADERBOARD_SEASON);
 void leaderboard.init();
+// 아이템 통계: 리더보드와 같은 저장소의 다른 표에 쌓는다 (stats.ts)
+const stats = new UpgradeStats(store, LEADERBOARD_SEASON);
+void stats.init();
 
-const rooms = new RoomManager((report) => leaderboard.record(report));
+const rooms = new RoomManager((report) => {
+  const rank = leaderboard.record(report);
+  stats.record(report);
+  return rank;
+});
 const sessionLimiter = new IpLimiter(10, 0.5);
 /** 정적 파일 요청. 정상 방문은 한 번에 4~5개. 같은 주소에서 반복 요청으로 전송량 한도를 태우는 것을 늦춘다. */
 const staticLimiter = new IpLimiter(120, 4);
@@ -87,6 +96,28 @@ function json(res: ServerResponse, status: number, body: unknown, extra: Record<
   res.end(JSON.stringify(body));
 }
 
+/**
+ * 쿼리의 시즌. 없으면 지금 시즌, 숫자가 아니면 undefined (잘못된 요청).
+ * 있는 시즌인지는 따로 확인한다 (없는 시즌으로 저장소를 두드리지 않게)
+ */
+function seasonOf(target: string | undefined): number | undefined {
+  const raw = queryOf(target, 'season');
+  if (raw === null) return LEADERBOARD_SEASON;
+  return /^\d{1,6}$/.test(raw) ? Number(raw) : undefined;
+}
+
+/** 비동기로 답하는 API: 저장소 오류 등으로 실패하면 503 (프로세스는 죽지 않는다) */
+function answer(res: ServerResponse, work: () => Promise<void>): void {
+  work().catch((err) => {
+    console.error('[error] api', err instanceof Error ? err.message : err);
+    if (!res.headersSent) json(res, 503, { error: 'unavailable' }, { 'Retry-After': '30' });
+    else res.destroy();
+  });
+}
+
+/** 읽기 전용 공개 API 의 응답 머리 (다른 사이트에서도 읽을 수 있다) */
+const PUBLIC_API = { 'Access-Control-Allow-Origin': '*' };
+
 function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string): void {
   let rel: string;
   try {
@@ -127,16 +158,40 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
   if (!staticLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': '10' });
   if (pathname === '/api/leaderboard') {
-    // 읽기 전용 공개 정보. 메모리의 순위표를 그대로 돌려주므로 요청마다 DB 를 읽지 않는다.
+    // 읽기 전용 공개 정보. 지금 시즌은 메모리의 순위표를 그대로 돌려주므로 요청마다 DB 를 읽지 않는다.
+    // 지난 시즌(season=N)은 저장소에서 한 번 읽어 잠시 들고 있는다.
     const board = queryOf(req.url, 'board') === 'coop' ? 'coop' : 'solo';
-    const body: LeaderboardResponse = {
-      board,
-      season: leaderboard.season,
-      persistent: leaderboard.persistent,
-      loading: !leaderboard.ready,
-      entries: leaderboard.top(board),
-    };
-    return json(res, 200, body, { 'Access-Control-Allow-Origin': '*' });
+    const season = seasonOf(req.url);
+    if (season === undefined) return json(res, 400, { error: 'bad_season' }, PUBLIC_API);
+    return answer(res, async () => {
+      const seasons = await leaderboard.seasons();
+      if (!seasons.includes(season)) return json(res, 404, { error: 'unknown_season', seasons }, PUBLIC_API);
+      const body: LeaderboardResponse = {
+        board,
+        season,
+        current: leaderboard.season,
+        seasons,
+        persistent: leaderboard.persistent,
+        loading: season === leaderboard.season && !leaderboard.ready,
+        entries: await leaderboard.view(board, season),
+      };
+      json(res, 200, body, PUBLIC_API);
+    });
+  }
+  if (pathname === '/api/stats/upgrades') {
+    // 아이템 통계 (누구나 볼 수 있다. 합계뿐이라 개인 정보가 없다). 지금 시즌은 메모리의 합계라 DB 를 읽지 않는다.
+    const season = seasonOf(req.url);
+    if (season === undefined) return json(res, 400, { error: 'bad_season' }, PUBLIC_API);
+    const rawKind = queryOf(req.url, 'kind');
+    if (rawKind !== null && rawKind !== 'weapon' && rawKind !== 'passive') return json(res, 400, { error: 'bad_kind' }, PUBLIC_API);
+    const kind: StatsKind = rawKind;
+    return answer(res, async () => {
+      const seasons = await leaderboard.seasons();
+      if (!seasons.includes(season)) return json(res, 404, { error: 'unknown_season', seasons }, PUBLIC_API);
+      const body: UpgradeStatsResponse = await stats.response(season, kind, seasons, leaderboard);
+      // 1분 동안은 브라우저가 다시 묻지 않아도 된다 (통계는 천천히 바뀐다)
+      json(res, 200, body, { ...PUBLIC_API, 'Cache-Control': 'public, max-age=60' });
+    });
   }
   serveStatic(req, res, pathname);
 }
@@ -361,7 +416,12 @@ function onConnection(ws: WebSocket, ip: string): void {
 // 배포·재시작 때 아직 저장하지 못한 기록을 마저 쓰고 끝낸다 (최대 3초)
 process.once('SIGTERM', () => {
   setTimeout(() => process.exit(0), 3000).unref();
-  void leaderboard.close().finally(() => process.exit(0));
+  // 통계를 먼저 마저 쓴다 (리더보드가 닫을 때 같은 저장소를 닫는다)
+  void stats
+    .close(1000)
+    .catch(() => {})
+    .then(() => leaderboard.close(1800))
+    .finally(() => process.exit(0));
 });
 
 server.listen(PORT, () => {
