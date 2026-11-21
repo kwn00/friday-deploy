@@ -21,6 +21,18 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.3.0',
+    date: '2026-11-21',
+    title: '무기가 진화해요',
+    items: [
+      '최대 단계 무기와 짝 패시브를 갖고 보물상자를 열면 무기가 진화해요.',
+      '디버거, 웹소켓, 금요일 배포, rm -rf node_modules 를 만날 수 있어요.',
+      '카나리아와 부엉이, 브로드캐스트와 멀티캐스트는 하나로 합쳐져요.',
+      '레벨업 카드에 어떤 짝이 필요한지 나와요.',
+      '진화할 준비가 된 무기는 칸이 노란 테두리로 보여요.',
+    ],
+  },
+  {
     version: '0.2.2',
     date: '2026-11-20',
     title: '보스 체력이 보여요',
