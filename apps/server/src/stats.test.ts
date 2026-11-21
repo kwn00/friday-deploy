@@ -116,7 +116,7 @@ test('통계: 센 판은 지금 시즌 합계에 바로 들어가고, 저장소�
 
 test('통계: 저장된 합계를 불러오기 전에 센 판은 불러온 뒤에 더한다 (두 번 세지 않는다)', async () => {
   const store = new MemoryStore();
-  await store.addStats(0, statsOfRun(report(), 1)!);
+  await store.addStats(0, statsOfRun(report(), 1)!, 'seed');
   const stats = new UpgradeStats(store, 0);
   stats.record(report());
   assert.equal(stats.ready, false);
@@ -139,9 +139,9 @@ test('통계: 저장이 실패하면 몫을 모아 두었다가 다시 더한다
     save: (r) => inner.save(r),
     seasons: () => inner.seasons(),
     loadStats: (s) => inner.loadStats(s),
-    addStats: async (s, d) => {
+    addStats: async (s, d, b) => {
       if (down) throw new Error('db down');
-      await inner.addStats(s, d);
+      await inner.addStats(s, d, b);
     },
     close: async () => {},
   };
@@ -163,13 +163,13 @@ test('통계: 저장이 실패하면 몫을 모아 두었다가 다시 더한다
 
 test('통계: 지난 시즌은 저장소에서 읽고, 응답은 약속한 모양이다', async () => {
   const store = new MemoryStore();
-  await store.addStats(7, { runs: 2, since: Date.UTC(2026, 0, 2, 3), upgrades: { coffee: { offered: 4, picked: 2, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 3 } } });
+  await store.addStats(7, { runs: 2, since: Date.UTC(2026, 0, 2, 3), upgrades: { coffee: { offered: 4, picked: 2, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 3 } } }, 's7');
   const old: RunRecord = { id: 'old', board: 'coop', season: 7, names: ['x', 'y'], itemsBy: [[{ id: 'coffee', level: 2 }], []], time: 300, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1 };
   await store.save(old);
   const lb = new Leaderboard(store, 0);
   const stats = new UpgradeStats(store, 0);
   await Promise.all([lb.init(), stats.init()]);
-  const res = await stats.response(7, 'passive', await lb.seasons(), lb);
+  const res = await stats.response(7, 'passive', (await lb.seasons())!, lb);
   assert.deepEqual(Object.keys(res).sort(), ['current', 'loading', 'persistent', 'runs', 'season', 'seasons', 'since', 'topRuns', 'upgrades']);
   assert.deepEqual([res.season, res.current, res.seasons, res.since, res.runs, res.persistent, res.loading], [7, 0, [0, 7], '2026-01-02', 2, false, false]);
   assert.ok(res.upgrades.every((u) => u.kind === 'passive'));
@@ -189,10 +189,10 @@ test('통계: 종료할 때 모아 둔 몫을 마저 더한다', async () => {
     save: (r) => store.save(r),
     seasons: () => store.seasons(),
     loadStats: (s) => store.loadStats(s),
-    addStats: async (s, d: StoredStats) => {
+    addStats: async (s, d: StoredStats, b) => {
       calls++;
       await new Promise((r) => setTimeout(r, 20));
-      await store.addStats(s, d);
+      await store.addStats(s, d, b);
     },
     close: async () => {},
   };
@@ -205,4 +205,90 @@ test('통계: 종료할 때 모아 둔 몫을 마저 더한다', async () => {
   assert.ok(calls >= 1);
   stats.record(report());
   assert.equal(stats.unsaved, 0, '닫힌 뒤에는 세지 않는다');
+});
+
+/** 가짜 저장소: 안쪽은 MemoryStore, addStats 의 동작만 바꾼다 */
+function wrap(inner: MemoryStore, addStats: LeaderboardStore['addStats'], loadStats: LeaderboardStore['loadStats'] = (s) => inner.loadStats(s)): LeaderboardStore {
+  return { persistent: true, load: (...a) => inner.load(...a), save: (r) => inner.save(r), seasons: () => inner.seasons(), loadStats, addStats, close: async () => {} };
+}
+
+test('통계: 실제로는 더해졌는데 확인 응답만 잃어도, 같은 묶음을 같은 id 로 다시 보내 두 번 더하지 않는다', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(console, 'error', () => {});
+  const inner = new MemoryStore();
+  let lose = true;
+  const ids: string[] = [];
+  const store = wrap(inner, async (s, d, b) => {
+    ids.push(b);
+    await inner.addStats(s, d, b);
+    if (lose) {
+      lose = false;
+      throw new Error('connection reset after COMMIT');
+    }
+  });
+  const stats = new UpgradeStats(store, 0);
+  await stats.init();
+  stats.record(report());
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  stats.record(report()); // 다시 보내기를 기다리는 동안 끝난 판은 다음 묶음으로
+  t.mock.timers.tick(1_000);
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  assert.equal(stats.unsaved, 0);
+  assert.equal(ids[0], ids[1], '실패한 묶음을 같은 id 로 다시 보냈다');
+  assert.notEqual(ids[2], ids[0], '새로 끝난 판은 다른 묶음');
+  assert.equal((await inner.loadStats(0)).runs, 2, '두 판이 한 번씩만 더해졌다');
+});
+
+test('통계: 저장된 합계를 끝내 불러오지 못했어도, 종료할 때 모아 둔 판은 저장소에 더한다', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const inner = new MemoryStore();
+  const store = wrap(inner, (s, d, b) => inner.addStats(s, d, b), async () => {
+    throw new Error('db asleep');
+  });
+  const stats = new UpgradeStats(store, 0);
+  void stats.init(); // 실패하고 재시도를 예약한다
+  await Promise.resolve();
+  stats.record(report());
+  stats.record(report());
+  assert.equal((await inner.loadStats(0)).runs, 0, '불러오기 전에는 더하지 않는다');
+  await stats.close(500);
+  assert.equal((await inner.loadStats(0)).runs, 2);
+});
+
+test('통계: 종료할 때 끝내 못 더한 판은 보내는 중이던 묶음까지 세어 남긴다', async (t) => {
+  const errors = t.mock.method(console, 'error', () => {});
+  const store = wrap(new MemoryStore(), () => new Promise(() => {})); // 답이 오지 않는다
+  const stats = new UpgradeStats(store, 0);
+  await stats.init();
+  stats.record(report());
+  await Promise.resolve();
+  assert.equal(stats.unsaved, 1, '보내는 중인 묶음도 아직 못 더한 판이다');
+  await stats.close(150);
+  assert.ok(errors.mock.calls.some((c) => String(c.arguments[0]).includes('판 1개')), '못 더한 판 수를 남긴다');
+});
+
+test('통계: 지금 시즌은 순위 기록을 아직 다 불러오지 못했으면 loading 이고, topRuns 는 기록이 바뀔 때만 다시 계산한다', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const inner = new MemoryStore();
+  let down = true;
+  const store: LeaderboardStore = { ...wrap(inner, (s, d, b) => inner.addStats(s, d, b)), load: async (...a) => { if (down) throw new Error('db down'); return inner.load(...a); } };
+  const lb = new Leaderboard(store, 0);
+  const stats = new UpgradeStats(store, 0);
+  await stats.init();
+  void lb.init().catch(() => {});
+  await Promise.resolve();
+  const early = await stats.response(0, null, [0], lb);
+  assert.equal(lb.ready, false);
+  assert.equal(early.loading, true, '순위 기록을 못 불러왔으면 topRuns 가 일부일 수 있다');
+  down = false;
+  await lb.init();
+  const a = await stats.response(0, null, [0], lb);
+  const b = await stats.response(0, null, [0], lb);
+  assert.equal(a.loading, false);
+  assert.equal(a.topRuns, b.topRuns, '기록이 그대로면 계산해 둔 것을 쓴다');
+  lb.record(report({ itemsBy: [[{ id: 'regex', level: 2 }]] }));
+  const c = await stats.response(0, null, [0], lb);
+  assert.notEqual(c.topRuns, b.topRuns, '기록이 바뀌면 다시 계산한다');
+  assert.deepEqual(c.topRuns, { runs: 1, owned: [{ id: 'regex', rate: 1, avgLevel: 2 }] });
+  assert.notEqual((await stats.response(0, 'passive', [0], lb)).topRuns, c.topRuns, '종류마다 따로');
 });

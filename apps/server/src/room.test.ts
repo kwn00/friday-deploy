@@ -252,9 +252,10 @@ test('리더보드: 너무 짧은 판은 순위가 없고 결과에도 순위가
   assert.deepEqual(lb.top('solo'), []);
 });
 
-test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 있던 사람만 이름이 오른다', () => {
+test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 있던 사람만 이름이 오른다', async () => {
   const reports: RunReport[] = [];
-  const lb = new Leaderboard(new MemoryStore());
+  const store = new MemoryStore();
+  const lb = new Leaderboard(store);
   const rooms = new RoomManager((r) => (reports.push(r), lb.record(r)));
   const room = rooms.create('coop')!;
   const a = join(room, 'host');
@@ -290,7 +291,9 @@ test('리더보드: 함께 한 판은 coop 순위표에, 처음부터 끝까지 
   assert.equal(reports[0]!.tallies![0], tallyA);
   assert.equal(reports[0]!.tallies![1], tallyB);
   assert.equal(reports[0]!.tallies![0]!.picked.console_log, 2);
-  assert.ok(!('tallies' in lb.top('coop')[0]!), '리더보드에는 남지 않는다');
+  const saved = await store.load('coop', lb.season, 10);
+  assert.equal(saved.length, 1);
+  assert.ok(!('tallies' in saved[0]!), '리더보드 기록(저장소에 넘기는 것)에는 남지 않는다');
   assert.deepEqual(last(a.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.deepEqual(last(b.ws, 'over')!.place, { board: 'coop', rank: 1 });
   assert.equal(last(late.ws, 'over')!.place, undefined, '도중에 들어온 사람에게는 순위를 주지 않는다');

@@ -107,8 +107,11 @@ export interface LeaderboardStore {
   seasons(): Promise<number[]>;
   /** 한 시즌의 아이템 통계 합계 */
   loadStats(season: number): Promise<StoredStats>;
-  /** 한 시즌의 아이템 통계에 더한다 (한 번에 모두 더하거나, 실패하면 아무것도 더하지 않는다) */
-  addStats(season: number, delta: StoredStats): Promise<void>;
+  /**
+   * 한 시즌의 아이템 통계에 더한다. batch 는 묶음마다 다른 id 로, 같은 id 로 다시 보내면 두 번 더하지 않는다
+   * (확인 응답만 잃은 경우: 실패로 보였지만 실제로는 더해졌을 수 있다)
+   */
+  addStats(season: number, delta: StoredStats, batch: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -123,13 +126,16 @@ export class MemoryStore implements LeaderboardStore {
     if (!this.rows.has(record.id)) this.rows.set(record.id, record);
   }
   private stats = new Map<number, StoredStats>();
+  private batches = new Set<string>();
   async seasons(): Promise<number[]> {
     return [...new Set([...[...this.rows.values()].map((r) => r.season), ...this.stats.keys()])].sort((a, b) => a - b);
   }
   async loadStats(season: number): Promise<StoredStats> {
     return addStatsInto(emptyStats(), this.stats.get(season) ?? emptyStats());
   }
-  async addStats(season: number, delta: StoredStats): Promise<void> {
+  async addStats(season: number, delta: StoredStats, batch: string): Promise<void> {
+    if (this.batches.has(batch)) return;
+    this.batches.add(batch);
     if (!this.stats.has(season)) this.stats.set(season, emptyStats());
     addStatsInto(this.stats.get(season)!, delta);
   }
@@ -151,6 +157,8 @@ const RETRY_MS = [1_000, 5_000, 30_000, 120_000, 300_000, 600_000];
 const LOAD_RETRY_MS = [3_000, 10_000, 30_000];
 /** 지난 시즌의 기록·시즌 목록을 메모리에 들고 있는 시간. 지난 시즌은 바뀌지 않으므로 넉넉히 (DB 를 덜 읽게) */
 const PAST_CACHE_MS = 10 * 60_000;
+/** 시즌 목록을 읽다 실패하면 이 시간 동안은 다시 묻지 않는다 (DB 가 죽어 있을 때 요청마다 두드리지 않게) */
+const SEASONS_RETRY_MS = 30_000;
 const MAX_PAST_CACHE = 16;
 
 /** 기록 → 순위표 줄 */
@@ -183,7 +191,12 @@ export class Leaderboard {
   private loadAttempt = 0;
   /** 지난 시즌 기록 (순위표·시즌 → 읽기 시작한 때와 읽는 중이거나 읽은 기록). 같은 것을 동시에 여러 번 읽지 않는다 */
   private past = new Map<string, { at: number; rows: Promise<RunRecord[]> }>();
-  private seasonList: { at: number; list: number[] } | null = null;
+  /** 마지막으로 읽은 시즌 목록과 그때, 마지막으로 실패한 때, 지금 읽는 중인 것 (한 번에 하나만 읽는다) */
+  private seasonList: number[] | null = null;
+  private seasonsAt = 0;
+  private seasonsFailedAt = -Infinity;
+  private seasonsLoading: Promise<number[] | null> | null = null;
+  private rev = 0;
 
   constructor(
     private readonly store: LeaderboardStore,
@@ -205,6 +218,8 @@ export class Leaderboard {
         for (const r of rows) this.insert(r);
       }
       this.loaded = true;
+      // 시즌 목록도 미리 읽어 둔다 (첫 요청이 기다리지 않게)
+      void this.refreshSeasons();
     } catch (err) {
       if (this.closed) return;
       const wait = LOAD_RETRY_MS[Math.min(this.loadAttempt++, LOAD_RETRY_MS.length - 1)]!;
@@ -287,19 +302,49 @@ export class Leaderboard {
     return season === this.season ? this.top(board) : toEntries(await this.records(board, season));
   }
 
-  /** 기록이나 통계가 있는 시즌들 (지금 시즌은 늘 들어 있다). 저장소를 못 읽으면 지금 시즌만 */
-  async seasons(): Promise<number[]> {
-    if (!this.seasonList || Date.now() - this.seasonList.at >= PAST_CACHE_MS) {
-      let list: number[] = [];
-      try {
-        list = await this.store.seasons();
-      } catch (err) {
+  /** 지금 시즌의 기록이 바뀔 때마다 오르는 번호 (기록으로 계산한 값을 들고 있다가 바뀌었는지 볼 때) */
+  get revision(): number {
+    return this.rev;
+  }
+
+  /**
+   * 지금 아는 시즌 목록 (기록이나 통계가 있는 시즌들, 지금 시즌은 늘 들어 있다). 저장소를 기다리지 않는다:
+   * 지금 시즌의 순위표는 DB 가 느리거나 죽어 있어도 바로 답해야 한다. 아직 모르면 지금 시즌만. 오래됐으면 뒤에서 다시 읽는다.
+   */
+  knownSeasons(): number[] {
+    if (!this.seasonList || Date.now() - this.seasonsAt >= PAST_CACHE_MS) void this.refreshSeasons();
+    return this.seasonList ?? [this.season];
+  }
+
+  /**
+   * 확인된 시즌 목록 (지난 시즌을 물을 때: 없는 시즌인지 가려야 한다). 오래됐으면 다시 읽고 기다린다.
+   * 다시 읽지 못하면 마지막으로 읽은 목록을 쓰고, 한 번도 읽지 못했으면 null (저장소를 못 읽음: 없는 시즌이라고 말하지 않는다)
+   */
+  async seasons(): Promise<number[] | null> {
+    if (this.seasonList && Date.now() - this.seasonsAt < PAST_CACHE_MS) return this.seasonList;
+    return this.refreshSeasons();
+  }
+
+  /** 시즌 목록을 읽는다. 읽는 중이면 그것을 기다리고, 방금 실패했으면 다시 묻지 않는다 */
+  private refreshSeasons(): Promise<number[] | null> {
+    if (this.seasonsLoading) return this.seasonsLoading;
+    if (this.closed || Date.now() - this.seasonsFailedAt < SEASONS_RETRY_MS) return Promise.resolve(this.seasonList);
+    const loading = this.store.seasons().then(
+      (list) => {
+        this.seasonList = [...new Set([...list, this.season])].sort((a, b) => a - b);
+        this.seasonsAt = Date.now();
+        return this.seasonList;
+      },
+      (err) => {
+        this.seasonsFailedAt = Date.now();
         console.error('[leaderboard] 시즌 목록을 읽지 못했습니다', err instanceof Error ? err.message : err);
-        return [this.season];
-      }
-      this.seasonList = { at: Date.now(), list: [...new Set([...list, this.season])].sort((a, b) => a - b) };
-    }
-    return this.seasonList.list;
+        return this.seasonList;
+      },
+    );
+    this.seasonsLoading = loading.finally(() => {
+      this.seasonsLoading = null;
+    });
+    return this.seasonsLoading;
   }
 
   /** 아직 저장소에 쓰지 못한 기록 수 (종료 처리·테스트용) */
@@ -312,13 +357,19 @@ export class Leaderboard {
    * 이미 돌고 있는 저장 작업이 있으면 그것이 끝나기를 기다린다. timeoutMs 안에 못 쓴 기록은 포기한다.
    */
   async close(timeoutMs = 2500): Promise<void> {
+    await this.flushAll(timeoutMs);
+    this.closed = true;
+    await this.store.close();
+  }
+
+  /** 아직 저장하지 못한 기록을 timeoutMs 안에서 마저 쓴다 (저장소는 닫지 않는다: 같은 저장소를 쓰는 통계도 마저 쓸 수 있게) */
+  async flushAll(timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
+    this.resting = false;
     while (this.pending.length > 0 && Date.now() < deadline) {
       await Promise.race([this.flush(), new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())))]);
       if (this.pending.length > 0) await new Promise((r) => setTimeout(r, 100));
     }
-    this.closed = true;
-    await this.store.close();
   }
 
   /** 정렬된 자리에 넣는다. 들어간 위치(0부터)를 돌려주고, 보관 범위 밖이면 null */
@@ -334,6 +385,7 @@ export class Leaderboard {
     }
     if (lo >= KEEP) return null;
     list.splice(lo, 0, record);
+    this.rev++;
     this.seen.add(record.id);
     if (list.length > KEEP) this.seen.delete(list.pop()!.id);
     delete this.views[record.board];

@@ -271,78 +271,128 @@ describe('PostgreSQL 저장소', { skip: skipAll }, () => {
   });
 });
 
+/**
+ * 테스트만의 빈 데이터베이스. 표 전체를 보는 테스트(시즌 합치기 등)가 다른 테스트·다른 실행의 데이터와 섞이지 않게 한다.
+ * CREATE DATABASE 권한이 없으면 null (그 테스트는 건너뛴다).
+ */
+async function freshDb(): Promise<{ url: string; drop: () => Promise<void> } | null> {
+  const name = `fdtest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const admin = new pg.Client({ connectionString: URL! });
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${name}`);
+  } catch {
+    return null;
+  } finally {
+    await admin.end().catch(() => {});
+  }
+  const u = new globalThis.URL(URL!);
+  u.pathname = `/${name}`;
+  return {
+    url: u.toString(),
+    drop: async () => {
+      const a = new pg.Client({ connectionString: URL! });
+      await a.connect();
+      await a.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`).catch(() => {});
+      await a.end().catch(() => {});
+    },
+  };
+}
+
+/** 표 전체의 (시즌, 개수) 와 id 별 시즌 */
+async function seasonsOf(url: string): Promise<{ count: number; byId: Map<string, number> }> {
+  const c = new pg.Client({ connectionString: url });
+  await c.connect();
+  try {
+    const r = await c.query<{ id: string; season: number }>('SELECT id, season FROM leaderboard_runs');
+    return { count: r.rowCount ?? 0, byId: new Map(r.rows.map((x) => [x.id, x.season])) };
+  } finally {
+    await c.end();
+  }
+}
+
 describe('PostgreSQL 저장소: 시즌 0 으로 합치기 (0.x = 시즌 0)', { skip: skipAll }, () => {
-  it('지금 시즌이 0 이면 뜰 때 예전 시즌의 기록을 시즌 0 으로 합친다: 하나도 지우지 않고 내용도 그대로다', async () => {
-    const admin = new pg.Client({ connectionString: URL! });
-    await admin.connect();
+  it('지금 시즌이 0 이면 뜰 때 예전 시즌의 기록을 시즌 0 으로 합친다: 하나도 지우지 않고 내용도 그대로다', async (t) => {
+    const db = await freshDb();
+    if (!db) return t.skip('CREATE DATABASE 권한이 없어 건너뜁니다');
     try {
-      // 테이블을 만들어 두고, 예전 규칙의 시즌 1·2·3 기록과 이미 시즌 0 인 기록을 넣는다
-      const setup = await createPostgresStore(URL!);
-      const tag = `fold-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // 예전 규칙의 시즌 1·2·3 기록과 이미 시즌 0 인 기록 (지금 시즌을 넘기지 않는 저장소로 넣는다: 시즌을 건드리지 않는다)
+      const setup = await createPostgresStore(db.url);
       const legacy = [
-        run(1, { id: `${tag}-1`, time: 111, names: ['일'], killsBy: [3], itemsBy: [[{ id: 'console_log', level: 2 }]] }),
-        run(2, { id: `${tag}-2`, time: 222, board: 'coop', names: ['이', '삼'] }),
-        run(3, { id: `${tag}-3`, time: 333 }),
-        run(0, { id: `${tag}-0`, time: 44 }),
+        run(1, { id: 'a1', time: 111, names: ['일'], killsBy: [3], itemsBy: [[{ id: 'console_log', level: 2 }]] }),
+        run(2, { id: 'a2', time: 222, board: 'coop', names: ['이', '삼'], killsBy: [1, 2] }),
+        run(3, { id: 'a3', time: 333 }),
+        run(0, { id: 'a0', time: 44 }),
+        ...randomRuns(3, 1100), // 한 순위표가 1000건을 넘어도 지우지 않는다 (예전의 자동 정리는 없앴다)
       ];
       for (const r of legacy) await setup.save(r);
       await setup.close();
-      const before = Number((await admin.query('SELECT count(*) FROM leaderboard_runs')).rows[0].count);
+      assert.equal((await seasonsOf(db.url)).count, legacy.length);
 
-      const store = await createPostgresStore(URL!, { currentSeason: 0 });
+      const store = await createPostgresStore(db.url, { currentSeason: 0 });
       try {
         const solo = await store.load('solo', 0, 100_000);
         const coop = await store.load('coop', 0, 100_000);
-        const mine = [...solo, ...coop].filter((r) => r.id.startsWith(tag)).sort((a, b) => a.id.localeCompare(b.id));
-        assert.deepEqual(
-          mine,
-          legacy.map((r) => ({ ...r, season: 0 })).sort((a, b) => a.id.localeCompare(b.id)),
-          '시즌 번호만 0 이 되고 이름·기여도·아이템·시간은 그대로',
-        );
-        const after = Number((await admin.query('SELECT count(*) FROM leaderboard_runs')).rows[0].count);
-        assert.equal(after, before, '지운 기록이 없다');
-        const left = Number((await admin.query('SELECT count(*) FROM leaderboard_runs WHERE season <> 0')).rows[0].count);
-        assert.equal(left, 0, '시즌 0 이 아닌 기록이 남지 않는다');
-        const seasons = await store.seasons();
-        assert.ok(seasons.includes(0) && ![1, 2, 3].some((x) => seasons.includes(x)), `시즌 목록 ${seasons}`);
+        const sort = (rows: RunRecord[]) => [...rows].sort((a, b) => a.id.localeCompare(b.id));
+        assert.deepEqual(sort([...solo, ...coop]), sort(legacy.map((r) => ({ ...r, season: 0 }))), '시즌 번호만 0 이 되고 이름·기여도·아이템·시간은 그대로');
+        const after = await seasonsOf(db.url);
+        assert.equal(after.count, legacy.length, '지운 기록이 없다');
+        assert.ok([...after.byId.values()].every((x) => x === 0), '시즌 0 이 아닌 기록이 남지 않는다');
+        assert.deepEqual(await store.seasons(), [0]);
       } finally {
         await store.close();
       }
     } finally {
-      await admin.end().catch(() => {});
+      await db.drop();
     }
   });
 
-  it('배포 중 예전 서버가 예전 시즌 번호로 남긴 기록도 다음에 뜰 때 합쳐진다. 지금 시즌을 넘기지 않으면 아무것도 바꾸지 않는다', async () => {
-    const admin = new pg.Client({ connectionString: URL! });
-    await admin.connect();
+  it('배포 중 예전 서버가 예전 시즌 번호로 남긴 기록도 다음에 뜰 때 합쳐진다. 지금 시즌을 넘기지 않으면 아무것도 바꾸지 않는다', async (t) => {
+    const db = await freshDb();
+    if (!db) return t.skip('CREATE DATABASE 권한이 없어 건너뜁니다');
     try {
-      const id = `late-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const plain = await createPostgresStore(URL!);
-      await plain.save(run(3, { id, time: 77 }));
-      await plain.close();
-      // 지금 시즌을 넘기지 않은 저장소(테스트·도구)는 시즌을 건드리지 않는다
-      const untouched = await createPostgresStore(URL!);
-      await untouched.load('solo', 3, 1);
-      await untouched.close();
-      assert.equal((await admin.query('SELECT season FROM leaderboard_runs WHERE id = $1', [id])).rows[0].season, 3);
+      const first = await createPostgresStore(db.url, { currentSeason: 0 });
+      await first.load('solo', 0, 1); // 새 서버가 떠서 합치기를 마쳤다
+      await first.close();
+      // 아직 내려가지 않은 예전 서버(시즌 3 번호를 쓴다)가 기록을 남긴다
+      const old = await createPostgresStore(db.url);
+      await old.save(run(3, { id: 'late', time: 77 }));
+      await old.close();
+      assert.equal((await seasonsOf(db.url)).byId.get('late'), 3, '지금 시즌을 넘기지 않은 저장소는 시즌을 건드리지 않는다');
       // 지금 시즌 0 인 서버가 다시 뜨면 합친다
-      const next = await createPostgresStore(URL!, { currentSeason: 0 });
+      const next = await createPostgresStore(db.url, { currentSeason: 0 });
       await next.load('solo', 0, 1);
       await next.close();
-      assert.equal((await admin.query('SELECT season FROM leaderboard_runs WHERE id = $1', [id])).rows[0].season, 0);
-      // 시즌 1 이 시작된 뒤(지금 시즌 1)에는 합치지 않는다
-      const id1 = `${id}-s1`;
-      const s1 = await createPostgresStore(URL!, { currentSeason: 1 });
-      await s1.save(run(1, { id: id1, time: 88 }));
-      await s1.close();
-      const again = await createPostgresStore(URL!, { currentSeason: 1 });
-      await again.load('solo', 1, 1);
-      await again.close();
-      assert.equal((await admin.query('SELECT season FROM leaderboard_runs WHERE id = $1', [id1])).rows[0].season, 1);
-      await admin.query('UPDATE leaderboard_runs SET season = 0 WHERE id = $1', [id1]); // 다음 테스트를 위해 되돌린다
+      assert.equal((await seasonsOf(db.url)).byId.get('late'), 0);
     } finally {
-      await admin.end().catch(() => {});
+      await db.drop();
+    }
+  });
+
+  it('새 규칙의 시즌 1 로 떠 본 서버가 있으면, 0.x 를 다시 띄워도(롤백) 시즌 1 기록을 건드리지 않는다', async (t) => {
+    const db = await freshDb();
+    if (!db) return t.skip('CREATE DATABASE 권한이 없어 건너뜁니다');
+    try {
+      const zero = await createPostgresStore(db.url, { currentSeason: 0 });
+      await zero.save(run(0, { id: 'z', time: 50 }));
+      await zero.close();
+      // 1.0.0 (시즌 1) 이 뜨고 기록을 남긴다
+      const one = await createPostgresStore(db.url, { currentSeason: 1 });
+      await one.save(run(1, { id: 's1', time: 90 }));
+      await one.close();
+      // 문제가 생겨 0.x 로 되돌렸다
+      const rollback = await createPostgresStore(db.url, { currentSeason: 0 });
+      assert.deepEqual((await rollback.load('solo', 0, 10)).map((r) => r.id), ['z']);
+      await rollback.close();
+      const after = await seasonsOf(db.url);
+      assert.deepEqual([after.byId.get('s1'), after.byId.get('z'), after.count], [1, 0, 2], '시즌 1 기록은 시즌 1 그대로, 지운 것 없음');
+      // 다시 1.x 로 오면 시즌 1 순위표가 그대로 보인다
+      const again = await createPostgresStore(db.url, { currentSeason: 1 });
+      assert.deepEqual((await again.load('solo', 1, 10)).map((r) => r.id), ['s1']);
+      assert.deepEqual(await again.seasons(), [0, 1]);
+      await again.close();
+    } finally {
+      await db.drop();
     }
   });
 });
@@ -353,13 +403,13 @@ describe('PostgreSQL 저장소: 아이템 통계', { skip: skipAll }, () => {
     try {
       const season = newSeason();
       assert.deepEqual(await store.loadStats(season), { runs: 0, since: null, upgrades: {} });
-      await store.addStats(season, { runs: 2, since: 5000, upgrades: { console_log: { offered: 3, picked: 1, autoPicked: 1, chest: 2, finalOwned: 2, finalLevelSum: 7 } } });
+      await store.addStats(season, { runs: 2, since: 5000, upgrades: { console_log: { offered: 3, picked: 1, autoPicked: 1, chest: 2, finalOwned: 2, finalLevelSum: 7 } } }, `batch-1-${season}`);
       await store.addStats(season, {
         runs: 1,
         since: 4000,
         upgrades: { console_log: { offered: 1, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 3 }, coffee: { offered: 2, picked: 0, autoPicked: 0, chest: 0, finalOwned: 0, finalLevelSum: 0 } },
-      });
-      await store.addStats(season + 1, { runs: 9, since: 1, upgrades: {} });
+      }, `batch-2-${season}`);
+      await store.addStats(season + 1, { runs: 9, since: 1, upgrades: {} }, `batch-3-${season}`);
       const got = await store.loadStats(season);
       assert.deepEqual(got, {
         runs: 3,
@@ -377,13 +427,29 @@ describe('PostgreSQL 저장소: 아이템 통계', { skip: skipAll }, () => {
     }
   });
 
+  it('같은 묶음 id 로 다시 보내면 두 번 더하지 않는다 (확인 응답만 잃고 다시 보낸 경우)', async () => {
+    const store = await createPostgresStore(URL!);
+    try {
+      const season = newSeason();
+      const d = { runs: 2, since: 7, upgrades: { regex: { offered: 3, picked: 1, autoPicked: 1, chest: 0, finalOwned: 2, finalLevelSum: 5 } } };
+      await store.addStats(season, d, `same-${season}`);
+      await store.addStats(season, d, `same-${season}`);
+      const got = await store.loadStats(season);
+      assert.deepEqual([got.runs, got.upgrades.regex!.offered], [2, 3]);
+      await store.addStats(season, d, `other-${season}`);
+      assert.equal((await store.loadStats(season)).runs, 4, '다른 묶음은 더한다');
+    } finally {
+      await store.close();
+    }
+  });
+
   it('지금 게임에 없는 아이템의 줄은 읽을 때 건너뛴다 (이름이 바뀌었거나 빠진 아이템)', async () => {
     const admin = new pg.Client({ connectionString: URL! });
     await admin.connect();
     const store = await createPostgresStore(URL!);
     try {
       const season = newSeason();
-      await store.addStats(season, { runs: 1, since: 1, upgrades: { regex: { offered: 1, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 1 } } });
+      await store.addStats(season, { runs: 1, since: 1, upgrades: { regex: { offered: 1, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 1 } } }, `batch-4-${season}`);
       await admin.query("INSERT INTO upgrade_stats (season, upgrade_id, offered) VALUES ($1, 'removed_weapon', 5)", [season]);
       assert.deepEqual(Object.keys((await store.loadStats(season)).upgrades), ['regex']);
     } finally {
@@ -552,7 +618,7 @@ describe('PostgreSQL 저장소: 연결 풀러와 시간 제한', { skip: skipAll
       await store.save(run(season, { id: `pooled-${season}`, time: 99 }));
       const rows = await store.load('solo', season, 5);
       assert.deepEqual(rows.map((r) => [r.id, r.time]), [[`pooled-${season}`, 77]]);
-      await store.addStats(season, { runs: 1, since: 9, upgrades: { coffee: { offered: 2, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 2 } } });
+      await store.addStats(season, { runs: 1, since: 9, upgrades: { coffee: { offered: 2, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 2 } } }, `batch-5-${season}`);
       assert.equal((await store.loadStats(season)).upgrades.coffee!.picked, 1);
       assert.ok((await store.seasons()).includes(season));
       assert.deepEqual(pooler.refused, [], '풀러가 거부하는 접속 매개변수를 보내지 않는다');

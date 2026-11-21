@@ -106,17 +106,38 @@ function seasonOf(target: string | undefined): number | undefined {
   return /^\d{1,6}$/.test(raw) ? Number(raw) : undefined;
 }
 
-/** 비동기로 답하는 API: 저장소 오류 등으로 실패하면 503 (프로세스는 죽지 않는다) */
+/** 읽기 전용 공개 API 의 응답 머리 (다른 사이트에서도 읽을 수 있다. 오류 응답에도 붙여야 다른 사이트가 상태를 볼 수 있다) */
+const PUBLIC_API = { 'Access-Control-Allow-Origin': '*' };
+const isPublicApi = (pathname: string): boolean => pathname === '/api/leaderboard' || pathname === '/api/stats/upgrades';
+const unavailable = (res: ServerResponse): void => json(res, 503, { error: 'unavailable' }, { ...PUBLIC_API, 'Retry-After': '30' });
+
+/** 비동기로 답하는 공개 API: 저장소 오류 등으로 실패하면 503 (프로세스는 죽지 않는다) */
 function answer(res: ServerResponse, work: () => Promise<void>): void {
-  work().catch((err) => {
-    console.error('[error] api', err instanceof Error ? err.message : err);
-    if (!res.headersSent) json(res, 503, { error: 'unavailable' }, { 'Retry-After': '30' });
-    else res.destroy();
-  });
+  Promise.resolve()
+    .then(work)
+    .catch((err) => {
+      console.error('[error] api', err instanceof Error ? err.message : err);
+      if (!res.headersSent) unavailable(res);
+      else res.destroy();
+    });
 }
 
-/** 읽기 전용 공개 API 의 응답 머리 (다른 사이트에서도 읽을 수 있다) */
-const PUBLIC_API = { 'Access-Control-Allow-Origin': '*' };
+/**
+ * 지난 시즌을 물을 때: 있는 시즌인지 확인한다. 확인했으면 true, 응답을 이미 보냈으면(없는 시즌 404, 목록을 못 읽음 503) false.
+ * 지금 시즌은 이것을 거치지 않는다 (DB 를 기다리지 않고 바로 답한다).
+ */
+async function pastSeasonExists(res: ServerResponse, season: number): Promise<number[] | null> {
+  const seasons = await leaderboard.seasons();
+  if (!seasons) {
+    unavailable(res);
+    return null;
+  }
+  if (!seasons.includes(season)) {
+    json(res, 404, { error: 'unknown_season', seasons }, PUBLIC_API);
+    return null;
+  }
+  return seasons;
+}
 
 function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string): void {
   let rel: string;
@@ -156,26 +177,26 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return json(res, 200, { token: issueSession().token, v: PROTOCOL_VERSION }, cors);
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method_not_allowed' });
-  if (!staticLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': '10' });
+  if (!staticLimiter.take(clientIp(req))) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': '10', ...(isPublicApi(pathname) ? PUBLIC_API : {}) });
   if (pathname === '/api/leaderboard') {
-    // 읽기 전용 공개 정보. 지금 시즌은 메모리의 순위표를 그대로 돌려주므로 요청마다 DB 를 읽지 않는다.
+    // 읽기 전용 공개 정보. 지금 시즌은 메모리의 순위표를 그대로 돌려준다: DB 를 기다리지 않는다 (느리거나 죽어 있어도 바로 답한다).
     // 지난 시즌(season=N)은 저장소에서 한 번 읽어 잠시 들고 있는다.
     const board = queryOf(req.url, 'board') === 'coop' ? 'coop' : 'solo';
     const season = seasonOf(req.url);
     if (season === undefined) return json(res, 400, { error: 'bad_season' }, PUBLIC_API);
+    const body = (seasons: number[], entries: LeaderboardResponse['entries']): LeaderboardResponse => ({
+      board,
+      season,
+      current: leaderboard.season,
+      seasons,
+      persistent: leaderboard.persistent,
+      loading: season === leaderboard.season && !leaderboard.ready,
+      entries,
+    });
+    if (season === leaderboard.season) return json(res, 200, body(leaderboard.knownSeasons(), leaderboard.top(board)), PUBLIC_API);
     return answer(res, async () => {
-      const seasons = await leaderboard.seasons();
-      if (!seasons.includes(season)) return json(res, 404, { error: 'unknown_season', seasons }, PUBLIC_API);
-      const body: LeaderboardResponse = {
-        board,
-        season,
-        current: leaderboard.season,
-        seasons,
-        persistent: leaderboard.persistent,
-        loading: season === leaderboard.season && !leaderboard.ready,
-        entries: await leaderboard.view(board, season),
-      };
-      json(res, 200, body, PUBLIC_API);
+      const seasons = await pastSeasonExists(res, season);
+      if (seasons) json(res, 200, body(seasons, await leaderboard.view(board, season)), PUBLIC_API);
     });
   }
   if (pathname === '/api/stats/upgrades') {
@@ -186,11 +207,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (rawKind !== null && rawKind !== 'weapon' && rawKind !== 'passive') return json(res, 400, { error: 'bad_kind' }, PUBLIC_API);
     const kind: StatsKind = rawKind;
     return answer(res, async () => {
-      const seasons = await leaderboard.seasons();
-      if (!seasons.includes(season)) return json(res, 404, { error: 'unknown_season', seasons }, PUBLIC_API);
+      // 지금 시즌은 DB 를 기다리지 않는다 (아는 시즌 목록으로 답한다)
+      const seasons = season === leaderboard.season ? leaderboard.knownSeasons() : await pastSeasonExists(res, season);
+      if (!seasons) return;
       const body: UpgradeStatsResponse = await stats.response(season, kind, seasons, leaderboard);
-      // 1분 동안은 브라우저가 다시 묻지 않아도 된다 (통계는 천천히 바뀐다)
-      json(res, 200, body, { ...PUBLIC_API, 'Cache-Control': 'public, max-age=60' });
+      // 1분 동안은 브라우저가 다시 묻지 않아도 된다 (통계는 천천히 바뀐다). 아직 다 불러오지 못한 응답은 담아 두지 않게 한다
+      json(res, 200, body, { ...PUBLIC_API, 'Cache-Control': body.loading ? 'no-store' : 'public, max-age=60' });
     });
   }
   serveStatic(req, res, pathname);
@@ -416,11 +438,9 @@ function onConnection(ws: WebSocket, ip: string): void {
 // 배포·재시작 때 아직 저장하지 못한 기록을 마저 쓰고 끝낸다 (최대 3초)
 process.once('SIGTERM', () => {
   setTimeout(() => process.exit(0), 3000).unref();
-  // 통계를 먼저 마저 쓴다 (리더보드가 닫을 때 같은 저장소를 닫는다)
-  void stats
-    .close(1000)
-    .catch(() => {})
-    .then(() => leaderboard.close(1800))
+  // 리더보드 기록과 통계를 함께 마저 쓰고(기록이 통계를 기다리지 않게), 그다음에 같은 저장소를 한 번 닫는다
+  void Promise.allSettled([leaderboard.flushAll(2400), stats.close(2400)])
+    .then(() => leaderboard.close(0))
     .finally(() => process.exit(0));
 });
 

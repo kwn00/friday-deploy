@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SEASON,
@@ -20,7 +21,8 @@ import { addStatsInto, emptyCounts, emptyStats, type Leaderboard, type Leaderboa
  * - 리더보드와 같은 판만 센다: 30초 이상 버틴 판에서 처음부터 함께 한 사람 (Room 이 리더보드에 넘기는 사람들).
  * - 이름·IP 같은 개인 정보는 남기지 않고 합계만 쌓는다. 리더보드 기록은 건드리지 않는다 (다른 표에 쌓는다).
  * - 지금 시즌의 합계는 메모리에 들고 있고(응답할 때 DB 를 읽지 않는다), 판이 끝날 때마다 늘어난 몫을 뒤에서 저장소에 더한다.
- *   저장이 실패하면 몫을 모아 두었다가 간격을 늘려 가며 다시 더한다. 지난 시즌은 읽기만 한다.
+ *   더하는 몫(묶음)마다 id 를 붙인다: 저장이 실패하면 같은 묶음을 같은 id 로 다시 보내므로, 실제로는 더해졌는데 확인 응답만
+ *   잃은 경우에도 두 번 더해지지 않는다. 그동안 끝난 판은 다음 묶음에 모은다. 지난 시즌은 읽기만 한다.
  */
 
 /** 저장 실패 뒤 다시 시도하기까지의 간격 (마지막 값을 반복한다: 몫은 계속 모아 두므로 버리지 않는다) */
@@ -73,6 +75,9 @@ export function statsOfRun(report: RunReport, at: number): StoredStats | null {
   return out;
 }
 
+/** 순위 기록에서 topRuns 계산에 쓰는 부분 */
+type RunRecordLike = { names: string[]; itemsBy?: unknown[] };
+
 /** YYYY-MM-DD (UTC) */
 const day = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString().slice(0, 10));
 
@@ -106,7 +111,7 @@ export function upgradeList(stats: StoredStats, kind: StatsKind): UpgradeStat[] 
 }
 
 /** 순위 기록(끝날 때 가진 아이템)에서: 사람마다 하나로 센다. 아이템을 남기기 전의 기록은 빠진다 */
-export function topRunsOf(records: readonly { names: string[]; itemsBy?: unknown[] }[], kind: StatsKind): UpgradeStatsResponse['topRuns'] {
+export function topRunsOf(records: readonly RunRecordLike[], kind: StatsKind): UpgradeStatsResponse['topRuns'] {
   let runs = 0;
   const owned = new Map<UpgradeId, { n: number; levels: number }>();
   for (const r of records) {
@@ -128,11 +133,23 @@ export function topRunsOf(records: readonly { names: string[]; itemsBy?: unknown
   return { runs, owned: list };
 }
 
+/** 순위 기록에서 계산한 값을 들고 있는다: 기록이 바뀔 때만 다시 계산한다 (요청마다 하면 무료 서버의 CPU 를 쓴다) */
+interface TopRunsMemo {
+  key: string;
+  /** 지금 시즌: 리더보드의 기록 번호. 지난 시즌: 읽어 둔 기록 배열 자체 */
+  rev: number;
+  rows: readonly unknown[][];
+  value: UpgradeStatsResponse['topRuns'];
+}
+
 export class UpgradeStats {
   /** 지금 시즌의 합계: 저장소에서 불러온 것 + 이 서버가 뜬 뒤에 센 것 */
   private totals = emptyStats();
-  /** 아직 저장소에 더하지 못한 몫 */
+  /** 아직 묶음에 넣지 않은 몫 */
   private pending = emptyStats();
+  /** 보내는 중이거나, 보냈다가 실패해 같은 id 로 다시 보낼 묶음 */
+  private batch: { id: string; delta: StoredStats } | null = null;
+  private topMemo = new Map<string, TopRunsMemo>();
   private flushing: Promise<void> | null = null;
   private resting = false;
   private attempt = 0;
@@ -157,9 +174,9 @@ export class UpgradeStats {
     return this.loaded;
   }
 
-  /** 아직 저장소에 더하지 못한 판 수 (종료 처리·테스트용) */
+  /** 아직 저장소에 더하지 못한 판 수: 보내는 중인 묶음 포함 (종료 처리·테스트용) */
   get unsaved(): number {
-    return this.pending.runs;
+    return this.pending.runs + (this.batch?.delta.runs ?? 0);
   }
 
   /** 저장된 합계를 불러온다. 실패해도 예외를 던지지 않고 뒤에서 다시 시도한다 (그동안 센 것은 모아 둔다) */
@@ -169,7 +186,7 @@ export class UpgradeStats {
       addStatsInto(this.totals, base);
       this.loaded = true;
       // 불러오기 전에 센 몫은 아직 저장소에 없다: 이제 더한다 (불러오기 전에는 더하지 않는다. 두 번 세지 않게)
-      if (this.pending.runs > 0) void this.flush();
+      if (this.unsaved > 0) void this.flush();
     } catch (err) {
       if (this.closed) return;
       const wait = LOAD_RETRY_MS[Math.min(this.loadAttempt++, LOAD_RETRY_MS.length - 1)]!;
@@ -207,18 +224,21 @@ export class UpgradeStats {
   }
 
   private async drain(): Promise<void> {
-    while (this.pending.runs > 0) {
-      const delta = this.pending;
-      this.pending = emptyStats();
+    while (this.batch || this.pending.runs > 0) {
+      // 실패한 묶음이 있으면 그것을 그대로(같은 id 로) 먼저 다시 보낸다. 새로 끝난 판은 다음 묶음에 모인다
+      if (!this.batch) {
+        this.batch = { id: randomUUID(), delta: this.pending };
+        this.pending = emptyStats();
+      }
+      const batch = this.batch;
       try {
-        await this.store.addStats(this.season, delta);
+        await this.store.addStats(this.season, batch.delta, batch.id);
+        this.batch = null;
         this.attempt = 0;
       } catch (err) {
-        // 더하기는 한 트랜잭션이라 실패하면 아무것도 더해지지 않았다: 몫을 되돌려 놓고 나중에 다시
-        addStatsInto(this.pending, delta);
         if (this.closed) return;
         const wait = RETRY_MS[Math.min(this.attempt++, RETRY_MS.length - 1)]!;
-        console.error(`[stats] 아이템 통계 저장 실패, ${wait / 1000}초 뒤 재시도 (모아 둔 판 ${this.pending.runs}개)`, err instanceof Error ? err.message : err);
+        console.error(`[stats] 아이템 통계 저장 실패, ${wait / 1000}초 뒤 재시도 (판 ${this.unsaved}개)`, err instanceof Error ? err.message : err);
         this.resting = true;
         setTimeout(() => {
           this.resting = false;
@@ -248,10 +268,11 @@ export class UpgradeStats {
    * GET /api/stats/upgrades 의 응답. seasons 는 기록이나 통계가 있는 시즌들이고, season 은 그 안의 것이어야 한다
    * (호출하는 쪽이 확인한다: 없는 시즌으로 저장소를 두드리지 않게).
    */
-  async response(season: number, kind: StatsKind, seasons: number[], leaderboard: Pick<Leaderboard, 'records'>): Promise<UpgradeStatsResponse> {
+  async response(season: number, kind: StatsKind, seasons: number[], leaderboard: Pick<Leaderboard, 'records' | 'ready' | 'revision'>): Promise<UpgradeStatsResponse> {
     const stats = await this.statsOf(season);
     const boards: BoardId[] = ['solo', 'coop'];
-    const records = (await Promise.all(boards.map((b) => leaderboard.records(b, season)))).flat();
+    const rows = await Promise.all(boards.map((b) => leaderboard.records(b, season)));
+    const current = season === this.season;
     return {
       season,
       current: this.season,
@@ -259,20 +280,38 @@ export class UpgradeStats {
       since: day(stats.since),
       runs: stats.runs,
       persistent: this.persistent,
-      loading: season === this.season && !this.loaded,
+      // 지금 시즌: 통계 합계나 순위 기록(topRuns 의 바탕) 중 하나라도 아직 다 불러오지 못했으면 일부일 수 있다
+      loading: current && (!this.loaded || !leaderboard.ready),
       upgrades: upgradeList(stats, kind),
-      topRuns: topRunsOf(records, kind),
+      topRuns: this.topRunsCached(season, kind, current ? leaderboard.revision : -1, rows),
     };
   }
 
-  /** 모아 둔 몫을 마저 더한다 (배포·재시작 때). timeoutMs 안에 못 더한 몫은 포기한다 */
+  /** topRunsOf 를 기록이 바뀔 때만 다시 계산한다 (지금 시즌은 리더보드의 기록 번호, 지난 시즌은 읽어 둔 기록 배열로 본다) */
+  private topRunsCached(season: number, kind: StatsKind, rev: number, rows: readonly (readonly RunRecordLike[])[]): UpgradeStatsResponse['topRuns'] {
+    const key = `${season}:${kind ?? 'all'}`;
+    const hit = this.topMemo.get(key);
+    if (hit && hit.rev === rev && hit.rows.length === rows.length && hit.rows.every((r, i) => r === rows[i])) return hit.value;
+    const value = topRunsOf(rows.flat(), kind);
+    if (this.topMemo.size >= 32) this.topMemo.clear();
+    this.topMemo.set(key, { key, rev, rows: rows as readonly unknown[][], value });
+    return value;
+  }
+
+  /**
+   * 모아 둔 몫을 마저 더한다 (배포·재시작 때). timeoutMs 안에 못 더한 몫은 포기한다 (못 더한 판 수를 남긴다).
+   * 저장된 합계를 아직 불러오지 못했어도 더한다: 이 서버에서는 더 불러올 일이 없으니 두 번 셀 일도 없다.
+   * 저장소는 닫지 않는다 (리더보드가 닫는다).
+   */
   async close(timeoutMs = 2000): Promise<void> {
     const deadline = this.now() + timeoutMs;
-    if (this.loaded && this.pending.runs > 0) {
-      this.resting = false;
+    this.loaded = true;
+    this.resting = false;
+    while (this.unsaved > 0 && this.now() < deadline) {
       await Promise.race([this.flush(), new Promise((r) => setTimeout(r, Math.max(0, deadline - this.now())))]);
+      if (this.unsaved > 0) await new Promise((r) => setTimeout(r, 100));
     }
-    if (this.pending.runs > 0) console.error(`[stats] 종료: 판 ${this.pending.runs}개의 통계를 저장하지 못했습니다`);
     this.closed = true;
+    if (this.unsaved > 0) console.error(`[stats] 종료: 판 ${this.unsaved}개의 통계를 저장하지 못했습니다`);
   }
 }

@@ -291,7 +291,7 @@ test('시즌: 지난 시즌 순위표는 저장소에서 읽고, 같은 시즌�
     save: (r) => inner.save(r),
     seasons: () => inner.seasons(),
     loadStats: (s) => inner.loadStats(s),
-    addStats: (s, d) => inner.addStats(s, d),
+    addStats: (s, d, b) => inner.addStats(s, d, b),
     close: async () => {},
   };
   const lb = new Leaderboard(store, 0);
@@ -307,14 +307,62 @@ test('시즌: 지난 시즌 순위표는 저장소에서 읽고, 같은 시즌�
   assert.deepEqual(await lb.view('solo', 0), lb.top('solo'), '지금 시즌은 메모리의 순위표');
 });
 
-test('시즌: 시즌 목록은 저장소의 시즌과 지금 시즌을 합친 것이고, 저장소를 못 읽으면 지금 시즌만 돌려준다', async (t) => {
+test('시즌: 시즌 목록은 저장소의 시즌과 지금 시즌을 합친 것이다', async () => {
   const inner = new MemoryStore();
   await inner.save({ id: 'x', board: 'coop', season: 2, names: ['x'], time: 40, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1 });
-  await inner.addStats(5, { runs: 1, since: 1, upgrades: {} });
-  assert.deepEqual(await new Leaderboard(inner, 0).seasons(), [0, 2, 5]);
+  await inner.addStats(5, { runs: 1, since: 1, upgrades: {} }, 'b1');
+  const lb = new Leaderboard(inner, 0);
+  assert.deepEqual(await lb.seasons(), [0, 2, 5]);
+  assert.deepEqual(lb.knownSeasons(), [0, 2, 5]);
+});
+
+test('시즌: 지금 시즌 순위표는 시즌 목록을 기다리지 않는다. 목록은 한 번에 하나만 읽고, 실패하면 30초 동안 다시 묻지 않는다', async (t) => {
   t.mock.method(console, 'error', () => {});
-  const broken: LeaderboardStore = { ...noStats, persistent: true, load: async () => [], save: async () => {}, close: async () => {}, seasons: async () => { throw new Error('db down'); } };
-  assert.deepEqual(await new Leaderboard(broken, 0).seasons(), [0]);
+  let calls = 0;
+  let release: (v: number[]) => void = () => {};
+  let fail = false;
+  const store: LeaderboardStore = {
+    ...noStats,
+    persistent: true,
+    load: async () => [],
+    save: async () => {},
+    close: async () => {},
+    seasons: () => {
+      calls++;
+      if (fail) return Promise.reject(new Error('db down'));
+      return new Promise((r) => (release = r));
+    },
+  };
+  const lb = new Leaderboard(store, 0);
+  // DB 가 답하지 않는 동안에도 지금 시즌의 목록은 바로 나온다 (모르면 지금 시즌만)
+  assert.deepEqual(lb.knownSeasons(), [0]);
+  assert.deepEqual(lb.knownSeasons(), [0]);
+  const waiting = [lb.seasons(), lb.seasons()];
+  assert.equal(calls, 1, '읽는 중이면 그것을 함께 기다린다');
+  release([3]);
+  assert.deepEqual(await Promise.all(waiting), [[0, 3], [0, 3]]);
+  assert.deepEqual(lb.knownSeasons(), [0, 3]);
+
+  // 실패: 한 번도 읽지 못했으면 null (없는 시즌이라고 말하지 않는다), 30초 동안은 다시 묻지 않는다
+  fail = true;
+  const fresh = new Leaderboard(store, 0);
+  calls = 0;
+  assert.equal(await fresh.seasons(), null);
+  assert.equal(await fresh.seasons(), null);
+  assert.deepEqual(fresh.knownSeasons(), [0]);
+  assert.equal(calls, 1, '실패한 뒤에는 바로 다시 묻지 않는다');
+});
+
+test('시즌: 다시 읽다 실패하면 마지막으로 읽은 목록을 쓴다', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  let fail = false;
+  const store: LeaderboardStore = { ...noStats, persistent: true, load: async () => [], save: async () => {}, close: async () => {}, seasons: async () => { if (fail) throw new Error('db down'); return [2]; } };
+  const lb = new Leaderboard(store, 0);
+  assert.deepEqual(await lb.seasons(), [0, 2]);
+  fail = true;
+  t.mock.timers.tick(11 * 60_000); // 10분이 지나 다시 읽어야 한다
+  assert.deepEqual(await lb.seasons(), [0, 2]);
 });
 
 test('시즌: 지난 시즌을 읽다 실패하면 기억하지 않고, 다음 요청이 다시 읽는다', async () => {
