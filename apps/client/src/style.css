@@ -281,7 +281,7 @@ body {
 .chip--revive {
   border-color: var(--cyan);
 }
-/* 다음 보물상자에서 진화할 무기 / 진화한 무기 */
+/* 보물상자를 열면 진화할 무기 / 진화한 무기 */
 .chip--ready {
   border-color: var(--yellow);
 }

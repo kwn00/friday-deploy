@@ -9,7 +9,7 @@ test('진화 안내: 재료 무기·짝 패시브·합치기마다 알맞은 문
   assert.equal(evolveHint('canary', {}), '✨ 합치기: 🦉 야근 부엉이와 둘 다 최대 단계 → 🕐 24시간 모니터링');
   assert.equal(evolveHint('night_owl', {}), '✨ 합치기: 🐤 카나리아와 둘 다 최대 단계 → 🕐 24시간 모니터링');
   assert.equal(evolveHint('multicast', {}), '✨ 합치기: 📡 브로드캐스트와 둘 다 최대 단계 → 🌊 패킷 플러딩');
-  assert.equal(evolveHint('prod_hotfix', {}), '✨ 진화: 💧 핫픽스 최대 단계와 함께 → 🔥 금요일 배포');
+  assert.equal(evolveHint('prod_hotfix', {}), '✨ 진화: 💧 핫픽스 최대 단계와 함께 → 🌋 금요일 배포');
   assert.equal(evolveHint('regex', {}), null, '진화가 없는 무기');
   assert.equal(evolveHint('coffee', {}), null, '짝이 아닌 패시브');
   assert.equal(evolveHint('test_coverage', { debugger: 1 }), null, '이미 진화했으면 알리지 않는다');
@@ -26,7 +26,7 @@ test('진화 안내: 짝이 있는 모든 것에 문구가 있고, 휴대폰 선
   for (const e of EVOLUTIONS) assert.equal(evolveHint(e.id, {}), null, UPGRADES[e.id].name);
 });
 
-test('진화 안내: 다음 보물상자에서 바뀔 재료 무기 (칸에 표시)', () => {
+test('진화 안내: 보물상자를 열면 바뀔 재료 무기 (칸에 표시)', () => {
   assert.deepEqual([...readyMaterials({ console_log: 8 })], [], '짝 패시브가 없다');
   assert.deepEqual([...readyMaterials({ console_log: 8, test_coverage: 1 })], ['console_log']);
   assert.deepEqual([...readyMaterials({ canary: 8, night_owl: 8, ping_pong: 8 })].sort(), ['canary', 'night_owl']);

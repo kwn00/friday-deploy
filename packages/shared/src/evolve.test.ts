@@ -129,7 +129,7 @@ test('보물상자: 5개짜리 상자에서 진화와 강화가 함께, 진화�
   assert.ok(items.slice(2).every((id) => !evolutionOf(id)), '나머지는 평소처럼 오른다');
   for (const gone of ['canary', 'night_owl', 'hotfix'] as const) assert.equal(p.up[gone], undefined, gone);
   assert.deepEqual([p.up.friday_deploy, p.up.monitoring], [1, 1]);
-  // 합치기로 무기 칸 하나가 빈다: 무기 5개(카나리아, 부엉이, 핫픽스, 정규표현식) → 3개(금요일 배포, 모니터링, 정규표현식)
+  // 합치기로 무기 칸 하나가 빈다: 무기 4개(카나리아, 부엉이, 핫픽스, 정규표현식) → 3개(금요일 배포, 모니터링, 정규표현식)
   assert.equal(WEAPON_IDS.filter((id) => (p.up[id] ?? 0) > 0).length, 3);
 });
 
@@ -177,9 +177,20 @@ test('디버거: 중단점에 맞은 버그는 잠깐 멈춘다. 보스는 멈�
   }
   assert.ok(shots > 0, '중단점을 쏜다');
   assert.ok(bug.frozen > 0 && bug.frozen <= BREAKPOINT_FREEZE, `멈춤 ${bug.frozen}`);
-  for (let i = 0; i < 40; i++) tick(w, [bug, boss]);
-  assert.ok(boss.hp < 1e9, '보스도 맞는다');
-  assert.equal(boss.frozen, 0, '보스는 멈추지 않는다');
+  // 보스는 맞는 틱마다 봐도 한 번도 멈추지 않는다 (멈춤이 풀린 뒤에만 보면 놓친다)
+  let bossHits = 0;
+  let bossFrozen = 0;
+  for (let i = 0; i < 20 * 5; i++) {
+    // 보스는 제자리에 둔다 (다가오거나 밀려나 맞는 횟수가 들쭉날쭉하지 않게)
+    boss.x = p.x - 40;
+    boss.y = p.y;
+    const hp = boss.hp;
+    tick(w, [bug, boss]);
+    if (boss.hp < hp) bossHits++;
+    bossFrozen = Math.max(bossFrozen, boss.frozen);
+  }
+  assert.ok(bossHits >= 4, `보스도 맞는다 (${bossHits}번)`);
+  assert.equal(bossFrozen, 0, '보스는 멈추지 않는다');
 });
 
 test('웹소켓: keep-alive 가 있으면 공이 끊이지 않는다 (처음 쏜 뒤 20초 동안 한 틱도 비지 않는다)', () => {
@@ -234,6 +245,35 @@ test('rm -rf node_modules: 화면을 지워도 경험치와 아이템은 언제�
   p.xpNext = 1e9;
   for (let i = 0; i < 20 * 4; i++) tick(w, []);
   assert.ok(p.xp >= 3 + 1 + 1, `먹은 경험치 ${p.xp}`);
+});
+
+test('rm -rf node_modules: 함께 하는 판에서 끌려오던 경험치는 내가 레벨업을 고르는 동안 기다렸다가 마저 끌려온다', () => {
+  const w = createWorld(320);
+  w.itemCd = 1e9;
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  // 동료는 멀리서 계속 움직인다 (고르지 않으므로 월드는 멈추지 않는다)
+  b.x = a.x + 3000;
+  b.up = {};
+  a.up = { rm_rf: 1, npm_install: 1 };
+  a.xpNext = 3;
+  const bugs = Array.from({ length: 20 }, (_, k) => enemy(9900 + k, a.x + Math.cos(k) * (60 + k * 10), a.y + Math.sin(k) * (60 + k * 10), 'bug', 1));
+  tick(w, bugs);
+  assert.ok(bugs.every((e) => e.hp <= 0), '화면의 버그를 지웠다');
+  assert.ok(w.gems.length >= 20 && w.gems.every((g) => g.to === a.id && g.hold), '모두 나에게 끌려온다');
+  // 먼저 닿은 것으로 레벨업. 고르는 동안(1초)에도 월드는 돈다
+  let chose = 0;
+  for (let i = 0; i < 20 * 8; i++) {
+    tick(w, []);
+    assert.ok(!w.paused, '동료가 있으니 월드는 멈추지 않는다');
+    if (a.offers) {
+      // 고르는 동안 끌려오던 것은 놓이지 않는다
+      assert.ok(w.gems.every((g) => g.to === a.id), '고르는 동안에도 내 것');
+      if (++chose % 20 === 0) pickOffer(w, a.id, 0);
+    }
+  }
+  assert.ok(chose > 0, '중간에 레벨업했다');
+  assert.equal(w.gems.length, 0, `모두 먹었다 (남은 것 ${w.gems.length})`);
 });
 
 test('24시간 모니터링: 카나리아와 부엉이가 함께, 쉬지 않고 폭탄을 떨어뜨린다. 두 마리 모두 화면에 보낸다', () => {

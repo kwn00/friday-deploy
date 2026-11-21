@@ -241,6 +241,11 @@ export interface Gem {
   to?: number;
   /** 끌려가는 현재 속도 (px/s) */
   sp?: number;
+  /**
+   * rm -rf node_modules 가 끌어당긴 것: 주인이 레벨업을 고르는 동안 놓지 않고 그 자리에서 기다렸다가 이어서 끌려간다
+   * (함께 하는 판에서는 고르는 동안에도 월드가 돈다. 놓아 버리면 주인의 획득 범위 밖에 그대로 남는다)
+   */
+  hold?: true;
 }
 
 export interface Heal {
@@ -1068,11 +1073,14 @@ function advance(world: World, dt: number): void {
   const gains = new Map<Player, number>();
   world.gems = world.gems.filter((g) => {
     let p = g.to === undefined ? undefined : world.players.get(g.to);
+    // rm -rf 가 끈 것은 주인이 고르는 동안 그 자리에서 기다린다 (쓰러지거나 나가면 놓는다)
+    if (p && g.hold && p.alive && p.offers !== null) return true;
     // 끌던 사람이 쓰러졌거나, 나갔거나, 레벨업 선택 중이면 놓는다 (선택 중에는 예전에도 줍지 못했다)
     if (p && (!p.alive || p.offers !== null)) p = undefined;
     if (!p) {
       g.to = undefined;
       g.sp = undefined;
+      g.hold = undefined;
       let best = Infinity;
       for (let i = 0; i < pullers.length; i++) {
         const q = pullers[i]!;

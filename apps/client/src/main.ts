@@ -139,6 +139,8 @@ let offerDeadline = 0;
 let loadoutKey = '';
 /** 마지막 스냅샷의 내 강화 단계 (레벨업 선택지에 진화 안내를 붙일 때 쓴다) */
 let myUp: Partial<Record<UpgradeId, number>> = {};
+/** 지금 떠 있는 선택지 카드와 그 강화 (진화 안내를 새 스냅샷에 맞춰 다시 쓴다) */
+let offerCards: { id: UpgradeId; btn: HTMLElement }[] = [];
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
 let resultBoard: BoardId | null = null;
 
@@ -260,7 +262,9 @@ function updateHud(s: Snapshot): void {
   const key = `${JSON.stringify(me.up)}|${me.revives}`;
   if (key !== loadoutKey) {
     loadoutKey = key;
-    // 다음 보물상자에서 진화할 무기 (재료가 모두 갖춰졌다)
+    // 선택지가 스냅샷보다 먼저 왔을 수 있다 (새로 고친 뒤 이어하기, 같은 틱에 상자로 진화): 진화 안내를 지금 단계로 다시 쓴다
+    refreshOfferHints();
+    // 보물상자를 열면 진화할 무기 (재료가 모두 갖춰졌다. 1개짜리 상자는 진화 하나만 하므로 여럿이면 차례로)
     const ready = readyMaterials(me.up);
     // 무기 칸, 패시브 칸을 따로 묶는다 (각각 최대 6개). 좁은 화면에서는 묶음마다 줄을 바꿔 무기와 패시브가 섞이지 않게 한다
     const chip = (id: UpgradeId, level: number): HTMLElement => {
@@ -269,7 +273,7 @@ function updateHud(s: Snapshot): void {
       const c = node('span', `chip chip--${def.kind}${evolved ? ' chip--evolved' : ''}${ready.has(id) ? ' chip--ready' : ''}`);
       // 진화한 무기는 단계 대신 별 (더 오르지 않는다)
       c.append(node('span', 'chip__icon', def.icon), node('b', '', evolved ? '★' : String(level)));
-      c.title = evolved ? `${def.name} (진화)` : ready.has(id) ? `${def.name} Lv.${level} · 다음 보물상자에서 진화해요` : `${def.name} Lv.${level}`;
+      c.title = evolved ? `${def.name} (진화)` : ready.has(id) ? `${def.name} Lv.${level} · 보물상자를 열면 진화해요` : `${def.name} Lv.${level}`;
       return c;
     };
     const weapons = WEAPON_IDS.filter((id) => (me.up[id] ?? 0) > 0).map((id) => chip(id, me.up[id]!));
@@ -435,9 +439,6 @@ function showOffers(offers: Offer[], timeout: number): void {
       const tag = o.level <= 1 ? `NEW ${def.kind === 'weapon' ? '무기' : '패시브'}` : `Lv.${o.level}/${def.max}`;
       name.append(' ', node('em', o.level >= def.max ? 'offer__max' : '', tag));
       btn.append(node('span', 'offer__icon', def.icon), name, node('span', 'offer__desc', upgradeText(o.id, o.level)));
-      // 진화의 짝 (이 무기·패시브를 재료로 쓰는 진화가 있으면)
-      const hint = evolveHint(o.id, myUp);
-      if (hint) btn.append(node('span', 'offer__evo', hint));
       btn.addEventListener('click', () => {
         sound.play('pick');
         net.sendPick(i);
@@ -447,7 +448,26 @@ function showOffers(offers: Offer[], timeout: number): void {
       return btn;
     }),
   );
+  offerCards = offers.map((o, i) => ({ id: o.id, btn: el.offers.children[i] as HTMLElement }));
+  refreshOfferHints();
   el.levelup.classList.remove('hidden');
+}
+
+/** 선택지 카드의 진화 안내 (이 무기·패시브를 재료로 쓰는 진화가 있고 아직 하지 않았으면) */
+function refreshOfferHints(): void {
+  for (const { id, btn } of offerCards) {
+    const hint = evolveHint(id, myUp);
+    let line = btn.querySelector<HTMLElement>('.offer__evo');
+    if (!hint) {
+      line?.remove();
+      continue;
+    }
+    if (!line) {
+      line = node('span', 'offer__evo');
+      btn.append(line);
+    }
+    if (line.textContent !== hint) line.textContent = hint;
+  }
 }
 
 /* ───────────── 일시정지 / 메뉴 ─────────────

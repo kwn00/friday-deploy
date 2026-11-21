@@ -28,7 +28,7 @@ export function evolveHint(id: UpgradeId, up: Levels): string | null {
   return `✨ 진화: 최대 단계 + ${label(e.with)} → ${to}`;
 }
 
-/** 지금 조건이 맞아 다음 보물상자에서 바뀔 재료 무기들 (무기 칸에 표시한다) */
+/** 지금 조건이 맞아 보물상자를 열면 바뀔 재료 무기들 (무기 칸에 표시한다. 1개짜리 상자는 EVOLUTIONS 순서로 하나만 바꾼다) */
 export function readyMaterials(up: Levels): Set<UpgradeId> {
   const out = new Set<UpgradeId>();
   for (const e of readyEvolutions(up)) for (const f of e.from) out.add(f);

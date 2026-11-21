@@ -425,14 +425,15 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
     { rarity: 40, kb: 1 }),
 
   /* ── 진화한 무기 (EVOLUTIONS). 단계가 하나뿐이고 레벨업 선택지에는 나오지 않는다 (rarity 0).
-   *    수치는 재료 무기의 최대 단계보다 2~3배쯤 세게 잡았다 (우리 게임의 것: 뱀서의 진화를 옮긴 것이 아니다) ── */
+   *    수치는 우리 게임의 것이다 (뱀서의 진화를 옮긴 것이 아니다). 재료 무기의 최대 단계보다 1.5~3배쯤 세다.
+   *    합치기는 칸 하나가 비는 몫이 있어 1.5~2배쯤으로 잡았다 ── */
   debugger: W('디버거', '🐞', '로그 대신 중단점. 꿰뚫고 날아가, 맞은 버그를 잠깐 멈춰 세운다.',
     { dmg: 40, cd: 0.7, amount: 5, area: 5, speed: 260, dur: 1.0, pierce: 1 }, [],
     { rarity: 0, kb: 1, ignores: ['dur'] }),
   websocket: W('웹소켓', '🔌', '연결이 끊기지 않는다. 공이 쉬지 않고 튕기며 계속 맞힌다.',
     { dmg: 50, cd: 4.0, amount: 4, area: 8, speed: 260, dur: 4.0, pierce: 999 }, [],
     { rarity: 0, kb: 1, rehit: 0.5 }),
-  friday_deploy: W('금요일 배포', '🔥', '내 발밑과 버그들 자리에 불이 붙는다. 오늘 퇴근은 없다.',
+  friday_deploy: W('금요일 배포', '🌋', '내 발밑과 버그들 자리에 불이 붙는다. 오늘 퇴근은 없다.',
     { dmg: 40, cd: 3.5, amount: 5, area: 48, speed: 0, dur: 3.5, pierce: 0 }, [],
     { rarity: 0, kb: 0, rehit: 0.5, ignores: ['speed'] }),
   rm_rf: W('rm -rf node_modules', '♻️', '화면을 지우고 새로 받는다. 경험치는 모두 남아 내 쪽으로 끌려온다.',

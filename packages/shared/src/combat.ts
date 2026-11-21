@@ -732,11 +732,13 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
         world.items = world.items.filter((it) => it.kind !== 'chest' || !inView(it.x, it.y) || it.born === world.tick);
       }
       if (w === 'rm_rf') {
-        // 방금 떨어진 것까지 화면의 경험치를 모두 나에게 (이미 다른 사람에게 끌려가는 것은 그대로)
+        // 방금 떨어진 것까지 화면의 경험치를 모두 나에게 (이미 다른 사람에게 끌려가는 것은 그대로).
+        // 끌려오는 동안 내가 레벨업을 골라도 놓지 않는다 (hold: sim.ts 의 경험치 처리)
         for (const g of world.gems) {
           if (g.to !== undefined || !inView(g.x, g.y)) continue;
           g.to = p.id;
           g.sp = GEM_PULL_SPEED;
+          g.hold = true;
         }
       }
       flash(world, p, 'wipe', p.x, p.y, Math.min(255 * 4, r), w === 'rm_rf' ? 1 : 0, st.dur);
