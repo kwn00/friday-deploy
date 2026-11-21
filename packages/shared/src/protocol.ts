@@ -124,7 +124,10 @@ export interface UpgradeStatsResponse {
   runs: number;
   /** false 면 통계가 서버 메모리에만 있어서 서버가 다시 시작되면 사라진다 */
   persistent: boolean;
-  /** true 면 저장된 합계를 아직 불러오지 못했다 (DB 가 깨어나는 중 등). 지금 숫자는 일부일 수 있다 */
+  /**
+   * true 면 지금 시즌의 저장된 통계 합계나 순위 기록(topRuns 의 바탕)을 아직 다 불러오지 못했다 (DB 가 깨어나는 중 등).
+   * runs·upgrades 나 topRuns 가 일부일 수 있다. 서버는 이 응답을 캐시하지 말라고 보낸다
+   */
   loading: boolean;
   /** 선택률 높은 순 (같으면 많이 나온 순) */
   upgrades: UpgradeStat[];

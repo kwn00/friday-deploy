@@ -126,6 +126,7 @@ export class MemoryStore implements LeaderboardStore {
     if (!this.rows.has(record.id)) this.rows.set(record.id, record);
   }
   private stats = new Map<number, StoredStats>();
+  /** 최근에 더한 묶음 id (메모리 저장소는 더한 뒤에 실패할 일이 없어 오래 기억할 필요가 없다: 최근 것만) */
   private batches = new Set<string>();
   async seasons(): Promise<number[]> {
     return [...new Set([...[...this.rows.values()].map((r) => r.season), ...this.stats.keys()])].sort((a, b) => a - b);
@@ -136,6 +137,7 @@ export class MemoryStore implements LeaderboardStore {
   async addStats(season: number, delta: StoredStats, batch: string): Promise<void> {
     if (this.batches.has(batch)) return;
     this.batches.add(batch);
+    if (this.batches.size > 1000) this.batches.delete(this.batches.values().next().value!);
     if (!this.stats.has(season)) this.stats.set(season, emptyStats());
     addStatsInto(this.stats.get(season)!, delta);
   }

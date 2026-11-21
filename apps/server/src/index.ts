@@ -123,10 +123,11 @@ function answer(res: ServerResponse, work: () => Promise<void>): void {
 }
 
 /**
- * 지난 시즌을 물을 때: 있는 시즌인지 확인한다. 확인했으면 true, 응답을 이미 보냈으면(없는 시즌 404, 목록을 못 읽음 503) false.
+ * 지난 시즌을 물을 때: 있는 시즌이면 확인된 시즌 목록을 돌려준다. 없는 시즌이면 404, 시즌 목록을 읽지 못하면 503 을
+ * 여기서 보내고 null 을 돌려준다 (호출한 쪽은 null 이면 더 답하지 않는다).
  * 지금 시즌은 이것을 거치지 않는다 (DB 를 기다리지 않고 바로 답한다).
  */
-async function pastSeasonExists(res: ServerResponse, season: number): Promise<number[] | null> {
+async function pastSeasonsOrReply(res: ServerResponse, season: number): Promise<number[] | null> {
   const seasons = await leaderboard.seasons();
   if (!seasons) {
     unavailable(res);
@@ -195,7 +196,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     });
     if (season === leaderboard.season) return json(res, 200, body(leaderboard.knownSeasons(), leaderboard.top(board)), PUBLIC_API);
     return answer(res, async () => {
-      const seasons = await pastSeasonExists(res, season);
+      const seasons = await pastSeasonsOrReply(res, season);
       if (seasons) json(res, 200, body(seasons, await leaderboard.view(board, season)), PUBLIC_API);
     });
   }
@@ -208,7 +209,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const kind: StatsKind = rawKind;
     return answer(res, async () => {
       // 지금 시즌은 DB 를 기다리지 않는다 (아는 시즌 목록으로 답한다)
-      const seasons = season === leaderboard.season ? leaderboard.knownSeasons() : await pastSeasonExists(res, season);
+      const seasons = season === leaderboard.season ? leaderboard.knownSeasons() : await pastSeasonsOrReply(res, season);
       if (!seasons) return;
       const body: UpgradeStatsResponse = await stats.response(season, kind, seasons, leaderboard);
       // 1분 동안은 브라우저가 다시 묻지 않아도 된다 (통계는 천천히 바뀐다). 아직 다 불러오지 못한 응답은 담아 두지 않게 한다
