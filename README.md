@@ -113,17 +113,22 @@ docs/SECURITY.md  치팅 방지 설계와 위협 모델
 
 | URL | 내용 |
 | --- | --- |
-| `/api/leaderboard?board=solo\|coop&season=N` | 순위표 (상위 50). `season`(보고 있는 시즌), `current`(지금 시즌), `seasons`(기록이나 통계가 있는 시즌들), `entries` |
-| `/api/stats/upgrades?season=N&kind=weapon\|passive` | 아이템 통계. `kind` 를 빼면 무기·패시브 모두 |
+| `/api/leaderboard?board=solo\|coop&season=N` | 순위표 (상위 50). `season`(보고 있는 시즌), `current`(지금 시즌), `seasons`(기록이나 통계가 있는 시즌들), `entries` (기록마다 세운 게임 버전 `version`, 버전을 남기기 전의 기록은 없음) |
+| `/api/stats/upgrades?season=N&version=x.y.z&kind=weapon\|passive` | 아이템 통계. `version` 을 빼면 시즌 전체(모든 버전의 합), `kind` 를 빼면 무기·패시브 모두 |
 
 아이템 통계 (`/api/stats/upgrades`) 의 주요 값:
 
+- **게임 버전별로 쌓습니다** (같은 시즌 안에서 밸런스 패치 전후를 나눠 볼 수 있게). `version`(보고 있는 버전, 시즌 전체면 `null`), `currentVersion`(지금 서버의 버전),
+  `versions[]`(이 시즌에 통계가 있는 버전과 각 `runs`·`since`, 최신 버전부터. 지금 시즌에는 지금 버전이 판이 없어도 `runs: 0` 으로 들어 있다).
+  없는 버전이면 `404` (`{"error":"unknown_version","versions":[...]}`), 형식이 틀리면 `400` (`bad_version`).
+  서버가 막 깨어나 저장된 통계를 아직 못 불러왔으면, 지금 버전이 아닌 버전은 있는지 알 수 없어 `503` (`Retry-After`) 으로 답합니다
+  버전을 붙이기 전에 쌓인 몫(0.2.2 에서 센 판)은 0.2.2 로 보입니다
 - `runs`: 센 판 수. 리더보드와 같은 판(30초 이상, 처음부터 함께 한 사람)을 **사람마다 하나**로 셉니다. `since`: 세기 시작한 날 (UTC)
 - `upgrades[]`: 모든 무기·패시브, 선택률 높은 순
   - `offered` 레벨업 선택지에 나온 횟수 · `picked` 직접 고른 횟수 · `autoPicked` 시간이 지나 자동으로 골라진 횟수
   - `pickRate` = (`picked` + `autoPicked`) / `offered` · `chest` 보물상자로 오른 횟수
   - `finalOwnedRate` 판이 끝날 때 가지고 있던 판의 비율 · `avgFinalLevel` 가지고 있던 판의 평균 단계
-- `topRuns`: 그 시즌 순위 기록(순위표마다 상위 200개)의 끝날 때 아이템. `owned[]` 의 `rate`(가진 사람 비율)와 `avgLevel`
+- `topRuns`: 그 시즌 순위 기록(순위표마다 상위 200개)의 끝날 때 아이템. `owned[]` 의 `rate`(가진 사람 비율)와 `avgLevel`. 버전을 고르면 그 버전에서 세운 기록만 (버전을 남기기 전의 기록은 빠짐)
 - `persistent`(DB 에 쌓이는지), `loading`(지금 시즌의 저장된 통계 합계나 순위 기록을 아직 다 불러오지 못함: `runs`·`upgrades` 나 `topRuns` 가 일부일 수 있고, 캐시하지 않게 보낸다)
 
 숫자는 모두 서버가 셉니다 (선택지를 만들고, 고르고, 시간이 지나 대신 고르고, 상자를 여는 것이 모두 서버의 일입니다). 지금 시즌은 서버 메모리의 합계로 답하고 1분 동안 캐시해도 된다고 알려 줍니다 (`loading` 이 `true` 인 응답은 캐시하지 않게 합니다).

@@ -1,6 +1,9 @@
 import pg from 'pg';
 import { UPGRADE_IDS, ownedUpgrades, type BoardId, type UpgradeId } from '@friday-deploy/shared';
-import { emptyStats, type LeaderboardStore, type RunRecord, type StoredStats, type UpgradeCounts } from './leaderboard';
+import { addStatsInto, emptyStats, type LeaderboardStore, type RunRecord, type StatsByVersion, type StoredStats, type UpgradeCounts } from './leaderboard';
+
+/** 게임 버전 x.y.z */
+const VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 
 /** upgrade_stats 의 한 줄 (bigint 는 문자열로 온다) */
 interface StatRow {
@@ -69,6 +72,10 @@ const ADD_MEMBER_KILLS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS 
 const HAS_MEMBER_ITEMS = `SELECT 1 FROM pg_attribute
    WHERE attrelid = 'leaderboard_runs'::regclass AND attname = 'member_items' AND NOT attisdropped`;
 const ADD_MEMBER_ITEMS = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS member_items jsonb`;
+/** 기록을 세운 게임 버전 (x.y.z). 나중에 추가한 열이라 예전 기록에는 NULL 이다 (기존 행은 건드리지 않는다) */
+const HAS_APP_VERSION = `SELECT 1 FROM pg_attribute
+   WHERE attrelid = 'leaderboard_runs'::regclass AND attname = 'app_version' AND NOT attisdropped`;
+const ADD_APP_VERSION = `ALTER TABLE leaderboard_runs ADD COLUMN IF NOT EXISTS app_version text`;
 /** 상위 N 조회가 그대로 이 인덱스를 따라 읽는다 */
 const HAS_INDEX = `SELECT to_regclass('leaderboard_runs_top') IS NOT NULL AS present`;
 const CREATE_INDEX = `CREATE INDEX IF NOT EXISTS leaderboard_runs_top
@@ -92,6 +99,34 @@ const MARK_SEASON = 'INSERT INTO season_marks (season, first_seen) VALUES ($1, $
 const FOLD_INTO_SEASON_ZERO = `UPDATE leaderboard_runs SET season = 0
    WHERE season <> 0 AND NOT EXISTS (SELECT 1 FROM season_marks WHERE season > 0)`;
 /** 아이템 통계: 시즌·아이템마다 누적 횟수 */
+/**
+ * 아이템 통계를 시즌·게임 버전·아이템마다 쌓는다 (밸런스 패치 전후를 나눠 볼 수 있게).
+ * 버전 없이 쌓던 처음 표(upgrade_stats, stat_runs)는 그대로 두고 더 쓰지 않는다. 그 표를 쓴 서버는 0.2.2 뿐이었으므로
+ * 읽을 때 0.2.2 의 몫으로 더한다 (LEGACY_STATS_VERSION). 옮기지 않으니 옮기다 잃을 일이 없고,
+ * 배포하는 동안 아직 내려가지 않은 예전 서버가 그 표에 더한 몫도 0.2.2 로 함께 보인다.
+ */
+const CREATE_UPGRADE_STATS_BY_VERSION = `CREATE TABLE IF NOT EXISTS upgrade_stats_by_version (
+    season          integer NOT NULL,
+    version         text    NOT NULL,
+    upgrade_id      text    NOT NULL,
+    offered         bigint  NOT NULL DEFAULT 0,
+    picked          bigint  NOT NULL DEFAULT 0,
+    auto_picked     bigint  NOT NULL DEFAULT 0,
+    chest           bigint  NOT NULL DEFAULT 0,
+    final_owned     bigint  NOT NULL DEFAULT 0,
+    final_level_sum bigint  NOT NULL DEFAULT 0,
+    PRIMARY KEY (season, version, upgrade_id)
+  )`;
+const CREATE_STAT_RUNS_BY_VERSION = `CREATE TABLE IF NOT EXISTS stat_runs_by_version (
+    season  integer NOT NULL,
+    version text    NOT NULL,
+    runs    bigint  NOT NULL DEFAULT 0,
+    since   bigint  NOT NULL,
+    PRIMARY KEY (season, version)
+  )`;
+/** 버전 없이 쌓던 처음 표의 몫을 읽을 때 붙이는 버전 (그 표를 쓴 서버는 이 버전뿐이었다) */
+export const LEGACY_STATS_VERSION = '0.2.2';
+/** 처음 표 (버전 없음). 더 쓰지 않지만 읽는다 (없는 DB 에서도 읽기가 실패하지 않게 만들어 둔다) */
 const CREATE_UPGRADE_STATS = `CREATE TABLE IF NOT EXISTS upgrade_stats (
     season          integer NOT NULL,
     upgrade_id      text    NOT NULL,
@@ -113,7 +148,7 @@ const CREATE_STAT_BATCHES = `CREATE TABLE IF NOT EXISTS stat_batches (
     at     bigint NOT NULL
   )`;
 const STAT_BATCH_KEEP_MS = 7 * 24 * 3600_000;
-/** 아이템 통계: 시즌마다 센 판 수와 세기 시작한 때 */
+/** 처음 표 (버전 없음): 시즌마다 센 판 수와 세기 시작한 때 */
 const CREATE_STAT_RUNS = `CREATE TABLE IF NOT EXISTS stat_runs (
     season integer PRIMARY KEY,
     runs   bigint  NOT NULL DEFAULT 0,
@@ -136,6 +171,7 @@ interface Row {
   paused_seconds: number;
   /** bigint 는 문자열로 온다 */
   ended_at: string;
+  app_version: string | null;
 }
 
 /** PostgreSQL 의 text 는 NUL 문자를 담지 못한다. 이름은 위에서 정리되지만 저장 실패로 재시도만 반복하지 않게 방어한다 */
@@ -195,7 +231,7 @@ class PostgresStore implements LeaderboardStore {
       const n = Math.max(0, Math.floor(limit));
       const res = await this.tx((client) =>
         client.query<Row>(
-          `SELECT id, board, season, names, member_kills, member_items, time, kills, level, paused_seconds, ended_at
+          `SELECT id, board, season, names, member_kills, member_items, time, kills, level, paused_seconds, ended_at, app_version
              FROM leaderboard_runs WHERE board = $1 AND season = $2
             ORDER BY ${ORDER} LIMIT $3`,
           [board, season, n],
@@ -214,6 +250,7 @@ class PostgresStore implements LeaderboardStore {
         level: r.level,
         pausedSeconds: r.paused_seconds,
         endedAt: Number(r.ended_at),
+        ...(typeof r.app_version === 'string' && VERSION_RE.test(r.app_version) ? { version: r.app_version } : {}),
       }));
     });
   }
@@ -223,10 +260,10 @@ class PostgresStore implements LeaderboardStore {
       await this.ensureSchema();
       await this.tx((client) =>
         client.query(
-          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at, member_kills, member_items)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          `INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at, member_kills, member_items, app_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (id) DO NOTHING`,
-          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt, r.killsBy ?? null, r.itemsBy ? JSON.stringify(r.itemsBy) : null],
+          [r.id, r.board, r.season, r.names.map(clean), r.time, r.kills, r.level, r.pausedSeconds, r.endedAt, r.killsBy ?? null, r.itemsBy ? JSON.stringify(r.itemsBy) : null, r.version ?? null],
         ),
       );
     });
@@ -236,44 +273,59 @@ class PostgresStore implements LeaderboardStore {
     return this.track(async () => {
       await this.ensureSchema();
       const res = await this.tx((client) =>
-        client.query<{ season: number }>('SELECT DISTINCT season FROM leaderboard_runs UNION SELECT season FROM stat_runs ORDER BY season'),
+        client.query<{ season: number }>(
+          'SELECT DISTINCT season FROM leaderboard_runs UNION SELECT season FROM stat_runs UNION SELECT season FROM stat_runs_by_version ORDER BY season',
+        ),
       );
       return res.rows.map((r) => r.season);
     });
   }
 
-  async loadStats(season: number): Promise<StoredStats> {
+  async loadStats(season: number): Promise<StatsByVersion> {
     return this.track(async () => {
       await this.ensureSchema();
       return this.tx(async (client) => {
-        const head = await client.query<{ runs: string; since: string }>('SELECT runs, since FROM stat_runs WHERE season = $1', [season]);
-        const rows = await client.query<StatRow>(
-          'SELECT upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum FROM upgrade_stats WHERE season = $1',
-          [season],
+        const out: StatsByVersion = {};
+        const heads = await client.query<{ version: string; runs: string; since: string }>(
+          `SELECT version, runs, since FROM stat_runs_by_version WHERE season = $1
+           UNION ALL SELECT $2::text, runs, since FROM stat_runs WHERE season = $1`,
+          [season, LEGACY_STATS_VERSION],
         );
-        const out = emptyStats();
-        if (head.rows[0]) {
-          out.runs = Number(head.rows[0].runs);
-          out.since = Number(head.rows[0].since);
+        const rows = await client.query<StatRow & { version: string }>(
+          `SELECT version, upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum FROM upgrade_stats_by_version WHERE season = $1
+           UNION ALL SELECT $2::text, upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum FROM upgrade_stats WHERE season = $1`,
+          [season, LEGACY_STATS_VERSION],
+        );
+        // 같은 버전이 두 표에 있으면(0.2.2) 더한다
+        for (const h of heads.rows) {
+          if (!VERSION_RE.test(h.version)) continue;
+          addStatsInto((out[h.version] ??= emptyStats()), { runs: Number(h.runs), since: Number(h.since), upgrades: {} });
         }
         for (const r of rows.rows) {
-          // 지금 게임에 없는 아이템(이름이 바뀌었거나 빠진 것)은 건너뛴다
-          if (!(UPGRADE_IDS as readonly string[]).includes(r.upgrade_id)) continue;
-          out.upgrades[r.upgrade_id as UpgradeId] = {
-            offered: Number(r.offered),
-            picked: Number(r.picked),
-            autoPicked: Number(r.auto_picked),
-            chest: Number(r.chest),
-            finalOwned: Number(r.final_owned),
-            finalLevelSum: Number(r.final_level_sum),
-          };
+          // 지금 게임에 없는 아이템(이름이 바뀌었거나 빠진 것)과 이상한 버전은 건너뛴다
+          if (!VERSION_RE.test(r.version) || !(UPGRADE_IDS as readonly string[]).includes(r.upgrade_id)) continue;
+          addStatsInto((out[r.version] ??= emptyStats()), {
+            runs: 0,
+            since: null,
+            upgrades: {
+              [r.upgrade_id]: {
+                offered: Number(r.offered),
+                picked: Number(r.picked),
+                autoPicked: Number(r.auto_picked),
+                chest: Number(r.chest),
+                finalOwned: Number(r.final_owned),
+                finalLevelSum: Number(r.final_level_sum),
+              },
+            },
+          });
         }
         return out;
-      }, true); // 두 표를 한 시점에서 읽는다 (그 사이에 다른 서버가 더한 것이 반만 섞이지 않게)
+      }, true); // 표들을 한 시점에서 읽는다 (그 사이에 다른 서버가 더한 것이 반만 섞이지 않게)
     });
   }
 
-  async addStats(season: number, d: StoredStats, batch: string): Promise<void> {
+  async addStats(season: number, version: string, d: StoredStats, batch: string): Promise<void> {
+    if (!VERSION_RE.test(version)) throw new Error(`버전 형식이 아니다: ${version}`);
     await this.track(async () => {
       await this.ensureSchema();
       await this.tx(async (client) => {
@@ -281,26 +333,28 @@ class PostgresStore implements LeaderboardStore {
         const fresh = await client.query('INSERT INTO stat_batches (id, season, at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING', [batch, season, Date.now()]);
         if (fresh.rowCount === 0) return;
         await client.query(
-          `INSERT INTO stat_runs (season, runs, since) VALUES ($1, $2, $3)
-           ON CONFLICT (season) DO UPDATE SET runs = stat_runs.runs + EXCLUDED.runs, since = LEAST(stat_runs.since, EXCLUDED.since)`,
-          [season, d.runs, d.since ?? Date.now()],
+          `INSERT INTO stat_runs_by_version (season, version, runs, since) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (season, version) DO UPDATE SET runs = stat_runs_by_version.runs + EXCLUDED.runs,
+             since = LEAST(stat_runs_by_version.since, EXCLUDED.since)`,
+          [season, version, d.runs, d.since ?? Date.now()],
         );
         const ids = Object.keys(d.upgrades) as UpgradeId[];
         if (ids.length === 0) return;
         const col = (f: (c: UpgradeCounts) => number): number[] => ids.map((id) => f(d.upgrades[id]!));
         // 아이템마다 한 줄씩 한 문장으로 더한다 (판 하나에 최대 38줄)
         await client.query(
-          `INSERT INTO upgrade_stats (season, upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum)
-           SELECT $1, * FROM unnest($2::text[], $3::bigint[], $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[])
-           ON CONFLICT (season, upgrade_id) DO UPDATE SET
-             offered = upgrade_stats.offered + EXCLUDED.offered,
-             picked = upgrade_stats.picked + EXCLUDED.picked,
-             auto_picked = upgrade_stats.auto_picked + EXCLUDED.auto_picked,
-             chest = upgrade_stats.chest + EXCLUDED.chest,
-             final_owned = upgrade_stats.final_owned + EXCLUDED.final_owned,
-             final_level_sum = upgrade_stats.final_level_sum + EXCLUDED.final_level_sum`,
+          `INSERT INTO upgrade_stats_by_version (season, version, upgrade_id, offered, picked, auto_picked, chest, final_owned, final_level_sum)
+           SELECT $1, $2, * FROM unnest($3::text[], $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[])
+           ON CONFLICT (season, version, upgrade_id) DO UPDATE SET
+             offered = upgrade_stats_by_version.offered + EXCLUDED.offered,
+             picked = upgrade_stats_by_version.picked + EXCLUDED.picked,
+             auto_picked = upgrade_stats_by_version.auto_picked + EXCLUDED.auto_picked,
+             chest = upgrade_stats_by_version.chest + EXCLUDED.chest,
+             final_owned = upgrade_stats_by_version.final_owned + EXCLUDED.final_owned,
+             final_level_sum = upgrade_stats_by_version.final_level_sum + EXCLUDED.final_level_sum`,
           [
             season,
+            version,
             ids,
             col((c) => c.offered),
             col((c) => c.picked),
@@ -349,6 +403,7 @@ class PostgresStore implements LeaderboardStore {
       const missing: string[] = [];
       if ((await client.query(HAS_MEMBER_KILLS)).rowCount === 0) missing.push(ADD_MEMBER_KILLS);
       if ((await client.query(HAS_MEMBER_ITEMS)).rowCount === 0) missing.push(ADD_MEMBER_ITEMS);
+      if ((await client.query(HAS_APP_VERSION)).rowCount === 0) missing.push(ADD_APP_VERSION);
       if (missing.length > 0) {
         await client.query(`SET LOCAL lock_timeout = ${MIGRATE_LOCK_TIMEOUT_MS}`);
         for (const sql of missing) await client.query(sql);
@@ -357,6 +412,8 @@ class PostgresStore implements LeaderboardStore {
       if (!index.rows[0]?.present) await client.query(CREATE_INDEX);
       await client.query(CREATE_UPGRADE_STATS);
       await client.query(CREATE_STAT_RUNS);
+      await client.query(CREATE_UPGRADE_STATS_BY_VERSION);
+      await client.query(CREATE_STAT_RUNS_BY_VERSION);
       await client.query(CREATE_STAT_BATCHES);
       await client.query(CREATE_SEASON_MARKS);
       await client.query('DELETE FROM stat_batches WHERE at < $1', [Date.now() - STAT_BATCH_KEEP_MS]);

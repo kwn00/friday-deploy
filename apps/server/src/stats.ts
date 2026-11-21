@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
+  APP_VERSION,
   LEADERBOARD_MIN_SECONDS,
+  compareVersions,
   LEADERBOARD_SEASON,
   UPGRADES,
   UPGRADE_IDS,
@@ -11,7 +13,18 @@ import {
   type UpgradeStat,
   type UpgradeStatsResponse,
 } from '@friday-deploy/shared';
-import { addStatsInto, emptyCounts, emptyStats, type Leaderboard, type LeaderboardStore, type RunReport, type StoredStats } from './leaderboard';
+import {
+  addStatsInto,
+  copyStatsByVersion,
+  emptyCounts,
+  emptyStats,
+  sumStats,
+  type Leaderboard,
+  type LeaderboardStore,
+  type RunReport,
+  type StatsByVersion,
+  type StoredStats,
+} from './leaderboard';
 
 /**
  * 아이템 통계: 시즌마다 무기·패시브가 선택지에 몇 번 나왔고, 몇 번 골라졌고, 판이 끝날 때 얼마나 가지고 있었는지.
@@ -20,6 +33,7 @@ import { addStatsInto, emptyCounts, emptyStats, type Leaderboard, type Leaderboa
  *   (sim.ts 의 tally). 클라이언트가 보내는 것은 "몇 번째를 골랐다"뿐이라 숫자를 위조할 수 없다.
  * - 리더보드와 같은 판만 센다: 30초 이상 버틴 판에서 처음부터 함께 한 사람 (Room 이 리더보드에 넘기는 사람들).
  * - 이름·IP 같은 개인 정보는 남기지 않고 합계만 쌓는다. 리더보드 기록은 건드리지 않는다 (다른 표에 쌓는다).
+ * - 시즌·게임 버전(x.y.z)별로 쌓는다: 같은 시즌 안에서도 밸런스 패치 전후를 나눠 볼 수 있다. 버전을 고르지 않으면 시즌 전체.
  * - 지금 시즌의 합계는 메모리에 들고 있고(응답할 때 DB 를 읽지 않는다), 판이 끝날 때마다 늘어난 몫을 뒤에서 저장소에 더한다.
  *   더하는 몫(묶음)마다 id 를 붙인다: 저장이 실패하면 같은 묶음을 같은 id 로 다시 보내므로, 실제로는 더해졌는데 확인 응답만
  *   잃은 경우에도 두 번 더해지지 않는다. 그동안 끝난 판은 다음 묶음에 모은다. 지난 시즌은 읽기만 한다.
@@ -76,7 +90,7 @@ export function statsOfRun(report: RunReport, at: number): StoredStats | null {
 }
 
 /** 순위 기록에서 topRuns 계산에 쓰는 부분 */
-type RunRecordLike = { names: string[]; itemsBy?: unknown[] };
+type RunRecordLike = { names: string[]; itemsBy?: unknown[]; version?: string };
 
 /** YYYY-MM-DD (UTC) */
 const day = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString().slice(0, 10));
@@ -110,11 +124,15 @@ export function upgradeList(stats: StoredStats, kind: StatsKind): UpgradeStat[] 
     .map((x) => x.stat);
 }
 
-/** 순위 기록(끝날 때 가진 아이템)에서: 사람마다 하나로 센다. 아이템을 남기기 전의 기록은 빠진다 */
-export function topRunsOf(records: readonly RunRecordLike[], kind: StatsKind): UpgradeStatsResponse['topRuns'] {
+/**
+ * 순위 기록(끝날 때 가진 아이템)에서: 사람마다 하나로 센다. 아이템을 남기기 전의 기록은 빠진다.
+ * version 을 주면 그 버전에서 세운 기록만 (버전을 남기기 전의 기록은 빠진다)
+ */
+export function topRunsOf(records: readonly RunRecordLike[], kind: StatsKind, version: string | null = null): UpgradeStatsResponse['topRuns'] {
   let runs = 0;
   const owned = new Map<UpgradeId, { n: number; levels: number }>();
   for (const r of records) {
+    if (version !== null && r.version !== version) continue;
     if (!Array.isArray(r.itemsBy) || r.itemsBy.length !== r.names.length) continue;
     for (const list of r.itemsBy) {
       runs++;
@@ -142,9 +160,18 @@ interface TopRunsMemo {
   value: UpgradeStatsResponse['topRuns'];
 }
 
+/** 버전별 통계 → 응답의 버전 목록 (최신 버전부터). always 는 판이 없어도 넣는다 (지금 버전) */
+export function versionList(byVersion: StatsByVersion, always: string | null): UpgradeStatsResponse['versions'] {
+  const names = new Set(Object.keys(byVersion));
+  if (always) names.add(always);
+  return [...names]
+    .sort((a, b) => compareVersions(b, a))
+    .map((v) => ({ version: v, runs: byVersion[v]?.runs ?? 0, since: day(byVersion[v]?.since ?? null) }));
+}
+
 export class UpgradeStats {
-  /** 지금 시즌의 합계: 저장소에서 불러온 것 + 이 서버가 뜬 뒤에 센 것 */
-  private totals = emptyStats();
+  /** 지금 시즌의 버전별 합계: 저장소에서 불러온 것 + 이 서버가 뜬 뒤에 센 것 (이 서버가 세는 것은 this.version 뿐이다) */
+  private totals: StatsByVersion = {};
   /** 아직 묶음에 넣지 않은 몫 */
   private pending = emptyStats();
   /** 보내는 중이거나, 보냈다가 실패해 같은 id 로 다시 보낼 묶음 */
@@ -157,12 +184,14 @@ export class UpgradeStats {
   private loadAttempt = 0;
   private closed = false;
   private seen = new Set<string>();
-  private past = new Map<number, { at: number; stats: Promise<StoredStats> }>();
+  private past = new Map<number, { at: number; stats: Promise<StatsByVersion> }>();
 
   constructor(
     private readonly store: LeaderboardStore,
     readonly season: number = LEADERBOARD_SEASON,
     private readonly now: () => number = Date.now,
+    /** 이 서버가 세는 판에 붙일 게임 버전 */
+    readonly version: string = APP_VERSION,
   ) {}
 
   get persistent(): boolean {
@@ -183,7 +212,7 @@ export class UpgradeStats {
   async init(): Promise<void> {
     try {
       const base = await this.store.loadStats(this.season);
-      addStatsInto(this.totals, base);
+      for (const [v, s] of Object.entries(base)) addStatsInto((this.totals[v] ??= emptyStats()), s);
       this.loaded = true;
       // 불러오기 전에 센 몫은 아직 저장소에 없다: 이제 더한다 (불러오기 전에는 더하지 않는다. 두 번 세지 않게)
       if (this.unsaved > 0) void this.flush();
@@ -204,7 +233,7 @@ export class UpgradeStats {
       if (!delta) return;
       this.seen.add(id);
       if (this.seen.size > SEEN_MAX) this.seen.delete(this.seen.values().next().value!);
-      addStatsInto(this.totals, delta);
+      addStatsInto((this.totals[this.version] ??= emptyStats()), delta);
       addStatsInto(this.pending, delta);
       if (!this.resting) void this.flush();
     } catch (err) {
@@ -232,7 +261,7 @@ export class UpgradeStats {
       }
       const batch = this.batch;
       try {
-        await this.store.addStats(this.season, batch.delta, batch.id);
+        await this.store.addStats(this.season, this.version, batch.delta, batch.id);
         this.batch = null;
         this.attempt = 0;
       } catch (err) {
@@ -249,8 +278,8 @@ export class UpgradeStats {
     }
   }
 
-  /** 한 시즌의 합계. 지금 시즌은 메모리에서, 지난 시즌은 저장소에서 읽어 잠시 들고 있는다 */
-  async statsOf(season: number): Promise<StoredStats> {
+  /** 한 시즌의 버전별 합계. 지금 시즌은 메모리에서, 지난 시즌은 저장소에서 읽어 잠시 들고 있는다 */
+  async statsOf(season: number): Promise<StatsByVersion> {
     if (season === this.season) return this.totals;
     const hit = this.past.get(season);
     if (hit && this.now() - hit.at < PAST_CACHE_MS) return hit.stats;
@@ -267,32 +296,58 @@ export class UpgradeStats {
   /**
    * GET /api/stats/upgrades 의 응답. seasons 는 기록이나 통계가 있는 시즌들이고, season 은 그 안의 것이어야 한다
    * (호출하는 쪽이 확인한다: 없는 시즌으로 저장소를 두드리지 않게).
+   * version 을 주면 그 버전만, null 이면 시즌 전체.
+   * - 그 시즌에 없는 버전이면 { unknownVersion: 버전 목록 } (호출한 쪽이 404 로 답한다)
+   * - 지금 시즌인데 저장된 합계를 아직 못 불러와서 그 버전이 있는지 알 수 없으면 { notReady: true } (호출한 쪽이 503 으로 답한다:
+   *   없는 버전이라고 말하지 않는다. 서버가 막 깨어났거나 DB 가 안 될 때. 시즌 목록과 같은 방식)
    */
-  async response(season: number, kind: StatsKind, seasons: number[], leaderboard: Pick<Leaderboard, 'records' | 'ready' | 'revision'>): Promise<UpgradeStatsResponse> {
-    const stats = await this.statsOf(season);
+  async response(
+    season: number,
+    version: string | null,
+    kind: StatsKind,
+    seasons: number[],
+    leaderboard: Pick<Leaderboard, 'records' | 'ready' | 'revision'>,
+  ): Promise<UpgradeStatsResponse | { unknownVersion: UpgradeStatsResponse['versions'] } | { notReady: true }> {
+    const byVersion = await this.statsOf(season);
+    const current = season === this.season;
+    // 지금 시즌에서는 지금 버전을 판이 없어도 목록에 넣는다 (그 버전을 물어도 404 가 아니라 0 으로 답한다)
+    const versions = versionList(byVersion, current ? this.version : null);
+    if (version !== null && !versions.some((v) => v.version === version)) {
+      if (current && !this.loaded) return { notReady: true };
+      return { unknownVersion: versions };
+    }
+    const stats = version === null ? sumStats(byVersion) : copyStatsByVersion({ [version]: byVersion[version] ?? emptyStats() })[version]!;
     const boards: BoardId[] = ['solo', 'coop'];
     const rows = await Promise.all(boards.map((b) => leaderboard.records(b, season)));
-    const current = season === this.season;
     return {
       season,
       current: this.season,
       seasons,
+      version,
+      currentVersion: this.version,
+      versions,
       since: day(stats.since),
       runs: stats.runs,
       persistent: this.persistent,
       // 지금 시즌: 통계 합계나 순위 기록(topRuns 의 바탕) 중 하나라도 아직 다 불러오지 못했으면 일부일 수 있다
       loading: current && (!this.loaded || !leaderboard.ready),
       upgrades: upgradeList(stats, kind),
-      topRuns: this.topRunsCached(season, kind, current ? leaderboard.revision : -1, rows),
+      topRuns: this.topRunsCached(season, version, kind, current ? leaderboard.revision : -1, rows),
     };
   }
 
   /** topRunsOf 를 기록이 바뀔 때만 다시 계산한다 (지금 시즌은 리더보드의 기록 번호, 지난 시즌은 읽어 둔 기록 배열로 본다) */
-  private topRunsCached(season: number, kind: StatsKind, rev: number, rows: readonly (readonly RunRecordLike[])[]): UpgradeStatsResponse['topRuns'] {
-    const key = `${season}:${kind ?? 'all'}`;
+  private topRunsCached(
+    season: number,
+    version: string | null,
+    kind: StatsKind,
+    rev: number,
+    rows: readonly (readonly RunRecordLike[])[],
+  ): UpgradeStatsResponse['topRuns'] {
+    const key = `${season}:${version ?? 'all'}:${kind ?? 'all'}`;
     const hit = this.topMemo.get(key);
     if (hit && hit.rev === rev && hit.rows.length === rows.length && hit.rows.every((r, i) => r === rows[i])) return hit.value;
-    const value = topRunsOf(rows.flat(), kind);
+    const value = topRunsOf(rows.flat(), kind, version);
     if (this.topMemo.size >= 32) this.topMemo.clear();
     this.topMemo.set(key, { key, rev, rows: rows as readonly unknown[][], value });
     return value;

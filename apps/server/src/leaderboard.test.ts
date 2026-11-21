@@ -4,7 +4,7 @@ import { LEADERBOARD_MIN_SECONDS, LEADERBOARD_SIZE } from '@friday-deploy/shared
 import { Leaderboard, MemoryStore, compareRuns, emptyStats, type LeaderboardStore, type RunRecord, type RunReport } from './leaderboard';
 
 /** 아이템 통계를 쓰지 않는 가짜 저장소에 붙이는 빈 구현 */
-const noStats = { seasons: async () => [], loadStats: async () => emptyStats(), addStats: async () => {} };
+const noStats = { seasons: async () => [], loadStats: async () => ({}), addStats: async () => {} };
 
 let seq = 0;
 const run = (over: Partial<RunReport> = {}): RunReport => ({
@@ -291,7 +291,7 @@ test('시즌: 지난 시즌 순위표는 저장소에서 읽고, 같은 시즌�
     save: (r) => inner.save(r),
     seasons: () => inner.seasons(),
     loadStats: (s) => inner.loadStats(s),
-    addStats: (s, d, b) => inner.addStats(s, d, b),
+    addStats: (s, v, d, b) => inner.addStats(s, v, d, b),
     close: async () => {},
   };
   const lb = new Leaderboard(store, 0);
@@ -310,7 +310,7 @@ test('시즌: 지난 시즌 순위표는 저장소에서 읽고, 같은 시즌�
 test('시즌: 시즌 목록은 저장소의 시즌과 지금 시즌을 합친 것이다', async () => {
   const inner = new MemoryStore();
   await inner.save({ id: 'x', board: 'coop', season: 2, names: ['x'], time: 40, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1 });
-  await inner.addStats(5, { runs: 1, since: 1, upgrades: {} }, 'b1');
+  await inner.addStats(5, '0.2.2', { runs: 1, since: 1, upgrades: {} }, 'b1');
   const lb = new Leaderboard(inner, 0);
   assert.deepEqual(await lb.seasons(), [0, 2, 5]);
   assert.deepEqual(lb.knownSeasons(), [0, 2, 5]);
