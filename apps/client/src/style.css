@@ -281,6 +281,16 @@ body {
 .chip--revive {
   border-color: var(--cyan);
 }
+/* 보물상자를 열면 진화할 무기 / 진화한 무기 */
+.chip--ready {
+  border-color: var(--yellow);
+}
+.chip--evolved {
+  border-color: var(--purple);
+}
+.chip--evolved b {
+  color: var(--purple);
+}
 
 /* ───────── 화면(오버레이) ───────── */
 .screen {
@@ -634,6 +644,14 @@ body {
   color: var(--muted);
   word-break: keep-all;
 }
+/* 진화의 짝 안내: 글자 칸(한 줄 배치면 오른쪽, 세로 배치면 그대로 아래)에 */
+.offer__evo {
+  grid-column: -2 / -1;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--purple);
+  word-break: keep-all;
+}
 
 .result {
   display: grid;
@@ -874,6 +892,9 @@ body {
 }
 .row__item--passive {
   background: rgba(var(--btn-rgb), 0.85);
+}
+.row__item--evolved b {
+  color: var(--purple);
 }
 .row__meta {
   display: flex;

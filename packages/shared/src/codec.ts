@@ -12,7 +12,7 @@ import { DT } from './constants';
 import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 7;
+const VERSION = 8;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 /**

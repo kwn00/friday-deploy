@@ -1,4 +1,4 @@
-import { LEADERBOARD_SIZE, UPGRADES, type BoardId, type LeaderboardItem, type LeaderboardResponse } from '@friday-deploy/shared';
+import { LEADERBOARD_SIZE, UPGRADES, evolutionOf, type BoardId, type LeaderboardItem, type LeaderboardResponse } from '@friday-deploy/shared';
 import { LeaderboardError, fetchLeaderboard } from './net';
 import { findMine, type MyPlace } from './mine';
 import { sharesOf } from './shares';
@@ -32,15 +32,17 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?:
 /** 한 사람이 가졌던 무기·패시브를 아이콘과 단계로 늘어놓는다. 이름은 서버가 보낸 값이라 텍스트 노드로만 넣는다 */
 function itemLine(items: LeaderboardItem[], who: string | null): HTMLElement {
   const line = node('span', 'row__items');
-  const label = items.map((it) => `${UPGRADES[it.id].name} ${it.level}단계`).join(', ');
+  // 진화한 무기는 단계 대신 '진화' (단계가 하나뿐이다)
+  const label = items.map((it) => `${UPGRADES[it.id].name} ${evolutionOf(it.id) ? '진화' : `${it.level}단계`}`).join(', ');
   line.setAttribute('aria-label', who ? `${who}의 아이템: ${label}` : `아이템: ${label}`);
   if (who) line.append(node('small', 'row__who', who));
   for (const it of items) {
     const def = UPGRADES[it.id];
-    const item = node('span', `row__item row__item--${def.kind}`);
-    item.title = `${def.name} Lv.${it.level}`;
+    const evolved = evolutionOf(it.id) !== undefined;
+    const item = node('span', `row__item row__item--${def.kind}${evolved ? ' row__item--evolved' : ''}`);
+    item.title = evolved ? `${def.name} (진화)` : `${def.name} Lv.${it.level}`;
     item.setAttribute('aria-hidden', 'true');
-    item.append(node('span', 'chip__icon', def.icon), node('b', '', String(it.level)));
+    item.append(node('span', 'chip__icon', def.icon), node('b', '', evolved ? '★' : String(it.level)));
     line.append(item);
   }
   return line;

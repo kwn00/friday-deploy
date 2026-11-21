@@ -402,6 +402,10 @@ export const SHOT_ART: Record<ShotKind, string[]> = {
   cat: ['k......k', 'kok..kok', 'kookkook', 'kooooook', 'kgkoogkk', 'kooroook', '.kooook.', '..kkkk..'],
   /** 날아가는 커밋 (커밋 히스토리가 멈췄을 때): 가운데에 점이 있는 초록 커밋 (꼬리는 render.ts 가 그린다) */
   drill: ['..kkk..', '.kgggk.', 'kgwgggk', 'kggkggk', 'kgggGGk', '.kgGGk.', '..kkk..'],
+  /** 디버거의 중단점: 편집기 줄 번호 옆의 빨간 점 */
+  breakpoint: ['.kkkk.', 'krreek', 'krweek', 'keeeEk', 'keeEEk', '.kkkk.'],
+  /** 웹소켓: 번개가 흐르는 하늘색 공 */
+  socket: ['..kkk..', '.kcwck.', 'kcwcYck', 'kccYcck', 'kcYccck', '.kccck.', '..kkk..'],
 };
 
 /* ───────────── 그 밖의 것 ───────────── */

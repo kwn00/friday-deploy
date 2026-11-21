@@ -1,12 +1,12 @@
 /**
- * 전투: 무기 23종의 동작, 투사체·소환물, 바닥 영역, 피해와 처치.
+ * 전투: 무기 23종과 진화한 무기 6종의 동작, 투사체·소환물, 바닥 영역, 피해와 처치.
  * 서버에서만 "진짜"로 돈다. 클라이언트에는 결과(위치, 영역, 피격 표시)만 스냅샷으로 간다.
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
  */
-import { ENEMY_VIEW_RADIUS, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED } from './constants';
+import { ENEMY_VIEW_RADIUS, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED } from './constants';
 import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, type WeaponDef, type WeaponId, type WeaponStats, type ZoneKind } from './content';
-import type { Enemy, Player, Shot, World, Zone } from './sim';
+import type { Enemy, Gem, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf } from './stats';
 
 /** 적 정의를 지역 상수로 잡아 둔다 (모듈 경계 너머의 이름은 틱마다 수천 번 읽으면 그 자체로 무겁다) */
@@ -107,6 +107,8 @@ const ownKey = (p: Player, w: WeaponId): number => -(p.id * 64 + WEAPON_IDS.inde
 
 /** 넉백이 이어지는 시간(초) (뱀서 Knockback: 120ms) */
 const KB_TIME = 0.12;
+/** 디버거의 중단점에 맞은 버그가 멈춰 있는 시간(초). 보스와 빙결 저항이 1 보다 큰 적은 멈추지 않는다 */
+export const BREAKPOINT_FREEZE = 0.3;
 
 /**
  * 무기로 때린다: 치명타(운이 곱해진 확률), 피해, 넉백, 방화벽의 약화. 결과가 화면에 보이는 일이라 보이는 난수를 쓴다.
@@ -123,6 +125,8 @@ export function hit(world: World, e: Enemy, dmg: number, by: Player | undefined,
     e.kbTaken = Math.min(ed.kbMax, e.kbTaken + 0.3);
     e.resFreeze = Math.max(0, e.resFreeze - 0.1);
   }
+  // 디버거: 맞은 버그가 잠깐 멈춘다 (얼음과 같은 상태: 움직이지도 때리지도 못한다)
+  if (w === 'debugger' && !ed.boss && e.resFreeze <= 1) e.frozen = Math.max(e.frozen, BREAKPOINT_FREEZE);
   const mult = def.kb * e.kbTaken;
   if (mult !== 0) {
     e.kbTime = KB_TIME;
@@ -160,13 +164,35 @@ function dropGem(world: World, x: number, y: number, v: number): void {
   if (world.gems.length >= MAX_GEMS) {
     const i = farthestGem(world);
     if (i >= 0) v += world.gems.splice(i, 1)[0]!.v;
-    else {
+    else if (!mergeHeld(world)) {
       // 모두 끌려오는 중 (거의 없는 일): 새로 만들지 않고 하나에 더한다
       world.gems[0]!.v += v;
       return;
     }
   }
   world.gems.push({ id: world.nextId++, x, y, v });
+}
+
+/**
+ * 땅이 가득한데 모두 끌려오는 중일 때: rm -rf node_modules 가 끌어 같은 주인을 기다리는 경험치 둘을 하나로 합쳐 자리를 만든다
+ * (주인이 레벨업을 고르는 동안 오래 기다릴 수 있다: 그동안 동료가 잡은 적도 그 자리에 경험치를 떨어뜨리게).
+ * 합친 값과 주인은 그대로라 아무것도 잃지 않는다. 합칠 것이 없으면 false
+ */
+function mergeHeld(world: World): boolean {
+  const first = new Map<number, Gem>();
+  for (let i = 0; i < world.gems.length; i++) {
+    const g = world.gems[i]!;
+    if (!g.hold || g.to === undefined) continue;
+    const keep = first.get(g.to);
+    if (!keep) {
+      first.set(g.to, g);
+      continue;
+    }
+    keep.v += g.v;
+    world.gems.splice(i, 1);
+    return true;
+  }
+  return false;
 }
 
 /** 살아 있는 사람 중 가장 가까운 사람과의 거리가 가장 먼 경험치의 위치 (끌려오는 중인 것은 빼고, 없으면 -1) */
@@ -307,7 +333,7 @@ export function updateShots(world: World, grid: Grid, dt: number): void {
       s.x += s.vx * dt;
       s.y += s.vy * dt;
     }
-    if (s.kind === 'ping' && owner) {
+    if ((s.kind === 'ping' || s.kind === 'socket') && owner) {
       if (Math.abs(s.x - owner.x) > BOUNCE_X && Math.sign(s.vx) === Math.sign(s.x - owner.x)) s.vx = -s.vx;
       if (Math.abs(s.y - owner.y) > BOUNCE_Y && Math.sign(s.vy) === Math.sign(s.y - owner.y)) s.vy = -s.vy;
     }
@@ -391,8 +417,9 @@ export function auraRadius(p: Player): number {
 /** 카나리아·부엉이가 도는 반경 (뱀서: 공격 범위는 폭탄 크기만 키우고 원의 크기는 그대로) */
 const PET_ORBIT = 64;
 
+/** 카나리아·부엉이의 자리. 24시간 모니터링이면 그 무기의 빠르기로 두 마리가 함께 돈다 */
 export function petPosition(world: World, p: Player, w: 'canary' | 'night_owl'): [number, number] {
-  const st = effectiveStats(p, w);
+  const st = effectiveStats(p, lv(p, 'monitoring') > 0 ? 'monitoring' : w);
   const dir = w === 'canary' ? 1 : -1;
   const a = dir * world.time * st.speed + (w === 'night_owl' ? Math.PI : 0);
   return [p.x + Math.cos(a) * PET_ORBIT, p.y + Math.sin(a) * PET_ORBIT];
@@ -442,6 +469,10 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
     if (w === 'canary' || w === 'night_owl') {
       if (p.pets[w] === undefined) p.pets[w] = world.nextId++;
       runBirds(world, grid, p, w, st, dt);
+      continue;
+    }
+    if (w === 'monitoring') {
+      runMonitoring(world, grid, p, st, dt);
       continue;
     }
     // 2단계 인증: 방패가 남아 있는 동안은 쿨다운이 돌지 않는다 (다 쓰면 다시 채우기 시작)
@@ -527,6 +558,31 @@ function runBirds(world: World, grid: Grid, p: Player, w: 'canary' | 'night_owl'
   p.cd[w] = 0;
 }
 
+/**
+ * 24시간 모니터링 (카나리아 + 부엉이): 두 마리가 쉬지 않고 돌며 쿨다운마다 저마다 폭탄 한 묶음(개수만큼)을 떨어뜨린다.
+ * 재료였던 새의 id 를 그대로 쓴다 (테스트처럼 처음부터 가진 경우에는 새로 만든다)
+ */
+function runMonitoring(world: World, grid: Grid, p: Player, st: WeaponStats, dt: number): void {
+  for (const b of ['canary', 'night_owl'] as const) if (p.pets[b] === undefined) p.pets[b] = world.nextId++;
+  const cd = (p.cd.monitoring ?? 0) - dt;
+  if (cd > EPS) {
+    p.cd.monitoring = cd;
+    return;
+  }
+  p.cd.monitoring = st.cd;
+  for (const b of ['canary', 'night_owl'] as const) dropBombs(world, grid, p, 'monitoring', petPosition(world, p, b), st);
+}
+
+/** 새 한 마리가 자기 자리 둘레에 폭탄을 개수만큼 떨어뜨린다 (첫 발은 바로 아래) */
+function dropBombs(world: World, grid: Grid, p: Player, w: WeaponId, [bx, by]: [number, number], st: WeaponStats): void {
+  const n = Math.max(1, Math.round(st.amount));
+  for (let i = 0; i < n; i++) {
+    const a = world.rng() * Math.PI * 2;
+    const d = i === 0 ? 0 : world.rng() * 18;
+    blast(world, grid, p, w, bx + Math.cos(a) * d, by + Math.sin(a) * d, st.area, st.dmg);
+  }
+}
+
 /** 커밋 히스토리: 남아 있는 내 커밋을 바라보는 쪽으로 날린다. 오래 남아 있던 것일수록 세다 (피해 × (1 + 남아 있던 초)) */
 function launchTrail(world: World, p: Player, st: WeaponStats): void {
   const ang = Math.atan2(p.fy, p.fx);
@@ -556,15 +612,17 @@ function randomTarget(world: World, grid: Grid, p: Player, r: number): Enemy | n
 function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponStats): boolean {
   const n = Math.max(1, Math.round(st.amount));
   switch (w) {
-    case 'console_log': {
+    case 'console_log':
+    case 'debugger': {
       // 뱀서 Magic Wand: 가장 가까운 적에게 차례로 쏜다. 앞의 탄이 잡을 적을 빼고 다음으로 가까운 적을 겨눈다
-      // (위키의 0.1초 간격은 없이 한 번에 쏘되, 겨누는 순서로 같은 효과를 낸다)
+      // (위키의 0.1초 간격은 없이 한 번에 쏘되, 겨누는 순서로 같은 효과를 낸다). 디버거는 중단점을 쏜다 (맞은 버그가 멈춘다: hit)
       const near = grid.within(p.x, p.y, AIM);
       if (near.length === 0) return false;
       near.sort((a, b) => (a.x - p.x) ** 2 + (a.y - p.y) ** 2 - ((b.x - p.x) ** 2 + (b.y - p.y) ** 2));
+      const kind = w === 'debugger' ? 'breakpoint' : 'log';
       for (let i = 0; i < n; i++) {
         const t = near[i % near.length]!;
-        fire(world, p, { kind: 'log', w, x: p.x, y: p.y, ang: Math.atan2(t.y - p.y, t.x - p.x), speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
+        fire(world, p, { kind, w, x: p.x, y: p.y, ang: Math.atan2(t.y - p.y, t.x - p.x), speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
       }
       return true;
     }
@@ -633,9 +691,32 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       }
       return true;
     }
-    case 'ping_pong': {
+    case 'friday_deploy': {
+      // 첫 불은 내 발밑에, 나머지는 가까운 버그들 자리에 (없으면 내 둘레 아무 데나). 같은 적을 0.5초에 한 번 태운다
+      const near = grid.within(p.x, p.y, AIM);
       for (let i = 0; i < n; i++) {
-        fire(world, p, { kind: 'ping', w, x: p.x, y: p.y, ang: world.rng() * Math.PI * 2, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: 999, r: st.area, rehit: rehitOf(w) });
+        let x = p.x;
+        let y = p.y;
+        if (i > 0 && near.length > 0) {
+          const t = near[Math.floor(world.rng() * near.length)]!;
+          x = t.x;
+          y = t.y;
+        } else if (i > 0) {
+          const a = world.rng() * Math.PI * 2;
+          const d = 40 + world.rng() * 80;
+          x = p.x + Math.cos(a) * d;
+          y = p.y + Math.sin(a) * d;
+        }
+        addZone(world, { kind: 'fire', w, owner: p.id, x, y, r: st.area, aux: 0, ttl: st.dur, dmg: st.dmg, every: rehitOf(w) });
+      }
+      return true;
+    }
+    case 'ping_pong':
+    case 'websocket': {
+      // 웹소켓은 지속(keep-alive 를 가지고 있으면 4.4초 이상)이 쿨다운(4초)보다 길어서 공이 끊이지 않는다
+      const kind = w === 'websocket' ? 'socket' : 'ping';
+      for (let i = 0; i < n; i++) {
+        fire(world, p, { kind, w, x: p.x, y: p.y, ang: world.rng() * Math.PI * 2, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: 999, r: st.area, rehit: rehitOf(w) });
       }
       return true;
     }
@@ -651,15 +732,17 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       }
       return true;
     }
-    case 'git_clean': {
+    case 'git_clean':
+    case 'rm_rf': {
       // 뱀서 Pentagram: 화면 안의 적을 모두 지운다 (사신만 버틴다). 쓸 때마다 한 번 굴려서
       // - 대개는 경험치 없이 지우고, 화면의 경험치·회복 아이템·보물상자도 함께 지운다 (지워진 보스의 상자는 그 자리에 떨어진다)
       // - '남길 확률'(단계와 운으로 오른다)에 걸리면 처치한 것처럼 경험치를 떨어뜨리고, 아이템은 그대로 둔다
+      // rm -rf node_modules 는 언제나 남기고, 화면의 경험치를 모두 나에게 끌어당긴다 (굴리기는 똑같이 한 번 한다: 보이는 난수의 흐름을 같게)
       // 화면 안 = 화면의 가장 먼 모서리 바로 바깥까지 (일반 적을 보내는 범위와 같다)
       const r = ENEMY_VIEW_RADIUS;
       const r2 = r * r;
       const inView = (x: number, y: number): boolean => (x - p.x) ** 2 + (y - p.y) ** 2 <= r2;
-      const keep = world.rng() < st.chance;
+      const keep = world.rng() < st.chance || w === 'rm_rf';
       for (const e of world.enemies) {
         if (e.hp <= 0 || EN[e.type].killRes || !inView(e.x, e.y)) continue;
         if (keep) damage(world, e, e.hp, p);
@@ -670,24 +753,32 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
         world.heals = world.heals.filter((h) => !inView(h.x, h.y));
         world.items = world.items.filter((it) => it.kind !== 'chest' || !inView(it.x, it.y) || it.born === world.tick);
       }
-      flash(world, p, 'wipe', p.x, p.y, Math.min(255 * 4, r), 0, st.dur);
+      if (w === 'rm_rf') {
+        // 방금 떨어진 것까지 화면의 경험치를 모두 나에게 (이미 다른 사람에게 끌려가는 것은 그대로).
+        // 끌려오는 동안 내가 레벨업을 골라도 놓지 않는다 (hold: sim.ts 의 경험치 처리)
+        for (const g of world.gems) {
+          if (g.to !== undefined || !inView(g.x, g.y)) continue;
+          g.to = p.id;
+          g.sp = GEM_PULL_SPEED;
+          g.hold = true;
+        }
+      }
+      flash(world, p, 'wipe', p.x, p.y, Math.min(255 * 4, r), w === 'rm_rf' ? 1 : 0, st.dur);
       return true;
     }
     case 'canary':
     case 'night_owl': {
-      const [bx, by] = petPosition(world, p, w);
-      for (let i = 0; i < n; i++) {
-        const a = world.rng() * Math.PI * 2;
-        const d = i === 0 ? 0 : world.rng() * 18;
-        blast(world, grid, p, w, bx + Math.cos(a) * d, by + Math.sin(a) * d, st.area, st.dmg);
-      }
+      dropBombs(world, grid, p, w, petPosition(world, p, w), st);
       return true;
     }
     case 'broadcast':
-    case 'multicast': {
+    case 'multicast':
+    case 'flooding': {
+      // 브로드캐스트는 위아래·좌우, 멀티캐스트는 대각선, 패킷 플러딩은 여덟 방향 모두
+      const dirs = w === 'flooding' ? 8 : 4;
       const turn = w === 'multicast' ? Math.PI / 4 : 0;
-      for (let k = 0; k < 4; k++) {
-        const ang = turn + (k * Math.PI) / 2;
+      for (let k = 0; k < dirs; k++) {
+        const ang = turn + (k * Math.PI * 2) / dirs;
         for (let i = 0; i < n; i++) {
           const off = (i - (n - 1) / 2) * 7;
           fire(world, p, { kind: 'packet', w, x: p.x - Math.sin(ang) * off, y: p.y + Math.cos(ang) * off, ang, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
@@ -761,6 +852,7 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     }
     case 'firewall':
     case 'rubber_duck':
+    case 'monitoring':
       return true;
   }
 }

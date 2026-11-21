@@ -89,6 +89,24 @@ test('통계: 응답 목록은 모든 아이템이고, 선택률 높은 순이�
   assert.equal(upgradeList(s, 'weapon').length + upgradeList(s, 'passive').length, UPGRADE_IDS.length);
 });
 
+test('통계: 진화한 무기는 재료를 함께 싣고, 보물상자 횟수가 진화한 횟수다', () => {
+  const s = emptyStats();
+  s.runs = 2;
+  s.upgrades.debugger = { offered: 0, picked: 0, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 1 };
+  const all = upgradeList(s, 'weapon');
+  const dbg = all.find((u) => u.id === 'debugger')!;
+  assert.deepEqual(dbg.evolve, { from: ['console_log'], with: 'test_coverage' });
+  assert.deepEqual([dbg.chest, dbg.pickRate, dbg.finalOwnedRate, dbg.avgFinalLevel], [1, 0, 0.5, 1]);
+  assert.deepEqual(all.find((u) => u.id === 'monitoring')!.evolve, { from: ['canary', 'night_owl'], with: null }, '합치기는 짝 패시브 없음');
+  assert.equal(all.find((u) => u.id === 'console_log')!.evolve, undefined, '진화하지 않은 것에는 없다');
+  assert.ok(!('evolve' in all.find((u) => u.id === 'regex')!), 'JSON 에도 키가 없다');
+  // 판의 몫: 진화한 횟수(상자)와 끝날 때 가진 것
+  const t = newTally();
+  t.chest.debugger = 1;
+  const d = statsOfRun(report({ tallies: [t], itemsBy: [[{ id: 'debugger', level: 1 }, { id: 'test_coverage', level: 2 }]] }), 1)!;
+  assert.deepEqual(d.upgrades.debugger, { offered: 0, picked: 0, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 1 });
+});
+
 test('통계: 순위 기록에서는 사람마다 끝날 때 가진 것을 센다 (아이템을 남기기 전의 기록은 빠진다)', () => {
   const top = topRunsOf(
     [
