@@ -296,7 +296,10 @@ export class UpgradeStats {
   /**
    * GET /api/stats/upgrades 의 응답. seasons 는 기록이나 통계가 있는 시즌들이고, season 은 그 안의 것이어야 한다
    * (호출하는 쪽이 확인한다: 없는 시즌으로 저장소를 두드리지 않게).
-   * version 을 주면 그 버전만, null 이면 시즌 전체. 그 시즌에 없는 버전이면 null 을 돌려준다 (호출한 쪽이 404 로 답한다)
+   * version 을 주면 그 버전만, null 이면 시즌 전체.
+   * - 그 시즌에 없는 버전이면 { unknownVersion: 버전 목록 } (호출한 쪽이 404 로 답한다)
+   * - 지금 시즌인데 저장된 합계를 아직 못 불러와서 그 버전이 있는지 알 수 없으면 { notReady: true } (호출한 쪽이 503 으로 답한다:
+   *   없는 버전이라고 말하지 않는다. 서버가 막 깨어났거나 DB 가 안 될 때. 시즌 목록과 같은 방식)
    */
   async response(
     season: number,
@@ -304,12 +307,15 @@ export class UpgradeStats {
     kind: StatsKind,
     seasons: number[],
     leaderboard: Pick<Leaderboard, 'records' | 'ready' | 'revision'>,
-  ): Promise<UpgradeStatsResponse | { unknownVersion: UpgradeStatsResponse['versions'] }> {
+  ): Promise<UpgradeStatsResponse | { unknownVersion: UpgradeStatsResponse['versions'] } | { notReady: true }> {
     const byVersion = await this.statsOf(season);
     const current = season === this.season;
     // 지금 시즌에서는 지금 버전을 판이 없어도 목록에 넣는다 (그 버전을 물어도 404 가 아니라 0 으로 답한다)
     const versions = versionList(byVersion, current ? this.version : null);
-    if (version !== null && !versions.some((v) => v.version === version)) return { unknownVersion: versions };
+    if (version !== null && !versions.some((v) => v.version === version)) {
+      if (current && !this.loaded) return { notReady: true };
+      return { unknownVersion: versions };
+    }
     const stats = version === null ? sumStats(byVersion) : copyStatsByVersion({ [version]: byVersion[version] ?? emptyStats() })[version]!;
     const boards: BoardId[] = ['solo', 'coop'];
     const rows = await Promise.all(boards.map((b) => leaderboard.records(b, season)));

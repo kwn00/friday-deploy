@@ -432,12 +432,13 @@ describe('PostgreSQL 저장소: 아이템 통계 (시즌 × 게임 버전)', { s
       // 지난 배포(버전 없이 쌓던 코드)가 남긴 몫
       await admin.query('INSERT INTO stat_runs (season, runs, since) VALUES ($1, 1, 3000)', [season]);
       await admin.query("INSERT INTO upgrade_stats (season, upgrade_id, offered, picked, auto_picked, final_owned, final_level_sum) VALUES ($1, 'ctrl_x', 2, 0, 1, 1, 1)", [season]);
+      assert.ok((await store.seasons()).includes(season), '처음 표에만 통계가 있는 시즌도 시즌 목록에 들어간다');
+      assert.deepEqual(Object.keys(await store.loadStats(season)), ['0.2.2'], '처음 표만 있어도 0.2.2 로 읽는다');
       await store.addStats(season, '0.2.2', { runs: 2, since: 8000, upgrades: { ctrl_x: counts(1, 1, 0, 0, 1, 2) } }, `legacy-${season}`);
       assert.deepEqual(await store.loadStats(season), {
         '0.2.2': { runs: 3, since: 3000, upgrades: { ctrl_x: counts(3, 1, 1, 0, 2, 3) } },
       });
       assert.equal(Number((await admin.query('SELECT runs FROM stat_runs WHERE season = $1', [season])).rows[0].runs), 1, '처음 표는 그대로');
-      assert.ok((await store.seasons()).includes(season));
     } finally {
       await store.close();
       await admin.end().catch(() => {});

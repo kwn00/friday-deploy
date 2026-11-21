@@ -6,8 +6,8 @@ import { UpgradeStats, statsOfRun, topRunsOf, upgradeList, versionList } from '.
 
 const V = APP_VERSION;
 /** 응답이 '없는 버전'이 아니라 통계일 때 (테스트에서) */
-function must(r: UpgradeStatsResponse | { unknownVersion: unknown }): UpgradeStatsResponse {
-  assert.ok(!('unknownVersion' in r), '없는 버전이 아니다');
+function must(r: UpgradeStatsResponse | { unknownVersion: unknown } | { notReady: true }): UpgradeStatsResponse {
+  assert.ok(!('unknownVersion' in r) && !('notReady' in r), '통계 응답이다');
   return r as UpgradeStatsResponse;
 }
 
@@ -356,4 +356,26 @@ test('버전: 기록에도 서버의 게임 버전이 붙고, topRuns 는 버전
 test('버전: 버전 목록은 시맨틱 버전 순서다 (0.10.0 이 0.9.0 보다 최신)', () => {
   const s = (runs: number) => ({ runs, since: null, upgrades: {} });
   assert.deepEqual(versionList({ '0.9.0': s(1), '0.10.0': s(2), '0.2.2': s(3) }, null).map((v) => v.version), ['0.10.0', '0.9.0', '0.2.2']);
+});
+
+test('버전: 저장된 합계를 아직 못 불러왔으면, 지금 버전이 아닌 버전은 없다고 하지 않고 notReady 로 답한다 (서버는 503)', async () => {
+  const inner = new MemoryStore();
+  await inner.addStats(0, '0.2.1', { runs: 7, since: 1, upgrades: {} }, 'old');
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  const store = wrap(inner, (s, v, d, b) => inner.addStats(s, v, d, b), async (s) => {
+    await gate;
+    return inner.loadStats(s);
+  });
+  const lb = new Leaderboard(inner, 0, '0.2.2');
+  const stats = new UpgradeStats(store, 0, Date.now, '0.2.2');
+  const loading = stats.init();
+  await lb.init();
+  assert.deepEqual(await stats.response(0, '0.2.1', null, [0], lb), { notReady: true }, '아직 모른다');
+  const now = must(await stats.response(0, '0.2.2', null, [0], lb));
+  assert.equal(now.loading, true, '지금 버전은 답하되 loading');
+  release();
+  await loading;
+  assert.equal(must(await stats.response(0, '0.2.1', null, [0], lb)).runs, 7, '불러온 뒤에는 답한다');
+  assert.ok('unknownVersion' in (await stats.response(0, '0.0.1', null, [0], lb)), '불러온 뒤에 없는 버전은 404');
 });

@@ -215,6 +215,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       const seasons = season === leaderboard.season ? leaderboard.knownSeasons() : await pastSeasonsOrReply(res, season);
       if (!seasons) return;
       const out = await stats.response(season, version, kind, seasons, leaderboard);
+      if ('notReady' in out) return unavailable(res);
       if ('unknownVersion' in out) return json(res, 404, { error: 'unknown_version', versions: out.unknownVersion }, PUBLIC_API);
       const body: UpgradeStatsResponse = out;
       // 1분 동안은 브라우저가 다시 묻지 않아도 된다 (통계는 천천히 바뀐다). 아직 다 불러오지 못한 응답은 담아 두지 않게 한다
