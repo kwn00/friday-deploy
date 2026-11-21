@@ -156,15 +156,16 @@ export const STAGE_TIME = 30 * 60;
  * 투사체·소환물 종류. 순서가 곧 통신에서 쓰는 번호다 (중간에 끼워 넣지 말고 뒤에 추가할 것).
  * 소환물(카나리아, 부엉이, 고양이)도 위치가 움직이는 것이라 투사체 목록으로 보낸다.
  */
-export const SHOT_KINDS = ['log', 'regex', 'ai', 'book', 'rollback', 'ping', 'packet', 'bomb', 'canary', 'owl', 'cat', 'drill'] as const;
+export const SHOT_KINDS = ['log', 'regex', 'ai', 'book', 'rollback', 'ping', 'packet', 'bomb', 'canary', 'owl', 'cat', 'drill', 'breakpoint', 'socket'] as const;
 export type ShotKind = (typeof SHOT_KINDS)[number];
 
 /**
  * 바닥에 생기는 공격 영역 종류 (통신 번호 = 순서). 그리는 모양:
  * slash: 각도 a 방향으로 길이 r 인 베기 / pool: 반경 r 웅덩이 / bolt: 반경 r 번개 / wipe: 반경 r 전체 지우기 /
- * blast: 반경 r 폭발 / band: 폭 r 의 세로 띠 / trail: 반경 r 발자국 / beam: 각도 a 방향 길이 r 광선
+ * blast: 반경 r 폭발 / band: 폭 r 의 세로 띠 / trail: 반경 r 발자국 / beam: 각도 a 방향 길이 r 광선 / fire: 반경 r 불바다(금요일 배포).
+ * wipe 의 aux 는 0 이면 git clean, 1 이면 rm -rf node_modules (색만 다르다)
  */
-export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'trail', 'beam'] as const;
+export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'trail', 'beam', 'fire'] as const;
 export type ZoneKind = (typeof ZONE_KINDS)[number];
 
 /* ───────────── 강화 (무기 · 패시브) ─────────────
@@ -194,6 +195,13 @@ export const WEAPON_IDS = [
   'two_factor',
   'sprint',
   'logic_bomb',
+  // 진화한 무기 (레벨업 선택지에는 나오지 않는다. 보물상자로만 바뀐다: EVOLUTIONS)
+  'debugger',
+  'websocket',
+  'friday_deploy',
+  'rm_rf',
+  'monitoring',
+  'flooding',
 ] as const;
 export type WeaponId = (typeof WEAPON_IDS)[number];
 
@@ -416,6 +424,27 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
     [{ dmg: 10 }, { pierce: 1 }, { amount: 1, area: 0.1 / 0.9 }, { pierce: 1 }, { dmg: 10 }],
     { rarity: 40, kb: 1 }),
 
+  /* ── 진화한 무기 (EVOLUTIONS). 단계가 하나뿐이고 레벨업 선택지에는 나오지 않는다 (rarity 0).
+   *    수치는 재료 무기의 최대 단계보다 2~3배쯤 세게 잡았다 (우리 게임의 것: 뱀서의 진화를 옮긴 것이 아니다) ── */
+  debugger: W('디버거', '🐞', '로그 대신 중단점. 꿰뚫고 날아가, 맞은 버그를 잠깐 멈춰 세운다.',
+    { dmg: 40, cd: 0.6, amount: 5, area: 5, speed: 260, dur: 1.0, pierce: 2 }, [],
+    { rarity: 0, kb: 1, ignores: ['dur'] }),
+  websocket: W('웹소켓', '🔌', '연결이 끊기지 않는다. 공이 쉬지 않고 튕기며 계속 맞힌다.',
+    { dmg: 50, cd: 4.0, amount: 4, area: 8, speed: 260, dur: 4.0, pierce: 999 }, [],
+    { rarity: 0, kb: 1, rehit: 0.5 }),
+  friday_deploy: W('금요일 배포', '🔥', '내 발밑과 버그들 자리에 불이 붙는다. 오늘 퇴근은 없다.',
+    { dmg: 50, cd: 3.0, amount: 5, area: 48, speed: 0, dur: 3.5, pierce: 0 }, [],
+    { rarity: 0, kb: 0, rehit: 0.5, ignores: ['speed'] }),
+  rm_rf: W('rm -rf node_modules', '♻️', '화면을 지우고 새로 받는다. 경험치는 모두 남아 내 쪽으로 끌려온다.',
+    { dmg: 0, cd: 45, amount: 1, area: 0, speed: 0, dur: 1.0, pierce: 0, chance: 1 }, [],
+    { rarity: 0, kb: 0, ignores: ['might', 'amount', 'area', 'speed', 'dur'] }),
+  monitoring: W('24시간 모니터링', '🕐', '카나리아와 부엉이가 쉬지 않고 함께 돌며 폭탄을 퍼붓는다.',
+    { dmg: 40, cd: 0.5, amount: 11, area: 40, speed: 1.4, dur: 0, pierce: 0 }, [],
+    { rarity: 0, kb: 2, ignores: ['dur'] }),
+  flooding: W('패킷 플러딩', '🌊', '여덟 방향으로 패킷을 한꺼번에 쏟아낸다.',
+    { dmg: 20, cd: 1.0, amount: 3, area: 5, speed: 390, dur: 0.9, pierce: 8 }, [],
+    { rarity: 0, kb: 0.1, ignores: ['dur'] }),
+
   /* ── 패시브 (뱀서의 Wings, Empty Tome, Spinach, Attractorb, Hollow Heart, Candelabrador, Armor, Pummarola, Bracer,
    *    Spellbinder, Duplicator, Clover, Crown, Skull O'Maniac, Tiragisu 순서) ── */
   coffee: P('아이스 아메리카노', '☕', '이동 속도가 빨라진다.', '이동 속도 +10%', 50),
@@ -434,6 +463,53 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   prod_hotfix: P('운영 서버 직접 수정', '☠️', '버그가 더 많이, 더 세게, 더 빨리 몰려온다.', '버그 체력·속도·수·빈도 +10%', 40),
   snapshot: P('스냅샷', '📸', '쓰러져도 그 자리에서 되살아난다. 다 쓰면 칸이 비어 다시 얻을 수 있다.', '부활 +1', 40, 2),
 };
+
+/* ───────────── 진화 ─────────────
+ * 최대 단계인 무기(합치기는 두 무기 모두)와 짝 패시브(단계는 상관없다)를 함께 가지고 있으면, 다음에 여는 보물상자에서 바뀐다.
+ * 진화한 무기는 재료 무기의 칸을 쓰고(합치기는 칸 하나가 빈다) 더 오르지 않는다. 짝 패시브는 그대로 남는다.
+ * 재료였던 무기는 그 판에서 다시 나오지 않는다. 판정은 서버의 시뮬레이션이 한다 (sim.ts openChest):
+ * 클라이언트는 레벨업 선택지와 칸에 짝을 알려 주기만 한다.
+ * 짝은 우리 게임의 농담으로 정했다 (핑퐁 + keep-alive = 웹소켓처럼 이름만 보고 짐작할 수 있게).
+ */
+export interface Evolution {
+  /** 진화한 무기 */
+  id: WeaponId;
+  /** 최대 단계여야 하는 무기. 둘이면 합치기 */
+  from: readonly WeaponId[];
+  /** 함께 가지고 있어야 하는 패시브 (합치기는 없다) */
+  with: PassiveId | null;
+}
+
+/** 진화 목록. 한 상자에서 여러 개가 가능하면 이 순서대로 바뀐다 */
+export const EVOLUTIONS: readonly Evolution[] = [
+  { id: 'debugger', from: ['console_log'], with: 'test_coverage' },
+  { id: 'websocket', from: ['ping_pong'], with: 'keep_alive' },
+  { id: 'friday_deploy', from: ['hotfix'], with: 'prod_hotfix' },
+  { id: 'rm_rf', from: ['git_clean'], with: 'npm_install' },
+  { id: 'monitoring', from: ['canary', 'night_owl'], with: null },
+  { id: 'flooding', from: ['broadcast', 'multicast'], with: null },
+];
+
+const EVOLVED = new Map<UpgradeId, Evolution>(EVOLUTIONS.map((e) => [e.id, e]));
+
+/** 진화한 무기라면 그 진화 (아니면 undefined) */
+export const evolutionOf = (id: UpgradeId): Evolution | undefined => EVOLVED.get(id);
+
+/** 이 무기·패시브를 재료로 쓰는 진화들 (선택지와 칸에 짝을 알려 줄 때) */
+export const evolutionsUsing = (id: UpgradeId): Evolution[] => EVOLUTIONS.filter((e) => e.with === id || (e.from as readonly UpgradeId[]).includes(id));
+
+type Levels = Partial<Record<UpgradeId, number>>;
+const has = (up: Levels, id: UpgradeId): boolean => (up[id] ?? 0) > 0;
+const maxed = (up: Levels, id: UpgradeId): boolean => (up[id] ?? 0) >= UPGRADES[id].max;
+
+/** 지금 진화할 수 있는 것들 (EVOLUTIONS 순서): 재료 무기가 모두 최대 단계이고, 짝 패시브가 있고, 아직 진화하지 않았다 */
+export function readyEvolutions(up: Levels): Evolution[] {
+  return EVOLUTIONS.filter((e) => !has(up, e.id) && e.from.every((f) => maxed(up, f)) && (e.with === null || has(up, e.with)));
+}
+
+/** 진화해서 없어진 재료 무기인지 (그 판에서 다시 선택지에 나오지 않는다) */
+export const evolvedAway = (up: Levels, id: UpgradeId): boolean =>
+  EVOLUTIONS.some((e) => has(up, e.id) && (e.from as readonly UpgradeId[]).includes(id));
 
 export function isWeapon(id: UpgradeId): id is WeaponId {
   return UPGRADES[id].kind === 'weapon';

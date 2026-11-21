@@ -3,6 +3,7 @@ import {
   APP_VERSION,
   LEADERBOARD_MIN_SECONDS,
   compareVersions,
+  evolutionOf,
   LEADERBOARD_SEASON,
   UPGRADES,
   UPGRADE_IDS,
@@ -97,6 +98,12 @@ const day = (ms: number | null): string | null => (ms === null ? null : new Date
 
 export type StatsKind = 'weapon' | 'passive' | null;
 
+/** 진화한 무기의 재료 (응답에 그대로 싣는다. 진화한 무기가 아니면 빈 객체) */
+function evolveOf(id: UpgradeId): Pick<UpgradeStat, 'evolve'> {
+  const e = evolutionOf(id);
+  return e ? { evolve: { from: [...e.from], with: e.with } } : {};
+}
+
 /** 합계 → 응답의 아이템 목록 (모든 아이템, 선택률 높은 순 → 많이 나온 순 → 원래 순서) */
 export function upgradeList(stats: StoredStats, kind: StatsKind): UpgradeStat[] {
   return UPGRADE_IDS.filter((id) => kind === null || UPGRADES[id].kind === kind)
@@ -117,6 +124,7 @@ export function upgradeList(stats: StoredStats, kind: StatsKind): UpgradeStat[] 
           chest: c.chest,
           finalOwnedRate: stats.runs > 0 ? round(Math.min(1, c.finalOwned / stats.runs), 3) : 0,
           avgFinalLevel: c.finalOwned > 0 ? round(c.finalLevelSum / c.finalOwned, 2) : 0,
+          ...evolveOf(id),
         } satisfies UpgradeStat,
       };
     })

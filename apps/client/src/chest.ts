@@ -1,4 +1,4 @@
-import { FIELD_ITEMS, UPGRADES, isUpgradeId, type UpgradeId } from '@friday-deploy/shared';
+import { FIELD_ITEMS, UPGRADES, evolutionOf, isUpgradeId, type UpgradeId } from '@friday-deploy/shared';
 
 /** 보물상자 하나에 들어 있을 수 있는 강화의 최대 수 (서버는 1, 3, 5개를 준다) */
 export const CHEST_MAX_ITEMS = 5;
@@ -26,14 +26,19 @@ export function parseChest(raw: unknown): ChestMsg | null {
 const keep = (text: string): string => text.replace(/ /g, '\u00a0');
 
 /**
- * 보물상자를 열었을 때의 알림 문구. 같은 것이 여러 번 오르면 묶는다 (러버덕 +2).
- * 예: "🎁 보물상자: console.log() +1, 러버덕 +2" / 올릴 것이 없어 체력만 찼으면 "🎁 보물상자: 체력 +30".
+ * 보물상자를 열었을 때의 알림 문구. 같은 것이 여러 번 오르면 묶는다 (러버덕 +2). 진화한 것은 앞에 따로 알린다.
+ * 예: "🎁 보물상자: console.log() +1, 러버덕 +2" / 올릴 것이 없어 체력만 찼으면 "🎁 보물상자: 체력 +30" /
+ *     진화: "🎁 보물상자: ✨ 디버거 진화!, 러버덕 +1".
  * 항목 하나("듀얼 모니터 +1") 안에서는 줄을 바꾸지 않는다: 좁은 화면에서는 쉼표 뒤에서만 줄이 바뀐다.
  */
 export function chestText(items: readonly UpgradeId[], heal: number): string {
   const counts = new Map<UpgradeId, number>();
   for (const id of items) counts.set(id, (counts.get(id) ?? 0) + 1);
-  const parts = [...counts].map(([id, n]) => keep(`${UPGRADES[id].name} +${n}`));
+  const evolved = [...counts.keys()].filter((id) => evolutionOf(id));
+  const parts = [
+    ...evolved.map((id) => keep(`✨ ${UPGRADES[id].name} 진화!`)),
+    ...[...counts].filter(([id]) => !evolutionOf(id)).map(([id, n]) => keep(`${UPGRADES[id].name} +${n}`)),
+  ];
   const hp = Math.round(heal);
   if (hp > 0) parts.push(keep(`체력 +${hp}`));
   const head = `${FIELD_ITEMS.chest.icon} 보물상자`;

@@ -15,6 +15,7 @@ import {
   UPGRADES,
   WEAPON_IDS,
   WEAPON_SLOTS,
+  evolutionOf,
   normalizeRoomCode,
   sanitizeName,
   unseenReleases,
@@ -33,6 +34,7 @@ import {
 import { applyTheme } from './apply-theme';
 import { Sound } from './audio';
 import { chestText } from './chest';
+import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
 import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
@@ -135,6 +137,8 @@ let resumeUntil = 0;
 const RESUME_GRACE_MS = 600;
 let offerDeadline = 0;
 let loadoutKey = '';
+/** 마지막 스냅샷의 내 강화 단계 (레벨업 선택지에 진화 안내를 붙일 때 쓴다) */
+let myUp: Partial<Record<UpgradeId, number>> = {};
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
 let resultBoard: BoardId | null = null;
 
@@ -252,15 +256,20 @@ function updateHud(s: Snapshot): void {
   const peerNote = toastKind === 'peer' && !el.toast.classList.contains('hidden');
   // 페어에서 쓰러졌거나(또는 누군가 쓰러진 뒤에 들어와서) 이번 판을 관전 중일 때
   el.spectate.classList.toggle('hidden', me.alive || mode !== 'coop' || phase !== 'playing' || peerNote);
+  myUp = me.up;
   const key = `${JSON.stringify(me.up)}|${me.revives}`;
   if (key !== loadoutKey) {
     loadoutKey = key;
+    // 다음 보물상자에서 진화할 무기 (재료가 모두 갖춰졌다)
+    const ready = readyMaterials(me.up);
     // 무기 칸, 패시브 칸을 따로 묶는다 (각각 최대 6개). 좁은 화면에서는 묶음마다 줄을 바꿔 무기와 패시브가 섞이지 않게 한다
     const chip = (id: UpgradeId, level: number): HTMLElement => {
       const def = UPGRADES[id];
-      const c = node('span', `chip chip--${def.kind}`);
-      c.append(node('span', 'chip__icon', def.icon), node('b', '', String(level)));
-      c.title = `${def.name} Lv.${level}`;
+      const evolved = evolutionOf(id) !== undefined;
+      const c = node('span', `chip chip--${def.kind}${evolved ? ' chip--evolved' : ''}${ready.has(id) ? ' chip--ready' : ''}`);
+      // 진화한 무기는 단계 대신 별 (더 오르지 않는다)
+      c.append(node('span', 'chip__icon', def.icon), node('b', '', evolved ? '★' : String(level)));
+      c.title = evolved ? `${def.name} (진화)` : ready.has(id) ? `${def.name} Lv.${level} · 다음 보물상자에서 진화해요` : `${def.name} Lv.${level}`;
       return c;
     };
     const weapons = WEAPON_IDS.filter((id) => (me.up[id] ?? 0) > 0).map((id) => chip(id, me.up[id]!));
@@ -426,6 +435,9 @@ function showOffers(offers: Offer[], timeout: number): void {
       const tag = o.level <= 1 ? `NEW ${def.kind === 'weapon' ? '무기' : '패시브'}` : `Lv.${o.level}/${def.max}`;
       name.append(' ', node('em', o.level >= def.max ? 'offer__max' : '', tag));
       btn.append(node('span', 'offer__icon', def.icon), name, node('span', 'offer__desc', upgradeText(o.id, o.level)));
+      // 진화의 짝 (이 무기·패시브를 재료로 쓰는 진화가 있으면)
+      const hint = evolveHint(o.id, myUp);
+      if (hint) btn.append(node('span', 'offer__evo', hint));
       btn.addEventListener('click', () => {
         sound.play('pick');
         net.sendPick(i);
@@ -654,7 +666,11 @@ function onMessage(msg: ServerMsg): void {
       break;
     case 'chest':
       // 내가 연 보물상자에서 무엇이 올랐는지 (모양은 net.ts 가 확인했다). 강화 칸은 다음 스냅샷이 고쳐 그린다
-      if (phase === 'playing') toast(chestText(msg.items, msg.heal));
+      if (phase === 'playing') {
+        toast(chestText(msg.items, msg.heal));
+        // 진화했으면 한 번 더 축하한다 (상자 여는 소리는 화면의 상자가 사라질 때 이미 났다)
+        if (msg.items.some((id) => evolutionOf(id))) sound.play('evolve');
+      }
       break;
     case 'pause':
       if (msg.on) {

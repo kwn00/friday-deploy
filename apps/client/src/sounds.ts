@@ -96,6 +96,12 @@ const SFX_DEFS = {
     gap: 500,
     voices: 1,
   },
+  /** 보물상자에서 무기가 진화함 (상자 소리 뒤에 이어지는 짧은 팡파르) */
+  evolve: {
+    tones: seq('square', ['G5', 'C6', 'E6', 'G6', 'C7'], 0.06, 0.16, 0.45).map((t) => ({ ...t, at: (t.at ?? 0) + 0.35 })),
+    gap: 800,
+    voices: 1,
+  },
   /** 레벨업 (PR Merged!) */
   levelup: { tones: seq('square', ['C5', 'E5', 'G5', 'C6'], 0.07, 0.17, 0.3), gap: 300, voices: 1 },
   /** 강화를 고름 */
