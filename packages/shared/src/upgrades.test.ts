@@ -21,6 +21,7 @@ import {
   decodeSnapshot,
   effectiveStats,
   encodeSnapshot,
+  evolutionOf,
   maxHpOf,
   pickOffer,
   setInput,
@@ -60,11 +61,14 @@ function tick(w: World, keep: Enemy[]): void {
 }
 
 test('강화 정의: 개수, 최대 단계, 단계별 증가분이 맞고, 통신 번호가 1바이트 안에 든다', () => {
-  assert.equal(WEAPON_IDS.length, 23);
+  // 무기 23종 + 진화한 무기 6종 (진화한 무기는 뒤에 붙였다)
+  assert.equal(WEAPON_IDS.length, 29);
+  assert.equal(WEAPON_IDS.filter((id) => !evolutionOf(id)).length, 23);
   assert.equal(PASSIVE_IDS.length, 15);
   assert.equal(new Set(UPGRADE_IDS).size, UPGRADE_IDS.length, 'id 가 겹치지 않는다');
   // 통신 순서: 예전 것들이 같은 자리에 있다 (뒤에만 붙였다)
   assert.deepEqual(WEAPON_IDS.slice(0, 4), ['console_log', 'rubber_duck', 'regex', 'ai_agent']);
+  assert.equal(WEAPON_IDS.indexOf('debugger'), 23, '진화한 무기는 원래 무기 23종 뒤에');
   assert.deepEqual(PASSIVE_IDS.slice(0, 6), ['coffee', 'mech_keyboard', 'stack_overflow', 'npm_install', 'dark_mode', 'dual_monitor']);
   assert.ok(ENEMY_IDS.length < 64 && SHOT_KINDS.length < 256 && ZONE_KINDS.length < 256);
   for (const id of UPGRADE_IDS) {
@@ -73,7 +77,9 @@ test('강화 정의: 개수, 최대 단계, 단계별 증가분이 맞고, 통�
     if (def.kind === 'weapon') {
       assert.equal(def.levels.length, def.max - 1, `${id}: 단계 수`);
       const max: Partial<Record<UpgradeId, number>> = { code_freeze: 7, two_factor: 7, logic_bomb: 6 };
-      assert.equal(def.max, max[id] ?? 8, `${id}: 최대 단계 (뱀서: Clock Lancet·Laurel 7, Bracelet 6, 나머지 8)`);
+      // 진화한 무기는 단계가 하나뿐이고 레벨업 선택지에 나오지 않는다
+      if (evolutionOf(id)) assert.deepEqual([def.max, def.rarity], [1, 0], `${id}: 진화한 무기`);
+      else assert.equal(def.max, max[id] ?? 8, `${id}: 최대 단계 (뱀서: Clock Lancet·Laurel 7, Bracelet 6, 나머지 8)`);
       for (let l = 1; l <= def.max; l++) {
         const s = weaponStats(id as WeaponId, l);
         for (const [k, v] of Object.entries(s)) assert.ok(Number.isFinite(v) && v >= 0, `${id} ${l}단계 ${k}=${v}`);
@@ -182,7 +188,7 @@ test('칸 제한: 칸이 남아 있으면 처음 보는 것도 나온다 (무기
   assert.ok([...seen].some((id) => UPGRADES[id].kind === 'passive'));
 });
 
-test('무기: 피해를 주는 무기 21종은 저마다 혼자서 가까이 온 적을 다치게 한다', () => {
+test('무기: 피해를 주는 무기 21종과 진화한 무기 6종은 저마다 혼자서 가까이 온 적을 다치게 한다', () => {
   const quiet = new Set<UpgradeId>(['code_freeze', 'two_factor']);
   for (const id of WEAPON_IDS) {
     if (quiet.has(id)) continue;

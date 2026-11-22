@@ -26,6 +26,10 @@ test('chest: 알림 문구는 오른 것을 묶어서 보여 주고, 올릴 것�
   assert.equal(text([], 30), '🎁 보물상자: 체력 +30');
   assert.equal(text(['coffee'], 29.6), '🎁 보물상자: 아이스 아메리카노 +1, 체력 +30');
   assert.equal(text([], 0), '🎁 보물상자: 더 올릴 것이 없어요');
+  // 진화한 것은 앞에 따로 알린다
+  assert.equal(text(['rubber_duck', 'debugger'], 0), '🎁 보물상자: ✨ 디버거 진화!, 러버덕 +1');
+  assert.equal(text(['friday_deploy', 'monitoring', 'coffee', 'coffee', 'regex'], 0), '🎁 보물상자: ✨ 금요일 배포 진화!, ✨ 24시간 모니터링 진화!, 아이스 아메리카노 +2, 정규표현식 +1');
+  assert.deepEqual(parseChest({ t: 'chest', items: ['debugger'], heal: 0 }), { t: 'chest', items: ['debugger'], heal: 0 }, '진화한 무기도 아는 강화다');
 });
 
 test('chest: 좁은 화면에서는 쉼표 뒤에서만 줄이 바뀐다 (한 항목이 두 줄로 갈라지지 않는다)', () => {

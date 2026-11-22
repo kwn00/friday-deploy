@@ -103,7 +103,7 @@ interface LiveZone {
 /** 기억해 두는 영역 수의 상한 (서버는 한 방에 최대 200개를 둔다. 화면이 멈춰 있는 동안 쌓이지 않게) */
 const MAX_LIVE_ZONES = 400;
 /** 캐릭터 아래(바닥)에 그리는 영역. 나머지는 적과 캐릭터 위에 그린다 */
-const GROUND: ReadonlySet<ZoneKind> = new Set<ZoneKind>(['pool', 'trail']);
+const GROUND: ReadonlySet<ZoneKind> = new Set<ZoneKind>(['pool', 'trail', 'fire']);
 /** 오래 남는 영역이 사라지기 전에 흐려지는 시간 (틱) */
 const ZONE_FADE = 6;
 /** 웅덩이가 처음에 퍼지는 시간 (틱) */
@@ -764,6 +764,27 @@ export class Renderer {
         this.drawBubbles(z, c, X, Y, r, tail);
         break;
       }
+      case 'fire': {
+        // 금요일 배포: 주황 불바다. 처음에 웅덩이처럼 퍼지고, 안에서 불티 세 개가 위로 날린다 (동작 줄이기 설정에서는 가만히)
+        const tail = this.zoneFade(z, c.t);
+        const r = calm ? R : R * Math.min(1, 0.6 + (0.4 * age) / POOL_GROW);
+        ctx.globalAlpha = 0.26 * tail;
+        ctx.fillStyle = '#fab387';
+        this.circle(X, Y, r);
+        ctx.fill();
+        ctx.globalAlpha = 0.7 * tail;
+        ctx.strokeStyle = '#f38ba8';
+        ctx.lineWidth = S;
+        ctx.stroke();
+        ctx.globalAlpha = 0.85 * tail;
+        for (let i = 0; i < 3; i++) {
+          const a = z.id * 1.7 + i * 2.1;
+          const rise = calm ? 0.5 : (c.now / 700 + i * 0.33 + z.id * 0.29) % 1;
+          ctx.fillStyle = i === 1 ? '#f9e2af' : '#fab387';
+          ctx.fillRect(X + Math.round(Math.cos(a) * r * 0.5), Y + Math.round((0.4 - rise * 0.9) * r), c.S, c.S);
+        }
+        break;
+      }
       case 'trail': {
         // 커밋 발자국: 속이 빈 작은 초록 고리 (경험치처럼 보이지 않게 납작하고 옅게).
         // 한 사람이 걸으면 수십 개가 깔리므로 넓은 원은 칠하지 않는다 (휴대폰에서 그리기 비용이 크다)
@@ -826,7 +847,7 @@ export class Renderer {
         break;
       }
       case 'wipe': {
-        // git clean: 주인에게서 퍼져 나가는 얇은 흰·보라 고리 (화면 전체를 번쩍이지 않는다)
+        // git clean: 주인에게서 퍼져 나가는 얇은 흰·보라 고리 (화면 전체를 번쩍이지 않는다). rm -rf node_modules(aux 1)는 초록
         const r = calm ? R : R * (0.15 + 0.85 * (1 - (1 - p) * (1 - p)));
         ctx.globalAlpha = (calm ? 0.45 : 0.85) * fade;
         ctx.strokeStyle = '#eff1f5';
@@ -834,7 +855,7 @@ export class Renderer {
         this.circle(X, Y, r);
         ctx.stroke();
         ctx.globalAlpha *= 0.7;
-        ctx.strokeStyle = '#cba6f7';
+        ctx.strokeStyle = z.aux === 1 ? '#a6e3a1' : '#cba6f7';
         ctx.lineWidth = 2 * S;
         this.circle(X, Y, r * 0.9);
         ctx.stroke();

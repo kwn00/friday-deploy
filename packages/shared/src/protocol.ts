@@ -98,12 +98,14 @@ export interface UpgradeStat {
   autoPicked: number;
   /** (picked + autoPicked) / offered. 나온 적이 없으면 0 (0~1, 소수 셋째 자리) */
   pickRate: number;
-  /** 보물상자로 오른 횟수 */
+  /** 보물상자로 오른 횟수 (진화한 무기는 진화한 횟수: 보물상자로만 얻는다) */
   chest: number;
   /** 판이 끝날 때 가지고 있던 판의 비율 (0~1) */
   finalOwnedRate: number;
   /** 가지고 있던 판에서의 평균 단계 (없으면 0) */
   avgFinalLevel: number;
+  /** 진화한 무기만: 최대 단계여야 하는 재료 무기(둘이면 합치기)와 함께 가져야 하는 패시브 (합치기는 null) */
+  evolve?: { from: UpgradeId[]; with: UpgradeId | null };
 }
 
 /** 순위 기록(끝날 때 가진 아이템)에서 계산한 아이템 하나 */

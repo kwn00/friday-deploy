@@ -49,8 +49,12 @@ import {
   WEAPON_IDS,
   WEAPON_SLOTS,
   ZONE_KINDS,
+  evolutionOf,
+  evolvedAway,
   isWeapon,
+  readyEvolutions,
   type ChestOdds,
+  type Evolution,
   type EnemyId,
   type FieldItemKind,
   type ShotKind,
@@ -70,7 +74,7 @@ const EN = ENEMIES;
  * 한 판 동안 무기·패시브마다 센 횟수 (통계용. 서버가 판이 끝날 때 모아서 저장한다. 판정에는 쓰지 않는다)
  * - offered: 레벨업 선택지에 나온 횟수
  * - picked: 직접 고른 횟수 / auto: 시간이 지나 자동으로 골라진 횟수
- * - chest: 보물상자로 오른 횟수
+ * - chest: 보물상자로 오른 횟수 (진화한 무기는 진화한 횟수)
  */
 export interface UpgradeTally {
   offered: Partial<Record<UpgradeId, number>>;
@@ -237,6 +241,11 @@ export interface Gem {
   to?: number;
   /** 끌려가는 현재 속도 (px/s) */
   sp?: number;
+  /**
+   * rm -rf node_modules 가 끌어당긴 것: 주인이 레벨업을 고르는 동안 놓지 않고 그 자리에서 기다렸다가 이어서 끌려간다
+   * (함께 하는 판에서는 고르는 동안에도 월드가 돈다. 놓아 버리면 주인의 획득 범위 밖에 그대로 남는다)
+   */
+  hold?: true;
 }
 
 export interface Heal {
@@ -546,7 +555,8 @@ function takeItem(world: World, p: Player, it: FieldItem): void {
 /**
  * 보물상자를 연다 (뱀서 Treasure Chest). 5개 → 3개 → 1개 순서로 각각 따로 굴려 처음 성공한 것, 셋 다 실패하면 보스에 정해진 기본 단계.
  * 확률에는 운을 곱한다. 들어 있는 것은 가진 무기·패시브 중 아직 최대가 아닌 것을 하나씩 무작위로 (같은 것이 또 나올 수 있다).
- * 올릴 것이 하나도 없으면 그 몫만큼 회복한다. 모두 비밀 난수로 정한다.
+ * 다만 진화할 수 있는 것이 있으면 그 몫은 진화가 먼저 차지한다 (EVOLUTIONS 순서, 한 상자에서 여러 번도 된다).
+ * 올릴 것이 하나도 없으면 그 몫만큼 회복한다. 모두 비밀 난수로 정한다 (진화는 난수를 쓰지 않는다).
  */
 function openChest(world: World, p: Player, odds: ChestOdds): void {
   const [base, p5, p3, p1] = odds;
@@ -557,6 +567,13 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
   const items: UpgradeId[] = [];
   let healed = 0;
   for (let i = 0; i < n; i++) {
+    const evo = readyEvolutions(p.up)[0];
+    if (evo) {
+      evolve(p, evo);
+      tallyUp(p.tally.chest, evo.id);
+      items.push(evo.id);
+      continue;
+    }
     const owned = UPGRADE_IDS.filter((u) => lv(p, u) > 0 && lv(p, u) < UPGRADES[u].max);
     if (owned.length === 0) {
       const before = p.hp;
@@ -571,6 +588,20 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
   }
   p.iframe = Math.max(p.iframe, INVULN_SECONDS);
   world.events.push({ type: 'chest', pid: p.id, items, heal: Math.round(healed) });
+}
+
+/**
+ * 진화: 재료 무기를 칸에서 빼고 진화한 무기를 넣는다 (짝 패시브는 그대로). 바로 한 번 쓴다.
+ * 카나리아·부엉이의 id 는 남겨 둔다: 24시간 모니터링이 같은 새를 이어서 돌린다 (화면에서 새가 바뀌지 않게)
+ */
+function evolve(p: Player, evo: Evolution): void {
+  for (const f of evo.from) {
+    delete p.up[f];
+    delete p.cd[f];
+    delete p.on[f];
+  }
+  p.up[evo.id] = 1;
+  p.cd[evo.id] = 0;
 }
 
 /** 쓰러질 순간에 부활을 하나 써서 그 자리에서 되살아난다 */
@@ -613,6 +644,8 @@ function checkLevelUp(world: World, p: Player): void {
       const l = lv(p, u);
       if (l >= UPGRADES[u].max) return false;
       if (l > 0) return true;
+      // 진화한 무기는 보물상자로만 얻는다. 진화해서 없어진 재료 무기도 다시 나오지 않는다
+      if (evolutionOf(u) || evolvedAway(p.up, u)) return false;
       return isWeapon(u) ? weapons < WEAPON_SLOTS : passives < PASSIVE_SLOTS;
     });
     if (pool.length === 0) {
@@ -1040,11 +1073,14 @@ function advance(world: World, dt: number): void {
   const gains = new Map<Player, number>();
   world.gems = world.gems.filter((g) => {
     let p = g.to === undefined ? undefined : world.players.get(g.to);
+    // rm -rf 가 끈 것은 주인이 고르는 동안 그 자리에서 기다린다 (쓰러지거나 나가면 놓는다)
+    if (p && g.hold && p.alive && p.offers !== null) return true;
     // 끌던 사람이 쓰러졌거나, 나갔거나, 레벨업 선택 중이면 놓는다 (선택 중에는 예전에도 줍지 못했다)
     if (p && (!p.alive || p.offers !== null)) p = undefined;
     if (!p) {
       g.to = undefined;
       g.sp = undefined;
+      g.hold = undefined;
       let best = Infinity;
       for (let i = 0; i < pullers.length; i++) {
         const q = pullers[i]!;
@@ -1207,11 +1243,13 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
   }
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
   // 카나리아·부엉이: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
+  // (24시간 모니터링은 두 마리를 함께 돌린다)
   for (const p of world.players.values()) {
     if (!p.alive) continue;
+    const both = lv(p, 'monitoring') > 0;
     for (const w of ['canary', 'night_owl'] as const) {
       const id = p.pets[w];
-      if (id === undefined || lv(p, w) === 0) continue;
+      if (id === undefined || (lv(p, w) === 0 && !both)) continue;
       const [x, y] = petPosition(world, p, w);
       if (near(x, y)) snap.s.push([id, SHOT_KINDS.indexOf(w === 'canary' ? 'canary' : 'owl'), r1(x), r1(y)]);
     }
