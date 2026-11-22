@@ -4,6 +4,9 @@
  * - 브라우저는 사용자가 화면을 한 번 누르기 전에는 소리를 내지 못하게 한다. 그래서 처음 누를 때 unlock() 으로 깨운다.
  * - 화면을 떠나면(다른 탭, 앱 전환) 멈추고, 돌아오면 이어서 낸다.
  * - 효과음과 음악은 따로 켜고 끈다. 같은 소리가 너무 자주·많이 겹치지 않게 Sfx 의 gap · voices 로 거른다.
+ * - 아이폰 무음 모드: 아이폰 Safari 는 Web Audio 를 "주변음"으로 다뤄 무음 스위치를 켜면 소리를 내지 않는다
+ *   (유튜브 같은 <video> 는 "재생"으로 다뤄 무음 스위치를 무시한다). 소리가 켜져 있으면 "재생"으로 알려 무음 모드에서도 들리게 한다.
+ *   "재생"은 다른 앱의 음악을 멈추므로, 소리를 모두 끄면 다시 기본값으로 돌리고 오디오를 멈춰 다른 앱의 음악을 막지 않는다.
  */
 import { MUSIC, SFX, noteHz, parsePattern, type Drum, type LeadVoice, type MusicId, type NoteEvent, type SfxId, type Tone, type Track } from './sounds';
 import type { Cue } from './sound-cues';
@@ -38,6 +41,22 @@ const DUCKED = 0.35;
 /** 얼마나 앞서 음을 예약하는지 (초). 탭이 바빠도 끊기지 않게 */
 const LOOKAHEAD = 0.15;
 
+/** Audio Session API (아이폰 Safari 17 부터. 표준 초안이라 TypeScript 기본 타입에는 아직 없다) */
+interface AudioSessionLike {
+  type: string;
+}
+
+/** 아이폰이 이 페이지의 소리를 어떻게 다룰지 알린다. 지원하지 않는 브라우저에서는 아무 일도 하지 않는다 */
+function setAudioSession(type: 'playback' | 'auto'): void {
+  const session = (navigator as Navigator & { audioSession?: AudioSessionLike }).audioSession;
+  if (!session || session.type === type) return;
+  try {
+    session.type = type;
+  } catch {
+    /* 바꿀 수 없는 상태면 기본 동작대로 둔다 */
+  }
+}
+
 export class Sound implements ThemeTarget {
   private ctx: AudioContext | null = null;
   private sfxBus: GainNode | null = null;
@@ -62,6 +81,8 @@ export class Sound implements ThemeTarget {
 
   /** 화면을 떠났다 돌아온 뒤 아직 화면을 누르지 않았다 (다음에 누를 때 오디오를 새로 만든다) */
   private stale = false;
+  /** 사용자가 화면을 한 번이라도 눌렀다 (그 뒤에는 소리를 켜는 순간 바로 깨울 수 있다) */
+  private touched = false;
 
   constructor() {
     document.addEventListener('visibilitychange', () => {
@@ -75,7 +96,7 @@ export class Sound implements ThemeTarget {
       // 돌아왔다: 먼저 이어서 내 본다 (대부분의 브라우저는 이것으로 된다).
       // 아이폰 Safari 는 화면을 떠나면 오디오가 'interrupted' 로 멈추고 이어지지 않거나, 'running' 이라면서 소리가 안 나기도 한다.
       // 멈춘 채면 한 번 멈췄다 다시 켜 보고(알려진 우회법), 그래도 안 되면 다음에 화면을 누를 때 unlock() 이 새로 만든다.
-      if (ctx.state === 'running') return;
+      if (ctx.state === 'running' || !this.anyOn) return;
       ctx
         .suspend()
         .catch(() => {})
@@ -91,6 +112,11 @@ export class Sound implements ThemeTarget {
    */
   unlock(): void {
     if (document.hidden) return;
+    this.touched = true;
+    // 소리를 모두 꺼 두었으면 깨우지 않는다 (다른 앱의 음악을 멈추지 않게). 켤 때 setSfx · setMusicOn 이 다시 부른다
+    if (!this.anyOn) return;
+    // 오디오를 만들거나 깨우기 전에 알려야 이번에 시작하는 소리부터 적용된다
+    setAudioSession('playback');
     if (this.ctx && this.stale) {
       this.stale = false;
       const old = this.ctx;
@@ -136,12 +162,31 @@ export class Sound implements ThemeTarget {
 
   setSfx(on: boolean): void {
     this.sfxOn = on;
-    this.sfxBus?.gain.setTargetAtTime(on ? SFX_BUS : 0, this.ctx!.currentTime, 0.02);
+    if (this.ctx && this.sfxBus) this.sfxBus.gain.setTargetAtTime(on ? SFX_BUS : 0, this.ctx.currentTime, 0.02);
+    this.applyOnOff();
   }
 
   setMusicOn(on: boolean): void {
     this.musicOn = on;
     this.applyMusicGain();
+    this.applyOnOff();
+  }
+
+  private get anyOn(): boolean {
+    return this.sfxOn || this.musicOn;
+  }
+
+  /**
+   * 소리를 모두 끄면 오디오를 멈추고 기본값으로 돌린다: 멈춘 오디오는 아이폰에서 "재생" 중으로 치지 않아 다른 앱의 음악이 이어진다.
+   * 다시 켜면 깨운다 (켜는 버튼을 누른 것이 사용자의 조작이라 바로 소리를 낼 수 있다).
+   */
+  private applyOnOff(): void {
+    if (this.anyOn) {
+      if (this.ctx || this.touched) this.unlock();
+      return;
+    }
+    this.ctx?.suspend().catch(() => {});
+    setAudioSession('auto');
   }
 
   /** 메뉴·선택창이 열려 있는 동안 음악을 줄인다 */
