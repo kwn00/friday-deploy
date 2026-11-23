@@ -77,6 +77,15 @@ const LOBBY_IDLE_MS = 10 * 60 * 1000;
 const MAX_PAUSE_MS = MAX_PAUSE_SECONDS * 1000;
 /** 한 판에서 일시정지로 쓸 수 있는 시간의 합. 껐다 켜기를 반복해 방을 끝없이 붙잡아 두지 못하게 한다. */
 const PAUSE_BUDGET_MS = 30 * 60 * 1000;
+/**
+ * 한 번 멈출 때마다 예산에서 적어도 이만큼은 뺀다 (예산이 이보다 적게 남았으면 남은 만큼만).
+ * 멈춘 동안 온 틱은 시뮬레이션을 건너뛰므로, 아주 짧게 껐다 켜기를 되풀이하면(예: 50ms 마다) 월드가 절반 속도로 돈다.
+ * 실제로 멈춘 시간만 빼면 그렇게 해도 예산이 거의 줄지 않아 판 내내 느린 화면으로 할 수 있었다.
+ * 3초씩 빼면 30분 예산으로 600번까지다: 50ms 마다 켜고 끄기를 번갈아 하면 1분 만에 예산이 바닥나고
+ * (그동안 느리게 흐른 게임 시간은 30초 남짓), 그 뒤로는 멈추기를 거절해 월드가 제 속도로 돈다.
+ * 생각할 시간을 갖는 보통의 일시정지(몇 초 이상)는 예전과 똑같이 멈춘 시간만큼만 쓴다.
+ */
+const PAUSE_MIN_CHARGE_MS = 3000;
 /** 판이 시작되고 이 시간(게임 시간, 초) 안에 들어온 사람까지를 "처음부터 함께 한 사람"으로 본다 */
 const CREW_GRACE_SECONDS = 5;
 /** 느린 클라이언트 보호: 송신 버퍼가 이 이상 쌓이면 스냅샷을 건너뛴다 (스냅샷 약 30개 분량) */
@@ -108,8 +117,10 @@ export class Room {
   private pausedAt = 0;
   /** 지금의 일시정지가 자동으로 풀리기까지의 시간 (ms) */
   private pauseLimit = 0;
-  /** 이번 판에서 이미 쓴 일시정지 시간 (ms) */
+  /** 이번 판에서 이미 쓴 일시정지 예산 (ms). 한 번에 적어도 PAUSE_MIN_CHARGE_MS 씩 쓴다 */
   private pauseUsed = 0;
+  /** 이번 판에서 실제로 멈춰 있던 시간의 합 (ms). 기록(pausedSeconds)에 남는 것은 이것이다 */
+  private pausedTotal = 0;
   /**
    * 이번 판에서 누군가 쓰러졌거나 나간 적이 있는지. 있으면 이후에 들어오는 사람은 다음 판까지 관전한다.
    * 계정이 없어서 "아까 그 사람"인지 서버가 확인할 방법이 없다. 그래서 사람을 가리지 않고 막는다:
@@ -407,11 +418,20 @@ export class Room {
     return Math.max(0, Math.min(MAX_PAUSE_MS, PAUSE_BUDGET_MS - this.pauseUsed));
   }
 
+  /**
+   * 일시정지를 켜고 끈다. 스스로 멈춤(메뉴·화면을 떠남)과 서버가 멈춤(연결이 끊김·입력이 멈춤), 시간이 다 돼 풀림이
+   * 모두 이 길을 지나므로, 예산을 쓰는 규칙(한 번에 적어도 PAUSE_MIN_CHARGE_MS)도 모두 같다.
+   */
   private setPaused(on: boolean): void {
     if (on === this.userPaused) return;
     const now = Date.now();
     const max = on ? this.pauseLeft() : 0;
-    if (!on) this.pauseUsed += now - this.pausedAt;
+    if (!on) {
+      const held = now - this.pausedAt;
+      this.pausedTotal += held;
+      // 예산을 넘겨 빼지 않는다 (남은 예산이 0 아래로 가지 않게)
+      this.pauseUsed = Math.min(PAUSE_BUDGET_MS, this.pauseUsed + Math.max(held, PAUSE_MIN_CHARGE_MS));
+    }
     this.userPaused = on;
     // pausedAt 에는 "언제까지 멈출 수 있는지"를 계산할 수 있게 시작 시각을 둔다
     if (on) this.pausedAt = now;
@@ -515,7 +535,8 @@ export class Room {
         time: Math.floor(this.world.time),
         kills: players.reduce((sum, p) => sum + p.kills, 0),
         level: Math.max(...players.map((p) => p.level)),
-        pausedSeconds: Math.round(this.pauseUsed / 1000),
+        // 실제로 멈춰 있던 시간 (예산에서 뺀 최소 몫이 아니라)
+        pausedSeconds: Math.round(this.pausedTotal / 1000),
         endedAt,
       });
       return { board, rank, crew: new Set(crew) };
@@ -573,6 +594,7 @@ export class Room {
     this.started = false;
     this.sealed = false;
     this.pauseUsed = 0;
+    this.pausedTotal = 0;
     this.peak = 0;
     const now = Date.now();
     this.lastActivity = now;
