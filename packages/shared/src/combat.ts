@@ -110,12 +110,15 @@ function spill(prev: number, dt: number): number {
 /**
  * 같은 공격(key)이 같은 적을 너무 자주 때리지 않게 한다. every 초가 지나야 다시 맞힐 수 있다.
  * key: 투사체·영역은 자기 id, 오라·러버덕처럼 계속 붙어 있는 것은 (플레이어, 무기)로 만든 음수.
+ * dt 를 주면 every 를 쿨다운처럼 다룬다 (방화벽: 쿨다운 = 같은 적을 다시 태우는 간격). 잠금이 이번 틱 안에서 풀렸으면
+ * 풀린 시각부터 다시 재서 평균 간격이 every 와 같다 (틱 단위로 올림되지 않는다: spill 과 같은 규칙). 그보다 먼저 풀려
+ * 기다렸으면(그동안 범위 밖이었다) 지금부터 잰다. 주지 않으면(투사체·영역·러버덕의 고정된 간격) 언제나 지금부터 잰다
  */
-export function lock(e: Enemy, key: number, now: number, every: number): boolean {
+export function lock(e: Enemy, key: number, now: number, every: number, dt = 0): boolean {
   const map = (e.lock ??= new Map());
   const at = map.get(key);
-  if (at !== undefined && at > now) return false;
-  map.set(key, now + every);
+  if (at !== undefined && at > now + (dt > 0 ? EPS : 0)) return false;
+  map.set(key, dt > 0 && at !== undefined && at > now - dt + EPS ? at + every : now + every);
   if (map.size > 48) for (const [k, t] of map) if (t <= now) map.delete(k);
   return true;
 }
@@ -470,9 +473,10 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
 
     // 쿨다운과 상관없이 계속 붙어 있는 것들
     if (w === 'firewall') {
-      // 쿨다운 = 같은 적을 다시 태우는 간격 (뱀서 Garlic). 밀어내지는 않고 약하게 만든다
+      // 쿨다운 = 같은 적을 다시 태우는 간격 (뱀서 Garlic). 밀어내지는 않고 약하게 만든다.
+      // 다른 쿨다운처럼 틱 중간에 끝난 몫을 넘긴다 (dt 를 넘긴다)
       grid.near(p.x, p.y, st.area, (e) => {
-        if (lock(e, ownKey(p, w), world.time, st.cd)) hit(world, e, st.dmg, p, w);
+        if (lock(e, ownKey(p, w), world.time, st.cd, dt)) hit(world, e, st.dmg, p, w);
       });
       continue;
     }

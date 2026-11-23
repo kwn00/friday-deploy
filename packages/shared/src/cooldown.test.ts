@@ -165,3 +165,27 @@ test('2단계 인증은 넘기지 않는다: 다시 채운 뒤의 쿨다운은 �
   for (let i = 0; i < 100; i++) tick(w, []);
   assert.equal(p.cd.two_factor, st.cd, '방패가 남아 있는 동안은 멈춰 있다');
 });
+
+test('방화벽: 같은 적을 다시 태우는 간격(쿨다운)도 틱 단위로 올림되지 않고, 범위 밖에서 기다린 시간은 넘기지 않는다', () => {
+  const { w, p } = setup(208, { firewall: 8, mech_keyboard: 1 });
+  const st = effectiveStats(p, 'firewall');
+  // 1.0 × 0.92 = 0.92초 (예전에는 19틱 = 0.95초)
+  assert.ok(Math.abs(st.cd - 0.92) < 1e-9);
+  const target = enemy(9003, p.x + 30, p.y);
+  let hp = target.hp;
+  const burnt = (): boolean => {
+    const hurt = target.hp < hp;
+    hp = target.hp;
+    return hurt;
+  };
+  const burns = fireTicks(w, 20 * 200, () => [target], burnt);
+  assert.ok(Math.abs(meanGap(burns) - st.cd) < 0.002, `평균 간격 ${meanGap(burns).toFixed(4)}초`);
+  // 범위 밖으로 3초 보냈다가 돌아오면 바로 태우고, 다음은 온전한 쿨다운 뒤 (0.92초 = 18.4틱 → 19틱)
+  target.x = p.x + 500;
+  for (let i = 0; i < 60; i++) tick(w, [target]);
+  target.x = p.x + 30;
+  hp = target.hp;
+  const back = fireTicks(w, 40, () => [target], burnt);
+  assert.equal(back[0], 0, '돌아오자마자 태운다');
+  assert.equal(back[1]! - back[0]!, 19, '기다린 시간을 넘기지 않는다');
+});
