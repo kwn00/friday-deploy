@@ -36,6 +36,7 @@ import { Sound } from './audio';
 import { chestText } from './chest';
 import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
+import { takeInvite } from './invite';
 import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
@@ -648,6 +649,8 @@ function onMessage(msg: ServerMsg): void {
         pausedSince = 0;
       }
       rememberSeat(msg.key, msg.mode, msg.code);
+      // 방에 들어왔다 (초대받은 방이든 다른 판이든): 새로고침해도 초대 코드를 다시 채우지 않는다
+      tab.remove(INVITE_STORE);
       break;
     }
     case 'roster': {
@@ -789,6 +792,8 @@ interface Seat {
   at: number;
 }
 const SEAT_STORE = 'seat';
+/** 초대 링크로 받았지만 아직 참가하지 않은 방 코드 (주소에서는 지운다) */
+const INVITE_STORE = 'invite';
 /** 이보다 오래 연결이 없었던 자리는 서버에도 남아 있지 않다 (가장 오래 지켜 주는 것이 일시정지 한 번의 길이다) */
 const SEAT_STALE_MS = (MAX_PAUSE_SECONDS + 300) * 1000;
 /** 화면이 보이는 채로 이만큼 애써도 서버에 닿지 않으면 그만둔다 */
@@ -1115,11 +1120,24 @@ el.version.addEventListener('click', () => notes.open(RELEASES.slice(0, 3)));
 const unseen = unseenReleases(store.get('seenVersion'));
 if (unseen.length > 0 && store.set('seenVersion', APP_VERSION)) notes.open(unseen);
 
-// 초대 링크(?room=CODE)로 들어온 경우: 코드를 채워 두고 닉네임만 넣으면 되게 한다
-const invited = normalizeRoomCode(new URLSearchParams(location.search).get('room'));
-if (invited) {
-  el.code.value = invited;
-  setStatus(`초대받은 방 ${invited} — 닉네임을 넣고 참가를 누르세요.`, true);
+// 초대 링크(?room=CODE)로 들어온 경우: 코드를 채워 두고 닉네임만 넣으면 되게 한다.
+// 읽은 뒤에는 주소에서 room 만 지운다. 남겨 두면 새로고침할 때마다 "초대 링크로 새로 들어왔다"고 보고, 이 탭에서 하던 다른 판을 버린다.
+const link = takeInvite(location.href);
+if (link) {
+  try {
+    history.replaceState(history.state, '', link.rest);
+  } catch {
+    /* 주소를 바꿀 수 없는 환경: 새로고침하면 다시 초대 링크로 본다 (예전과 같다) */
+  }
+}
+const invited = normalizeRoomCode(link?.room);
+// 아직 참가하지 않은 초대 코드는 이 탭에 남겨 둔다: 주소에서 지웠으니, 참가하기 전에 새로고침하거나
+// 휴대폰이 탭을 다시 불러와도(다른 앱에 다녀오는 사이 등) 코드가 남게. 방에 들어가면 지운다 (welcome)
+if (invited) tab.set(INVITE_STORE, invited);
+const pendingInvite = invited ?? normalizeRoomCode(tab.get(INVITE_STORE));
+if (pendingInvite) {
+  el.code.value = pendingInvite;
+  setStatus(`초대받은 방 ${pendingInvite} — 닉네임을 넣고 참가를 누르세요.`, true);
 }
 
 // 새로고침했거나 휴대폰 브라우저가 탭을 다시 불러온 경우: 하던 자리가 남아 있으면 이어서 한다.
