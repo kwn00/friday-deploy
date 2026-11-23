@@ -22,6 +22,7 @@ import {
   pickOffer,
   pickupOf,
   setInput,
+  sfc32,
   step,
   xpForLevel,
   type Enemy,
@@ -342,6 +343,87 @@ test('보물상자 (뱀서 Treasure Chest): 닿아야 열리고, 5개 → 3개 �
   w.items.push({ id: 9400, kind: 'chest', x: p.x + pickupOf(p) - 2, y: p.y, ttl: Infinity, chest: [1, 0, 0, 0] });
   still(w);
   assert.ok(w.items.some((it) => it.id === 9400));
+});
+
+type Odds = readonly [1 | 2 | 3, number, number, number];
+const ITEMS = [1, 1, 3, 5] as const;
+
+test('보물상자는 기본 단계보다 적게 나오지 않는다: 굴리는 순서와 비밀 난수를 쓰는 횟수는 그대로, 기본 1 상자는 예전과 같다', () => {
+  // 비밀 난수를 정해 둔 값으로 바꿔, 5개·3개·1개 굴림이 어디서 성공하는지 경우마다 본다
+  const queue: number[] = [];
+  let calls = 0;
+  const w = createWorld({ rng: sfc32(31), secret: () => (calls++, queue.length > 0 ? queue.shift()! : 0.5) });
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  p.cd.console_log = 1e9;
+  w.itemCd = 1e9;
+  // 굴림 값 (× 100 이 확률(%)보다 작으면 성공). 0.0001 은 언제나 성공, 0.9999 는 100% 가 아니면 실패
+  const values = [0.0001, 0.02, 0.04, 0.08, 0.3, 0.6, 0.9999];
+  const odds: Odds[] = [[2, 3, 10, 50], ...STAGE.flatMap((wv) => (wv.boss ? [wv.boss.chest] : []))];
+  for (const o of odds) {
+    for (const a of values) {
+      for (const b of values) {
+        for (const c of values) {
+          const draws = [a, b, c];
+          // 예전 규칙: 처음 성공한 것, 셋 다 실패하면 기본 단계. 몇 번 굴렸는지도 센다
+          let rolledTier = 0;
+          let rolls = 0;
+          for (const [k, pct] of [o[1], o[2], o[3]].entries()) {
+            rolls++;
+            if (draws[k]! * 100 < pct) {
+              rolledTier = 3 - k;
+              break;
+            }
+          }
+          const oldTier = rolledTier || o[0];
+          const want = ITEMS[Math.max(o[0], rolledTier)];
+          p.up = { console_log: 1, regex: 1, ai_agent: 1 };
+          queue.length = 0;
+          queue.push(...draws.slice(0, rolls));
+          calls = 0;
+          w.items.push({ id: w.nextId++, kind: 'chest', x: p.x + 3, y: p.y, ttl: Infinity, chest: o });
+          w.events.length = 0;
+          still(w);
+          const ev = w.events.find((e) => e.type === 'chest');
+          assert.ok(ev && ev.type === 'chest', '열렸다');
+          const label = `${JSON.stringify(o)} 굴림 ${draws.slice(0, rolls).join(', ')}`;
+          assert.equal(ev.items.length, want, `${label}: ${want}개`);
+          assert.ok(ev.items.length >= ITEMS[o[0]], `${label}: 기본 단계(${ITEMS[o[0]]}개)보다 적지 않다`);
+          if (o[0] === 1) assert.equal(ev.items.length, ITEMS[oldTier], `${label}: 기본 1 상자는 예전과 같다`);
+          // 굴림 횟수 + 올린 것마다 한 번 (예전과 같은 흐름)
+          assert.equal(calls, rolls + ev.items.length, `${label}: 비밀 난수를 쓰는 횟수`);
+        }
+      }
+    }
+  }
+});
+
+test('운이 좋을수록 8분 보스 상자(기본 3개)에서 받는 것이 줄지 않는다', () => {
+  const open = (seed: number, prayer: number, odds: Odds): number[] => {
+    const { w, p } = quiet(seed);
+    const counts: number[] = [];
+    for (let i = 0; i < 2000; i++) {
+      p.up = { console_log: 1, regex: 1, ai_agent: 1, coffee: 1, ...(prayer ? { deploy_prayer: prayer } : {}) };
+      w.items.push({ id: w.nextId++, kind: 'chest', x: p.x + 3, y: p.y, ttl: Infinity, chest: odds });
+      w.events.length = 0;
+      still(w);
+      const ev = w.events.find((e) => e.type === 'chest');
+      if (ev && ev.type === 'chest') counts.push(ev.items.length);
+    }
+    assert.equal(counts.length, 2000);
+    return counts;
+  };
+  const avg = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const boss8 = STAGE[8]!.boss!.chest;
+  assert.deepEqual(boss8, [2, 3, 10, 50], '8분 왕버그 상자');
+  const luck1 = [61, 62, 63].flatMap((s) => open(s, 0, boss8));
+  const luck15 = [61, 62, 63].flatMap((s) => open(s, 5, boss8));
+  assert.ok(luck1.every((n) => n >= 3) && luck15.every((n) => n >= 3), '언제나 3개 이상');
+  // 기대값: 운 1 은 3.06개 (5개 3%), 운 1.5 는 3.09개 (5개 4.5%). 예전에는 2.18 → 1.88 로 줄었다
+  assert.ok(avg(luck15) >= avg(luck1), `운 1.5 평균 ${avg(luck15).toFixed(3)} ≥ 운 1 평균 ${avg(luck1).toFixed(3)}`);
+  // 기본 1 상자는 운이 좋을수록 많아진다 (예전과 같다)
+  const base1 = STAGE[13]!.boss!.chest;
+  assert.ok(avg([61, 62].flatMap((s) => open(s, 5, base1))) > avg([61, 62].flatMap((s) => open(s, 0, base1))), '기본 1 상자');
 });
 
 test('상자는 LGTM 처럼 레벨을 올리지 않고, 저절로 놓이는 아이템의 자리(3개)를 차지하지 않는다', () => {
