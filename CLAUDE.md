@@ -7,7 +7,7 @@
 
 - `main` 에 올라간 커밋은 Render 가 곧바로 운영 서버에 배포한다. **`main` 에 직접 커밋하거나 푸시하지 않는다.**
 - 모든 작업은 버전 브랜치 `release/x.y.z` 에서 한다. 새 작업을 시작할 때 버전 번호를 제안하고 확인받는다.
-- 게임에 영향이 없는 변경(문서·스킬·테스트만 바꾸는 것: `render.yaml` 의 `buildFilter` 가 배포에서 빼는 파일)은 버전을 올리지 않는다.
+- 게임에 영향이 없는 변경(문서·스킬·테스트·GitHub 워크플로처럼 `render.yaml` 의 `buildFilter` 가 배포에서 빼는 파일만 바꾸는 것)은 버전을 올리지 않는다.
   `docs/<주제>` 브랜치에서 PR 을 만들고, 마찬가지로 승인 뒤에만 머지한다.
 - 플레이어에게 보이지 않는 서버 변경(공개 API·통계 등)은 사용자가 그렇게 정하면 버전을 올리지 않고 `feature/<주제>` 브랜치에서 한다.
   이것도 `main` 에 머지하면 배포되므로, 똑같이 PR 을 만들고 승인 뒤에만 머지한다.
@@ -45,6 +45,6 @@ npm run build       # 클라이언트 빌드
 ## 구조
 
 - `packages/shared` — 서버와 클라이언트가 함께 쓰는 것: 시뮬레이션(`sim.ts`), 통신 규격(`protocol.ts`, `codec.ts`), 상수, 버전과 새 소식(`releases.ts`)
-- `apps/server` — 방(`room.ts`), 리더보드(`leaderboard.ts`, `store-postgres.ts`), 보안(`security.ts`), 진입점(`index.ts`)
+- `apps/server` — 방(`room.ts`), 리더보드(`leaderboard.ts`, `store-postgres.ts`), 보안(`security.ts`), 화면 파일 보내기(`static.ts`), 진입점(`index.ts`)
 - `apps/client` — 화면(`main.ts`, `render.ts`, `index.html`, `style.css`)
 - `docs/releases/` — 버전별 GitHub 릴리즈 본문
