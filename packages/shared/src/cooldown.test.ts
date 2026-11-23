@@ -189,3 +189,20 @@ test('방화벽: 같은 적을 다시 태우는 간격(쿨다운)도 틱 단위�
   assert.equal(back[0], 0, '돌아오자마자 태운다');
   assert.equal(back[1]! - back[0]!, 19, '기다린 시간을 넘기지 않는다');
 });
+
+test('키보드 고양이: 0.6초(12틱)마다 방향을 바꾼다 (예전에는 소수 오차로 13틱마다)', () => {
+  const { w, p } = setup(209, { keyboard_cat: 1 });
+  tick(w, []);
+  const cat = w.shots.find((s) => s.kind === 'cat');
+  assert.ok(cat, '얻자마자 풀어 둔다');
+  let dir = Math.atan2(cat.vy, cat.vx);
+  const turns = fireTicks(w, 20 * 4, () => [], () => {
+    const now = Math.atan2(cat.vy, cat.vx);
+    const turned = now !== dir;
+    dir = now;
+    return turned;
+  });
+  const gaps = turns.slice(1).map((t, i) => t - turns[i]!);
+  assert.ok(gaps.length >= 4, `${turns.length}번 바꿨다`);
+  assert.deepEqual([...new Set(gaps)], [12], `간격(틱) ${gaps.join(', ')}`);
+});

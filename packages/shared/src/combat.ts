@@ -357,9 +357,11 @@ export function updateShots(world: World, grid: Grid, dt: number): void {
       if (Math.abs(s.y - owner.y) > BOUNCE_Y && Math.sign(s.vy) === Math.sign(s.y - owner.y)) s.vy = -s.vy;
     }
     if (s.kind === 'cat') {
-      s.turn -= dt;
-      if (s.turn <= 0) {
-        s.turn = CAT_TURN;
+      // 방향을 바꾸는 간격도 쿨다운처럼 넘친 몫을 넘긴다 (예전에는 0 과 비교해 소수 오차로 13틱 = 0.65초마다 바꿨다)
+      const turn = s.turn;
+      s.turn = turn - dt;
+      if (s.turn <= EPS) {
+        s.turn = CAT_TURN + spill(turn, dt);
         const a = world.rng() * Math.PI * 2;
         const sp = Math.hypot(s.vx, s.vy);
         s.vx = Math.cos(a) * sp;
