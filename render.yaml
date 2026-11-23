@@ -1,6 +1,7 @@
 # Render Blueprint: 게임 화면 + API + 실시간 서버를 웹 서비스 하나로 배포한다.
 # 사용법: Render 대시보드 → New → Blueprint → 이 저장소 선택 → Apply.
 # 이후 main 브랜치에 푸시할 때마다 자동으로 다시 배포된다 (배포 순간 진행 중인 판은 끊긴다).
+# 아래 buildFilter 의 파일만 바뀐 푸시는 다시 배포하지 않는다.
 services:
   - type: web
     name: friday-deploy
@@ -14,10 +15,10 @@ services:
     # 클라이언트 빌드에 Vite(개발 의존성)가 필요하므로 NODE_ENV 와 상관없이 dev 의존성까지 설치한다.
     buildCommand: npm ci --include=dev && npm run build
     # npm start 를 거치지 않고 node 를 직접 띄운다 (exec: 셸이 node 로 바뀌어, 감싸는 프로세스 없이 node 가 신호를 직접 받는다.
-    # node 아래에는 tsx 가 TypeScript 를 바꾸려고 띄우는 esbuild 도우미 하나만 있고, node 가 끝나면 함께 끝난다).
+    # tsx 가 TypeScript 를 바꿀 때 esbuild 도우미를 하나 띄울 수 있는데(캐시가 있으면 띄우지 않는다), node 가 끝나면 함께 끝난다).
     # npm start 는 npm → sh → npm → sh → tsx → node 로 이어진다. 바깥 npm 에 SIGTERM(배포·재시작 때의 종료 신호)을
     # 보내면 바깥 npm 만 끝나고 안쪽 서버(node)는 신호를 받지 못한 채 남는다: 결국 강제로 꺼져서 종료 처리(아직 저장하지
-    # 못한 리더보드 기록·통계를 마저 쓰기)가 돌지 않는다. 감싸는 프로세스들이 쓰던 메모리(로컬에서 재어 약 160MB)도 아낀다.
+    # 못한 리더보드 기록·통계를 마저 쓰기)가 돌지 않는다. 감싸는 프로세스들이 쓰던 메모리도 아낀다 (로컬에서 재어 합계 약 230MB → 100MB).
     # TypeScript 는 tsx 를 node 의 --import 로 불러 그대로 실행한다 (apps/server 의 npm start 와 같은 방식).
     startCommand: cd apps/server && NODE_ENV=production exec node --import tsx src/index.ts
     healthCheckPath: /healthz

@@ -706,13 +706,14 @@ function onMessage(msg: ServerMsg): void {
         // 내가 멈춘 것이 아니라 서버가 멈춰 둔 것이면(연결이 끊겼다 돌아왔거나, 한동안 입력이 없었다) 메뉴를 열어 알려준다
         const byServer = !menuOpen && mode === 'solo' && phase === 'playing';
         if (byServer) showMenu();
-        const minutes = Math.max(1, Math.ceil(msg.max / 60));
+        // 남은 시간: 1분 넘게 남았으면 분으로, 아니면 초로 (예산 끝무렵에 '1분'이라고 하지 않게)
+        const left = msg.max >= 60 ? `${Math.ceil(msg.max / 60)}분이` : `${Math.max(1, msg.max)}초가`;
         // 방금 화면으로 돌아온 것이면 화면을 떠난 사이에 멈춘 것이다. 아니면 화면을 보는 중에 연결이 끊겼던 것이다
         const away = document.hidden || performance.now() - backAt < 20_000;
         const why = away ? '화면을 떠난 사이에 게임을 멈춰 뒀어요.' : '연결이 잠깐 끊겨서 게임을 멈춰 뒀어요.';
         el.pauseSub.textContent = byServer
-          ? `${why} ${minutes}분이 지나면 자동으로 다시 시작돼요.`
-          : `게임을 멈췄어요. ${minutes}분이 지나면 자동으로 다시 시작돼요.`;
+          ? `${why} ${left} 지나면 자동으로 다시 시작돼요.`
+          : `게임을 멈췄어요. ${left} 지나면 자동으로 다시 시작돼요.`;
       } else {
         const wasPaused = pausedSince > 0;
         // 멈춰 있던 시간만큼 선택 제한 시간 표시도 미룬다

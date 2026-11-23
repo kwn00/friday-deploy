@@ -74,7 +74,8 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
   // 보스 (뱀서의 Glowing Bat, Giant Werewolf, Giant Mummy, Mantichana 보스, Giant Bat 보스, The Reaper 와 같은 수치).
   // 다만 월요일 아침(사신)의 빙결 저항은 위키에서 옮긴 1 이 아니라 1.1 이다: 30분 뒤에는 판 길이에 상한이 없고
   // 순위는 버틴 시간이 먼저라, 사신을 얼려 몇 분씩 더 버티지 못하게 한다. 사신은 멈추거나 밀어낼 수 없는 끝이다
-  // (넉백은 음수라 오히려 끌려오고, 방화벽의 약화를 받지 않고, 디버거는 보스를 멈추지 않는다)
+  // (넉백은 음수라 밀려나지 않고 걷는 것보다 느려지지도 않으며(sim.ts 의 적 이동), 방화벽의 약화를 받지 않고,
+  // 디버거는 보스를 멈추지 않는다)
   boss_bug: { name: '왕버그', hp: 50, lvHp: true, power: 10, speed: 140 * V, kb: 1, kbMax: 3, resFreeze: 0, xp: 30, r: 8, boss: true },
   legacy_code: { name: '레거시 코드', hp: 200, lvHp: true, power: 20, speed: 130 * V, kb: 0.1, kbMax: 1, resFreeze: 0, xp: 2, r: 12, boss: true },
   spaghetti: { name: '스파게티 코드', hp: 250, lvHp: true, power: 20, speed: 80 * V, kb: 0, kbMax: 1, resFreeze: 1.1, xp: 25, r: 13, boss: true },

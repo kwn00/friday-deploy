@@ -93,6 +93,8 @@ before(async () => {
 });
 
 after(() => {
+  // 고친 것이 되돌아가 연결이 새더라도 테스트가 멈추지 않고 끝나게 (server.close 는 열린 연결을 기다린다)
+  server.closeAllConnections();
   server.close();
   rmSync(dir, { recursive: true, force: true });
 });

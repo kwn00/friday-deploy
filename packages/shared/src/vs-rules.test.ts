@@ -275,7 +275,7 @@ test('사신은 넉백이 작은 무기(0.1)에 맞아도 걷는 것보다 느�
   }
 });
 
-test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사신(-0.5)은 오히려 끌려온다', () => {
+test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사신(-0.5)은 밀려나지 않고 계속 다가온다', () => {
   for (const [type, away] of [['off_by_one', true], ['monday', false]] as const) {
     const { w, p } = quiet(9);
     p.up = { console_log: 1 };
@@ -293,7 +293,7 @@ test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사�
       }
       if (hitAt >= 0 && t === hitAt + 1) {
         if (away) assert.ok(e.x > before, `${type}: 밀려난다 (${before} → ${e.x})`);
-        else assert.ok(e.x < before, `${type}: 끌려온다`);
+        else assert.ok(e.x < before, `${type}: 밀려나지 않고 다가온다`);
         break;
       }
     }
