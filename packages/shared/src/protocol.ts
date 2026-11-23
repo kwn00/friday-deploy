@@ -259,11 +259,18 @@ const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number
 const isInt = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 
-/** 닉네임 정제: 한글/영문/숫자/일부 기호만 허용. 결과가 비면 기본 이름. */
+/**
+ * 글자(\p{L})로 분류되지만 화면에 보이지 않는 것들. 한글 채움 문자(U+115F, U+1160, U+3164, U+FFA0)가 그렇다:
+ * 이것만으로 된 이름은 화면에 빈칸으로 보인다. 유니코드가 "보통은 보이지 않게 그린다"고 정한 글자(Default_Ignorable_Code_Point)를 모두 뺀다.
+ */
+const INVISIBLE_RE = /\p{Default_Ignorable_Code_Point}/u;
+
+/** 닉네임 정제: 한글/영문/숫자/일부 기호만 허용 (보이지 않는 글자는 뺀다). 결과가 비면 기본 이름. */
 export function sanitizeName(raw: unknown): string {
   if (typeof raw !== 'string') return 'anonymous';
+  // NFKC 뒤에 거른다: U+3164·U+FFA0 은 NFKC 로 U+1160 이 된다
   const cleaned = Array.from(raw.normalize('NFKC'))
-    .filter((ch) => /[\p{L}\p{N}_\-. ]/u.test(ch))
+    .filter((ch) => /[\p{L}\p{N}_\-. ]/u.test(ch) && !INVISIBLE_RE.test(ch))
     .join('')
     .trim()
     .slice(0, NAME_MAX_LEN);
