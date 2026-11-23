@@ -992,11 +992,13 @@ function advance(world: World, dt: number): void {
         e.y = target.y + Math.sin(a) * 320;
         continue;
       }
-      // 넉백: 남은 넉백 시간만큼 거꾸로 (배율만큼) 움직인다. 배율이 음수면 오히려 끌려온다
+      // 넉백: 남은 넉백 시간만큼 거꾸로 (배율만큼) 움직인다. 배율이 음수면(사신) 오히려 끌려온다.
+      // 끌려오는 것은 걷는 것보다 느려지지 않는다: 넉백이 작은 무기(0.1)로 자꾸 맞혀 사신을 늦추지 못하게
       let step = def.speed * e.spd * dt;
       if (e.kbTime > 0) {
         const kt = Math.min(dt, e.kbTime);
-        step = def.speed * e.spd * (dt - kt) - def.speed * e.spd * kt * e.kbMult;
+        const kb = def.speed * e.spd * (dt - kt) - def.speed * e.spd * kt * e.kbMult;
+        step = e.kbMult < 0 ? Math.max(step, kb) : kb;
         e.kbTime -= kt;
       }
       // 빠른 적(사신 등)이 한 틱에 플레이어를 지나쳐 버리지 않게, 닿는 거리 안쪽까지만 다가간다

@@ -255,6 +255,25 @@ test('코드 프리즈: 빙결 저항이 1 이하인 적은 예전처럼 얼고,
   assert.equal(ENEMIES.monday.debuffRes, true, '월요일 아침은 방화벽에 맞아도 저항이 줄지 않는다');
 });
 
+test('사신은 넉백이 작은 무기(0.1)에 맞아도 걷는 것보다 느리게 다가오지 않는다 (끌려오기만 한다)', () => {
+  const { w, p } = quiet(505);
+  p.shield = 1e9;
+  p.up = {};
+  const walk = ENEMIES.monday.speed * DT;
+  for (const kbMult of [0, -0.05, -0.5, -1, -1.5]) {
+    const e = enemy(9800, p.x + 300, p.y, 'monday');
+    // 넉백 0.1 인 무기(멀티캐스트·고양이·스프린트)에 막 맞은 사신: 배율 0.1 × -0.5 = -0.05
+    e.kbTime = kbMult === 0 ? 0 : 0.12;
+    e.kbMult = kbMult;
+    w.enemies = [e];
+    const x = e.x;
+    still(w);
+    const moved = x - e.x;
+    assert.ok(moved >= walk - 1e-9, `배율 ${kbMult}: 한 틱에 ${moved.toFixed(2)}px (걷기 ${walk.toFixed(2)}px)`);
+    if (kbMult < -1) assert.ok(moved > walk + 1, `배율 ${kbMult}: 넉백이 크면 걷는 것보다 빨리 끌려온다`);
+  }
+});
+
 test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사신(-0.5)은 오히려 끌려온다', () => {
   for (const [type, away] of [['off_by_one', true], ['monday', false]] as const) {
     const { w, p } = quiet(9);
