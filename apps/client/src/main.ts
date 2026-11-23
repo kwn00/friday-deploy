@@ -1,5 +1,4 @@
 import {
-  ACTIVE_THEME,
   APP_VERSION,
   FIELD_ITEMS,
   FIELD_ITEM_KINDS,
@@ -18,6 +17,7 @@ import {
   evolutionOf,
   normalizeRoomCode,
   sanitizeName,
+  themeAt,
   unseenReleases,
   upgradeText,
   type BoardId,
@@ -113,10 +113,11 @@ const input = new Input(
 );
 const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
-// 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 바꾸려면 packages/shared/src/theme.ts 의 ACTIVE_THEME
+// 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 날짜로 고른다: packages/shared/src/theme.ts 의 THEME_SCHEDULE
+// (보이는 것만 바꾸므로 브라우저 시계를 쓴다. 기간이 끝나면 다음에 불러올 때 기본 화면)
 // 효과음과 배경음악 (소리 파일 없이 브라우저가 만든다. audio.ts). 테마가 음악을 바꿀 수 있다
 const sound = new Sound();
-applyTheme(ACTIVE_THEME, [renderer, sound]);
+applyTheme(themeAt(Date.now()), [renderer, sound]);
 renderer.onCue = (cue) => sound.cue(cue);
 sound.playMusic('title');
 // 순위표가 열려 있는 동안 뒤 화면은 포커스를 받지 않는다
