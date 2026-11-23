@@ -89,6 +89,22 @@ export class Grid {
   }
 }
 
+/* ───────────── 시간 ───────────── */
+
+/** 시간 비교의 오차 (소수 덧셈으로 쌓이는 아주 작은 값) */
+const EPS = 1e-9;
+
+/**
+ * 쿨다운처럼 되풀이되는 타이머가 이번 틱에 끝났을 때, 다음 타이머로 넘길 몫 (-dt 보다 크고 0 이하).
+ * 틱은 0.05초라 끝난 틱에 타이머를 st.cd 로 되돌리기만 하면 넘친 시간이 버려져 실제 간격이 0.05초 단위로 올림된다
+ * (쿨다운 0.46초가 0.5초가 되어 기계식 키보드 1단계가 듣지 않았다). 넘친 몫을 다음 타이머에서 빼면 평균 간격이 st.cd 와 같다.
+ * prev: 이번 틱을 빼기 전의 남은 값. 0 이하면 이미 끝나 기다리던 것(쏠 대상이 없었다)이거나 막 얻은 것이라 넘기지 않는다
+ * (기다린 시간을 넘기면 다음 것을 몰아 쏜다). 넘기는 것은 한 틱보다 적다
+ */
+function spill(prev: number, dt: number): number {
+  return prev > 0 ? Math.min(0, Math.max(-dt, prev - dt)) : 0;
+}
+
 /* ───────────── 피해 ───────────── */
 
 /**
@@ -433,9 +449,6 @@ const AIM = 200;
 /** 이만큼 이상 기울여야 "달리는 중"으로 친다 (거의 0 인 입력으로 제자리에서 달리는 척하지 못하게) */
 const RUNNING = 0.3;
 
-/** 시간 비교의 오차 (소수 덧셈으로 쌓이는 아주 작은 값) */
-const EPS = 1e-9;
-
 /** 커밋 히스토리가 움직이는 동안 커밋을 남기는 간격(초) (뱀서 Shadow Pinion 의 interval) */
 const TRAIL_INTERVAL = 0.3;
 
@@ -444,6 +457,7 @@ const rehitOf = (w: WeaponId): number => (UPGRADES[w] as WeaponDef).rehit ?? 0.5
 /**
  * 한 플레이어의 무기를 한 틱 돌린다.
  * 쿨다운이 끝난 무기는 쏜다. 겨눌 적이 없어 못 쏜 무기는 쿨다운을 다시 걸지 않고 다음 틱에 다시 본다.
+ * 쿨다운이 틱 중간에 끝났으면 넘친 몫을 다음 쿨다운으로 넘겨, 평균 간격이 쿨다운과 같다 (spill)
  */
 export function runWeapons(world: World, grid: Grid, p: Player, dt: number): void {
   const moving = Math.hypot(p.dx, p.dy) >= RUNNING;
@@ -483,26 +497,32 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
       continue;
     }
 
-    const cd = (p.cd[w] ?? 0) - dt;
+    const prev = p.cd[w] ?? 0;
+    const cd = prev - dt;
     if (cd > EPS) {
       p.cd[w] = cd;
       continue;
     }
     // 커밋 히스토리: 쿨다운이 끝난 뒤 움직이는 동안, 0.3초 × 쿨다운 배율 ÷ 이동 속도 배율마다 남긴다
-    // (뱀서 Shadow Pinion: 움직이는 동안 생기고, 이동 속도가 빠를수록 자주 생긴다. 간격 0.3초는 위키의 interval)
+    // (뱀서 Shadow Pinion: 움직이는 동안 생기고, 이동 속도가 빠를수록 자주 생긴다. 간격 0.3초는 위키의 interval).
+    // 멈춰 있는 동안은 간격이 흐르지 않는다. 간격도 쿨다운처럼 넘친 몫을 넘긴다
     if (w === 'commit_history') {
       p.cd[w] = 0;
       if (!moving) continue;
-      const spawn = (p.on[w] ?? 0) - dt;
-      if (spawn > 0) {
+      const before = p.on[w] ?? 0;
+      const spawn = before - dt;
+      if (spawn > EPS) {
         p.on[w] = spawn;
         continue;
       }
-      p.on[w] = (TRAIL_INTERVAL * cooldownMultOf(p)) / (moveSpeedOf(p) / PLAYER_BASE_SPEED);
+      p.on[w] = (TRAIL_INTERVAL * cooldownMultOf(p)) / (moveSpeedOf(p) / PLAYER_BASE_SPEED) + spill(before, dt);
       useWeapon(world, grid, p, w, st);
       continue;
     }
-    if (useWeapon(world, grid, p, w, st)) p.cd[w] = st.cd;
+    // 이번 틱에 쿨다운이 끝나 쐈으면 넘친 몫을 다음 쿨다운에서 뺀다 (평균 간격이 st.cd). 쏠 것이 없으면 0 에 머물러 기다리고,
+    // 기다리다 쏘면 다음은 온전한 st.cd 다 (몰아 쏘지 않는다).
+    // 2단계 인증은 넘기지 않는다: 다시 채운 뒤에는 방패를 다 쓸 때까지 쿨다운이 멈춰 있어, 다음 쿨다운이 이어서 시작하지 않는다
+    if (useWeapon(world, grid, p, w, st)) p.cd[w] = st.cd + (w === 'two_factor' ? 0 : spill(prev, dt));
     else p.cd[w] = 0;
   }
 }
@@ -510,11 +530,13 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
 function runDucks(world: World, grid: Grid, p: Player, st: WeaponStats, dt: number): void {
   // 뱀서 King Bible: (쿨다운 + 단계의 지속 시간) × 쿨다운 배율마다 새로 켜지고, 켜지면 지속 시간 × keep-alive 배율 동안 돈다.
   // keep-alive 로 켜져 있는 시간이 주기보다 길어지면 계속 돈다.
+  // 주기는 쿨다운처럼 넘친 몫을 넘긴다. 도는 시간은 켜진 틱부터 잰다 (주기가 다시 켜 주므로 올림이 쌓이지 않는다)
   const levelDur = weaponStats('rubber_duck', lv(p, 'rubber_duck')).dur;
   if (p.duckOn > 0) p.duckOn = Math.max(0, p.duckOn - dt);
-  const cd = (p.cd.rubber_duck ?? 0) - dt;
-  if (cd <= 0) {
-    p.cd.rubber_duck = (weaponStats('rubber_duck', lv(p, 'rubber_duck')).cd + levelDur) * cooldownMultOf(p);
+  const prev = p.cd.rubber_duck ?? 0;
+  const cd = prev - dt;
+  if (cd <= EPS) {
+    p.cd.rubber_duck = (weaponStats('rubber_duck', lv(p, 'rubber_duck')).cd + levelDur) * cooldownMultOf(p) + spill(prev, dt);
     p.duckOn = Math.max(p.duckOn, levelDur * durationMultOf(p));
   } else p.cd.rubber_duck = cd;
   const ds = duckState(p);
@@ -531,30 +553,32 @@ function runDucks(world: World, grid: Grid, p: Player, st: WeaponStats, dt: numb
 
 /**
  * 카나리아·부엉이 (뱀서 Peachone·Ebony Wings): 지속 시간(4초) 동안 쿨다운마다 폭탄 한 묶음(개수만큼)을 떨어뜨리고,
- * 그다음 쿨다운만큼 쉰다.
+ * 그다음 쿨다운만큼 쉰다. 폭탄 간격·켜져 있는 시간·쉬는 시간 모두 끝난 틱에 넘친 몫을 다음 것으로 넘긴다
+ * (평균 주기가 지속 + 쿨다운과 같다)
  */
 function runBirds(world: World, grid: Grid, p: Player, w: 'canary' | 'night_owl', st: WeaponStats, dt: number): void {
   // 시간은 소수 덧셈이라 오차가 쌓인다 (4.0 - 0.05 × 80 = 5.8e-15): 아주 작은 값은 0 으로 본다
   const on = p.on[w] ?? 0;
   if (on > EPS) {
-    p.on[w] = on - dt;
-    const cd = (p.cd[w] ?? 0) - dt;
+    const prev = p.cd[w] ?? 0;
+    const cd = prev - dt;
     if (cd <= EPS) {
-      p.cd[w] = st.cd;
+      p.cd[w] = st.cd + spill(prev, dt);
       useWeapon(world, grid, p, w, st);
     } else p.cd[w] = cd;
     if (on - dt <= EPS) {
       p.on[w] = 0;
-      p.cd[w] = st.cd; // 쉬는 시간
-    }
+      p.cd[w] = st.cd + spill(on, dt); // 쉬는 시간
+    } else p.on[w] = on - dt;
     return;
   }
-  const cd = (p.cd[w] ?? 0) - dt;
+  const prev = p.cd[w] ?? 0;
+  const cd = prev - dt;
   if (cd > EPS) {
     p.cd[w] = cd;
     return;
   }
-  p.on[w] = st.dur;
+  p.on[w] = st.dur + spill(prev, dt);
   p.cd[w] = 0;
 }
 
@@ -564,12 +588,13 @@ function runBirds(world: World, grid: Grid, p: Player, w: 'canary' | 'night_owl'
  */
 function runMonitoring(world: World, grid: Grid, p: Player, st: WeaponStats, dt: number): void {
   for (const b of ['canary', 'night_owl'] as const) if (p.pets[b] === undefined) p.pets[b] = world.nextId++;
-  const cd = (p.cd.monitoring ?? 0) - dt;
+  const prev = p.cd.monitoring ?? 0;
+  const cd = prev - dt;
   if (cd > EPS) {
     p.cd.monitoring = cd;
     return;
   }
-  p.cd.monitoring = st.cd;
+  p.cd.monitoring = st.cd + spill(prev, dt);
   for (const b of ['canary', 'night_owl'] as const) dropBombs(world, grid, p, 'monitoring', petPosition(world, p, b), st);
 }
 
