@@ -16,6 +16,7 @@ import {
   addPlayer,
   buildSnapshot,
   createWorld,
+  maxHpOf,
   decodeSnapshot,
   encodeSnapshot,
   pickOffer,
@@ -198,6 +199,60 @@ test('30분이 되면 화면의 적이 모두 경험치 없이 사라지고, 1�
     step(w, DT);
   }
   assert.equal(w.enemies.filter((e) => e.type === 'monday').length, 2, '1분 뒤 하나 더');
+});
+
+test('월요일 아침(사신)은 버틸 수 없는 끝이다: 코드 프리즈·keep-alive 최대에 방화벽·디버거·2단계 인증을 가진 60레벨도 30분 뒤 10초 안에 쓰러진다', () => {
+  // 예전에는 사신이 코드 프리즈에 얼어서(빙결 저항 1) 이 장비로 30분 뒤 1~6분을 더 버텼다
+  for (const seed of [501, 502, 503]) {
+    const { w, p } = quiet(seed);
+    p.up = { debugger: 1, firewall: 8, code_freeze: 7, two_factor: 7, keep_alive: 5, mech_keyboard: 5, dark_mode: 5, test_coverage: 5 };
+    p.level = 60;
+    p.hp = maxHpOf(p);
+    w.tick = 20 * STAGE_TIME - 1;
+    w.time = w.tick * DT;
+    w.wave = STAGE.length - 1;
+    const start = w.time;
+    let frozen = 0;
+    let weakened = 0;
+    for (let i = 0; i < 20 * 60 && p.alive; i++) {
+      step(w, DT);
+      for (const e of w.enemies) {
+        if (e.type !== 'monday') continue;
+        if (e.frozen > 0) frozen++;
+        if (e.resFreeze <= 1) weakened++;
+      }
+    }
+    assert.equal(p.alive, false, `시드 ${seed}: 1분 안에 쓰러진다`);
+    assert.ok(w.time - start < 10, `시드 ${seed}: 10초 안에 쓰러진다 (${(w.time - start).toFixed(2)}초)`);
+    assert.equal(frozen, 0, '사신은 한 번도 얼지 않는다');
+    assert.equal(weakened, 0, '방화벽에 맞아도 빙결 저항이 줄지 않는다');
+  }
+});
+
+test('코드 프리즈: 빙결 저항이 1 이하인 적은 예전처럼 얼고, 1 보다 큰 보스는 얼지 않는다 (방화벽에 맞아 1 까지 내려가면 언다)', () => {
+  const { w, p } = quiet(504);
+  p.shield = 1e9;
+  p.up = { code_freeze: 1 };
+  p.cd.code_freeze = 0;
+  const types: EnemyId[] = ['bug', 'monolith', 'spaghetti', 'god_class', 'monday'];
+  const hitBy = (type: EnemyId, resFreeze?: number): number => {
+    // 다음 광선은 12시 방향 (위쪽). 광선 위에 하나만 둔다
+    p.freezeDir = 11;
+    p.cd.code_freeze = 0;
+    const e = enemy(9700 + types.indexOf(type), p.x, p.y - 60, type);
+    if (resFreeze !== undefined) e.resFreeze = resFreeze;
+    e.spd = 0;
+    w.enemies = [e];
+    still(w);
+    return e.frozen;
+  };
+  assert.ok(hitBy('bug') > 0, '버그(0)는 언다');
+  assert.ok(hitBy('monolith') > 0, '모놀리스(1)는 언다');
+  assert.equal(hitBy('spaghetti'), 0, '스파게티 코드(1.1)는 얼지 않는다');
+  assert.equal(hitBy('god_class'), 0, 'God Class(1.1)는 얼지 않는다');
+  assert.equal(hitBy('monday'), 0, '월요일 아침(1.1)은 얼지 않는다');
+  assert.ok(hitBy('spaghetti', 1.0) > 0, '방화벽에 맞아 1 까지 내려간 스파게티 코드는 언다');
+  assert.equal(ENEMIES.monday.debuffRes, true, '월요일 아침은 방화벽에 맞아도 저항이 줄지 않는다');
 });
 
 test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사신(-0.5)은 오히려 끌려온다', () => {

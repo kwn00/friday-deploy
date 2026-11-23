@@ -810,7 +810,8 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'code_freeze': {
-      // 시곗바늘처럼 쏠 때마다 30도씩 돈다. 빙결 저항이 1 보다 큰 적(스파게티 코드, God Class)은 얼지 않는다 (뱀서 Clock Lancet)
+      // 시곗바늘처럼 쏠 때마다 30도씩 돈다 (뱀서 Clock Lancet). 빙결 저항이 1 보다 큰 적(스파게티 코드, God Class, 월요일 아침)은 얼지 않는다.
+      // 스파게티 코드·God Class 는 방화벽에 맞아 저항이 1 까지 내려가면 언다. 월요일 아침은 방화벽의 약화를 받지 않아 끝까지 얼지 않는다
       p.freezeDir = (p.freezeDir + 1) % 12;
       const a = -Math.PI / 2 + (p.freezeDir * Math.PI) / 6;
       const ax = Math.cos(a);
