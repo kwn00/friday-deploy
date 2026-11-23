@@ -13,7 +13,8 @@ services:
     branch: main
     # 클라이언트 빌드에 Vite(개발 의존성)가 필요하므로 NODE_ENV 와 상관없이 dev 의존성까지 설치한다.
     buildCommand: npm ci --include=dev && npm run build
-    # npm start 를 거치지 않고 node 를 직접 띄운다 (exec: 셸이 node 로 바뀌어 프로세스가 node 하나만 남는다).
+    # npm start 를 거치지 않고 node 를 직접 띄운다 (exec: 셸이 node 로 바뀌어, 감싸는 프로세스 없이 node 가 신호를 직접 받는다.
+    # node 아래에는 tsx 가 TypeScript 를 바꾸려고 띄우는 esbuild 도우미 하나만 있고, node 가 끝나면 함께 끝난다).
     # npm start 는 npm → sh → npm → sh → tsx → node 로 이어진다. 바깥 npm 에 SIGTERM(배포·재시작 때의 종료 신호)을
     # 보내면 바깥 npm 만 끝나고 안쪽 서버(node)는 신호를 받지 못한 채 남는다: 결국 강제로 꺼져서 종료 처리(아직 저장하지
     # 못한 리더보드 기록·통계를 마저 쓰기)가 돌지 않는다. 감싸는 프로세스들이 쓰던 메모리(로컬에서 재어 약 160MB)도 아낀다.
