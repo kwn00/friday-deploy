@@ -105,7 +105,12 @@ const el = {
 document.title = GAME_TITLE;
 $('title-text').textContent = GAME_TITLE;
 
-const input = new Input(el.canvas);
+// 방향키·WASD 는 판이 진행 중이고 겹친 화면(메뉴, 선택창, 다시 연결 중, 순위표, 새 소식)이 없을 때만 이동으로 받는다.
+// 그 밖에는 브라우저에 맡긴다 (순위표·새 소식 목록을 방향키로 스크롤하는 등)
+const input = new Input(
+  el.canvas,
+  () => phase === 'playing' && !menuOpen && el.levelup.classList.contains('hidden') && !reconnecting && !board.isOpen && !notes.isOpen,
+);
 const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
 // 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 바꾸려면 packages/shared/src/theme.ts 의 ACTIVE_THEME
