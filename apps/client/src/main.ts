@@ -36,7 +36,7 @@ import { Sound } from './audio';
 import { chestText } from './chest';
 import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
-import { takeInvite } from './invite';
+import { sendInvite, takeInvite } from './invite';
 import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
@@ -569,18 +569,17 @@ function renderLobby(): void {
 }
 
 async function invite(): Promise<void> {
-  const url = inviteUrl();
-  try {
-    if (navigator.share && window.matchMedia('(pointer: coarse)').matches) {
-      await navigator.share({ title: GAME_TITLE, text: `${GAME_TITLE} 같이 하자! 방 코드 ${roomCode}`, url });
-      return;
-    }
-    await navigator.clipboard.writeText(url);
-    el.lobbyStatus.textContent = '초대 링크를 복사했어요.';
-  } catch {
-    // 공유를 취소했거나 클립보드를 쓸 수 없는 환경: 코드를 직접 알려주면 된다
-    el.lobbyStatus.textContent = `링크를 복사하지 못했어요. 코드 ${roomCode} 를 직접 알려주세요.`;
-  }
+  const code = roomCode;
+  // 휴대폰은 공유 창, 그 밖에는 클립보드 복사. 공유 창을 닫기만 했으면 아무 말도 하지 않는다 (invite.ts)
+  const useShare = typeof navigator.share === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const outcome = await sendInvite(
+    { title: GAME_TITLE, text: `${GAME_TITLE} 같이 하자! 방 코드 ${code}`, url: inviteUrl() },
+    useShare ? (data) => navigator.share(data) : null,
+    (text) => navigator.clipboard.writeText(text),
+  );
+  if (outcome === 'copied') el.lobbyStatus.textContent = '초대 링크를 복사했어요.';
+  // 클립보드를 쓸 수 없는 환경: 코드를 직접 알려주면 된다
+  else if (outcome === 'failed') el.lobbyStatus.textContent = `링크를 복사하지 못했어요. 코드 ${code} 를 직접 알려주세요.`;
 }
 
 /* ───────────── 결과 ───────────── */

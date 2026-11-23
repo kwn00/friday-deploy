@@ -1,5 +1,5 @@
 /**
- * 초대 링크 (?room=CODE).
+ * 초대 링크 (?room=CODE): 주소에서 꺼내기, 공유 창이나 클립보드로 보내기.
  * 이 파일은 화면(DOM)을 쓰지 않는다 (단위 테스트에서 검사한다). 주소를 바꾸고 화면에 쓰는 것은 main.ts 가 한다.
  */
 
@@ -37,4 +37,43 @@ function decode(s: string): string {
   } catch {
     return s;
   }
+}
+
+export interface InviteData {
+  title: string;
+  text: string;
+  url: string;
+}
+
+/** 초대 링크를 보낸 결과. shared: 공유 창으로 보냄, cancelled: 공유 창을 닫음, copied: 클립보드에 복사함, failed: 둘 다 안 됨 */
+export type InviteOutcome = 'shared' | 'cancelled' | 'copied' | 'failed';
+
+/**
+ * 초대 링크를 보낸다: share 가 있으면(휴대폰) 공유 창, 없으면 클립보드 복사.
+ * 공유 창을 닫기만 했으면(AbortError) cancelled: 사용자가 그만둔 것이니 아무 말도 하지 않는다.
+ * 그 밖의 공유 오류(허용되지 않음 등)면 클립보드 복사로 한 번 더 해 보고, 그것도 안 될 때만 failed.
+ */
+export async function sendInvite(
+  data: InviteData,
+  share: ((data: InviteData) => Promise<void>) | null,
+  copy: (text: string) => Promise<void>,
+): Promise<InviteOutcome> {
+  if (share) {
+    try {
+      await share(data);
+      return 'shared';
+    } catch (err) {
+      if (isAbort(err)) return 'cancelled';
+    }
+  }
+  try {
+    await copy(data.url);
+    return 'copied';
+  } catch {
+    return 'failed';
+  }
+}
+
+function isAbort(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError';
 }
