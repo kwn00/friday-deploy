@@ -448,12 +448,18 @@ function onConnection(ws: WebSocket, ip: string): void {
 }
 
 // 배포·재시작 때 아직 저장하지 못한 기록을 마저 쓰고 끝낸다 (최대 3초)
+// (이 신호가 서버까지 오려면 node 가 직접 떠 있어야 한다: render.yaml 의 startCommand 참고)
 process.once('SIGTERM', () => {
+  const at = Date.now();
+  console.log('[server] SIGTERM: 남은 기록을 저장하고 끝냅니다');
   setTimeout(() => process.exit(0), 3000).unref();
   // 리더보드 기록과 통계를 함께 마저 쓰고(기록이 통계를 기다리지 않게), 그다음에 같은 저장소를 한 번 닫는다
   void Promise.allSettled([leaderboard.flushAll(2400), stats.close(2400)])
     .then(() => leaderboard.close(0))
-    .finally(() => process.exit(0));
+    .finally(() => {
+      console.log(`[server] 종료 (${Date.now() - at}ms)`);
+      process.exit(0);
+    });
 });
 
 server.listen(PORT, () => {

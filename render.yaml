@@ -13,14 +13,27 @@ services:
     branch: main
     # 클라이언트 빌드에 Vite(개발 의존성)가 필요하므로 NODE_ENV 와 상관없이 dev 의존성까지 설치한다.
     buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm start
+    # npm start 를 거치지 않고 node 를 직접 띄운다 (exec: 셸이 node 로 바뀌어 프로세스가 node 하나만 남는다).
+    # npm start 는 npm → sh → npm → sh → tsx → node 로 이어진다. 바깥 npm 에 SIGTERM(배포·재시작 때의 종료 신호)을
+    # 보내면 바깥 npm 만 끝나고 안쪽 서버(node)는 신호를 받지 못한 채 남는다: 결국 강제로 꺼져서 종료 처리(아직 저장하지
+    # 못한 리더보드 기록·통계를 마저 쓰기)가 돌지 않는다. 감싸는 프로세스들이 쓰던 메모리(로컬에서 재어 약 160MB)도 아낀다.
+    # TypeScript 는 tsx 를 node 의 --import 로 불러 그대로 실행한다 (apps/server 의 npm start 와 같은 방식).
+    startCommand: cd apps/server && NODE_ENV=production exec node --import tsx src/index.ts
     healthCheckPath: /healthz
     autoDeployTrigger: commit
+    # 게임 서버와 화면에 들어가지 않는 파일만 바뀐 커밋은 다시 배포하지 않는다 (배포하면 진행 중인 판이 끊긴다):
+    # 문서, 테스트, GitHub 워크플로, Claude 스킬, 환경 변수 예시, 화면만 따로 올릴 때의 Vercel 설정, .gitignore.
+    # render.yaml 은 빼지 않는다 (시작 명령 등이 바뀌면 다시 배포해야 한다).
     buildFilter:
       ignoredPaths:
         - "**/*.md"
         - "docs/**"
         - "**/*.test.ts"
+        - ".github/**"
+        - ".claude/**"
+        - ".env.example"
+        - "vercel.json"
+        - ".gitignore"
     envVars:
       - key: NODE_VERSION
         value: "22"
