@@ -8,7 +8,7 @@
     "apps/*"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.6"
   },
   "scripts": {
     "dev": "concurrently -n server,client -c magenta,cyan \"npm run dev -w @friday-deploy/server\" \"npm run dev -w @friday-deploy/client\"",

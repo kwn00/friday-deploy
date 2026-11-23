@@ -16,7 +16,7 @@ services:
     buildCommand: npm ci --include=dev && npm run build
     # npm start 를 거치지 않고 node 를 직접 띄운다 (exec: 셸이 node 로 바뀌어, 감싸는 프로세스 없이 node 가 신호를 직접 받는다.
     # tsx 가 TypeScript 를 바꿀 때 esbuild 도우미를 하나 띄울 수 있는데(캐시가 있으면 띄우지 않는다), node 가 끝나면 함께 끝난다).
-    # npm start 는 npm → sh → npm → sh → tsx → node 로 이어진다. 바깥 npm 에 SIGTERM(배포·재시작 때의 종료 신호)을
+    # 예전 startCommand 였던 npm start 는 npm → sh → npm → sh → tsx → node 로 이어졌다 (지금도 npm 과 sh 가 감싼다). 바깥 npm 에 SIGTERM(배포·재시작 때의 종료 신호)을
     # 보내면 바깥 npm 만 끝나고 안쪽 서버(node)는 신호를 받지 못한 채 남는다: 결국 강제로 꺼져서 종료 처리(아직 저장하지
     # 못한 리더보드 기록·통계를 마저 쓰기)가 돌지 않는다. 감싸는 프로세스들이 쓰던 메모리도 아낀다 (로컬에서 재어 합계 약 230MB → 100MB).
     # TypeScript 는 tsx 를 node 의 --import 로 불러 그대로 실행한다 (apps/server 의 npm start 와 같은 방식).
