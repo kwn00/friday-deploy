@@ -1175,6 +1175,19 @@ body {
   .panel--title .buttons {
     grid-template-columns: repeat(3, 1fr);
   }
+  /* 결과 화면: 보이는 버튼(2개, 순위에 오르면 '순위표 보기'까지 3개)을 모두 한 줄에. 두 줄이면 셋째('처음으로')가 화면 밖으로 밀린다 */
+  .panel--over .buttons {
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+  }
+  /* 칸이 좁아 글자가 두 줄이 되므로, 작은 글씨('리더보드')는 낱말 중간에서 끊기지 않게 아랫줄에 (타이틀 버튼과 같다) */
+  .panel--over .btn {
+    word-break: keep-all;
+  }
+  .panel--over .btn small {
+    display: block;
+  }
   .place {
     margin-bottom: 8px;
     padding: 4px 8px;

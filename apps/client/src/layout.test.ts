@@ -62,3 +62,16 @@ test('화면: 낮은 가로 화면 타이틀에서 구석 버튼(버전·소리)
     px(low.get('.panel--title')?.['padding-bottom'], '.panel--title padding-bottom');
   assert.ok(below >= corner + 2, `참가 줄 아래 ${below}px < 구석 버튼 ${corner}px + 2`);
 });
+
+test('화면: 낮은 가로 화면 결과 화면은 보이는 버튼(2~3개)을 모두 한 줄에 놓는다 (두 줄이면 "처음으로"가 화면 밖)', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const over = html.slice(html.indexOf('id="screen-over"'), html.indexOf('</section>', html.indexOf('id="screen-over"')));
+  assert.match(over, /class="panel panel--over"/, '결과 화면 패널에 panel--over');
+  for (const id of ['btn-retry', 'btn-result-board', 'btn-home']) assert.ok(over.includes(`id="${id}"`), id);
+  const low = rules(LOW_LANDSCAPE).get('.panel--over .buttons');
+  assert.ok(low, '.panel--over .buttons 규칙이 없다');
+  // 칸 수를 정하지 않고(none) 보이는 버튼 수만큼 칸을 만든다: 순위에 오르지 않아 2개일 때 빈 칸이 생기지 않게
+  assert.equal(low['grid-template-columns'], 'none');
+  assert.equal(low['grid-auto-flow'], 'column');
+  assert.equal(low['grid-auto-columns'], 'minmax(0, 1fr)');
+});
