@@ -1163,6 +1163,11 @@ body {
     min-height: 0;
     margin-top: 4px;
   }
+  /* 방 코드 칸·참가 버튼 아래(안내 한 줄 + 상태줄 + 여백)가 구석 버튼의 누르는 높이(44px)보다 낮으면,
+   * 구석 버튼이 그 모서리를 덮어 눌리지 않는다. 아래 여백을 늘려 그만큼 자리를 둔다 (6 + 16.5 + 4 + 20 ≥ 44) */
+  .panel--title {
+    padding-bottom: 20px;
+  }
   .panel--title .btn small {
     display: block;
   }
