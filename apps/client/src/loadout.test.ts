@@ -11,7 +11,9 @@ import {
   WEAPON_IDS,
   SPRINT_BONUS_PER_LEVEL,
   addPlayer,
+  amountBonusOf,
   areaMultOf,
+  armorOf,
   cooldownMultOf,
   createWorld,
   curseOf,
@@ -22,6 +24,7 @@ import {
   healAmountOf,
   luckOf,
   maxHpOf,
+  mightOf,
   moveSpeedOf,
   pickupOf,
   recoveryOf,
@@ -82,6 +85,7 @@ test('가진 아이템: 패시브의 지금 효과가 모든 단계에서 서버
     ['keep_alive', '지속 시간', durationMultOf, 'pct'],
     ['side_project', '얻는 경험치', growthOf, 'pct'],
     ['prod_hotfix', '버그 체력·속도·수·빈도', curseOf, 'pct'],
+    ['stack_overflow', '피해량', mightOf, 'pct'],
   ] as const) {
     for (let level = 1; level <= UPGRADES[id].max; level++) {
       const only = { up: { [id]: level } };
@@ -99,9 +103,24 @@ test('가진 아이템: 패시브의 지금 효과가 모든 단계에서 서버
     assert.ok(Math.abs(numberIn(value({ work_life: level }, 'work_life', '1초에 체력')) - recoveryOf(only)) < 1e-9);
     assert.equal(value({ work_life: level }, 'work_life', '회복 아이템'), `${healAmountOf(none)} → ${Math.round(healAmountOf(only) * 100) / 100}`);
   }
+  // 더해지는 것: 테스트 커버리지(한 대 맞을 때 피해를 덜 받는다), git fork(개수)
+  for (const [id, label, f, sign] of [
+    ['test_coverage', '한 대 맞을 때 피해', armorOf, -1],
+    ['git_fork', '개수', amountBonusOf, 1],
+  ] as const) {
+    for (let level = 1; level <= UPGRADES[id].max; level++) {
+      const added = f({ up: { [id]: level } }) - f(none);
+      assert.ok(added !== 0, `${id} ${level}: 효과가 없다`);
+      assert.ok(Math.abs(numberIn(value({ [id]: level }, id, label)) - sign * added) < 1e-9, `${id} ${level}`);
+    }
+  }
   for (let level = 1; level <= UPGRADES.deploy_prayer.max; level++) {
     const chance = extraOfferChanceOf({ up: { deploy_prayer: level } }) * 100;
     assert.ok(Math.abs(numberIn(value({ deploy_prayer: level }, 'deploy_prayer', '선택지 4개 나올 확률')) - chance) <= 0.5, `${level}`);
+  }
+  // 스냅샷은 stats.ts 의 함수가 아니라 서버가 보낸 남은 부활 수를 그대로 보여 준다 (단계와 상관없이)
+  for (let level = 1; level <= UPGRADES.snapshot.max; level++) {
+    for (const revives of [0, 1, 3]) assert.deepEqual(nowText({ snapshot: level }, 'snapshot', revives), [`남은 부활(백업 포함) ${revives}번`]);
   }
   // 패시브의 효과는 그 패시브 하나만의 것이다: 다른 패시브가 있어도 바뀌지 않는다
   assert.deepEqual(nowText({ coffee: 2, mech_keyboard: 5, dark_mode: 5 }, 'coffee'), nowText({ coffee: 2 }, 'coffee'));
