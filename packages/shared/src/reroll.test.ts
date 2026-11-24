@@ -212,7 +212,9 @@ test('새로고침: 혼자 하는 판은 고르는 동안 시간이 멈추고, �
   assert.equal(p.tally.auto[first], 1);
 });
 
-test('통신: reroll 은 필드 없는 메시지 하나다 (다른 값을 실어 보내도 받지 않는다)', () => {
-  assert.deepEqual(parseClientMsg('{"t":"reroll"}'), { t: 'reroll' });
-  assert.deepEqual(parseClientMsg('{"t":"reroll","offers":["coffee"],"rerolls":99}'), { t: 'reroll' });
+test('통신: reroll 은 어느 선택지(레벨)를 새로고침하는지만 싣는다 (다른 값을 실어 보내도 받지 않는다)', () => {
+  assert.deepEqual(parseClientMsg('{"t":"reroll","level":3}'), { t: 'reroll', level: 3 });
+  assert.deepEqual(parseClientMsg('{"t":"reroll","level":3,"offers":["coffee"],"rerolls":99}'), { t: 'reroll', level: 3 });
+  for (const bad of ['{"t":"reroll"}', '{"t":"reroll","level":-1}', '{"t":"reroll","level":1.5}', '{"t":"reroll","level":"3"}', '{"t":"reroll","level":1e9}'])
+    assert.equal(parseClientMsg(bad), null, bad);
 });

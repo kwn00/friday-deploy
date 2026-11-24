@@ -374,17 +374,18 @@ export class Room {
   }
 
   /**
-   * 레벨업 선택지 새로고침. 선택 중이 아니거나(시간이 끝나 서버가 대신 고른 직후에 도착), 횟수를 다 썼거나, 새로 나올 것이 없으면
-   * 아무것도 바꾸지 않는다 (위반이 아니다: 두 번 누른 것이 늦게 도착할 수 있다). 그때도 선택 중이면 지금 선택지를 다시 보내서
-   * 화면이 새 카드를 기다리며 멈춰 있지 않게 한다. 남은 횟수와 새 선택지는 모두 서버가 정한다
+   * 레벨업 선택지 새로고침. level 은 화면이 새로고침하려는 선택지의 레벨이다.
+   * 선택 중이 아니거나, 다른 레벨의 선택지를 보고 보낸 것이거나(시간이 끝나 서버가 대신 고르고 다음 레벨업으로 넘어간 뒤에 도착),
+   * 횟수를 다 썼거나, 새로 나올 것이 없으면 아무것도 바꾸지 않는다 (위반이 아니다: 늦게 도착하거나 두 번 누른 것일 수 있다).
+   * 그때도 선택 중이면 지금 선택지를 다시 보내서 화면이 새 카드를 기다리며 멈춰 있지 않게 한다. 남은 횟수와 새 선택지는 모두 서버가 정한다
    */
-  onReroll(conn: Conn): void {
+  onReroll(conn: Conn, level: number): void {
     const p = this.world.players.get(conn.pid);
     if (!p?.offers) return;
     const now = Date.now();
     if (this.started) this.lastActivity = now;
     this.active(conn, now);
-    if (!canReroll(p) || !rerollOffers(this.world, conn.pid)) {
+    if (level !== p.level || !canReroll(p) || !rerollOffers(this.world, conn.pid)) {
       this.sendOffers(conn, p);
       return;
     }
@@ -398,6 +399,7 @@ export class Room {
       t: 'levelup',
       offers: offersOf(p),
       timeout: Math.max(1, Math.ceil(OFFER_TIMEOUT - p.offerTimer)),
+      level: p.level,
       rerolls: p.rerolls,
       rerollable: canReroll(p),
     });

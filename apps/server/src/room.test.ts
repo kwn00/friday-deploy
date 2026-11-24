@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import type { WebSocket } from 'ws';
-import { decodeSnapshot, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
+import { decodeSnapshot, xpForLevel, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
 import { Leaderboard, MemoryStore, type RunReport } from './leaderboard';
 import { RoomManager, type Conn, type Room } from './room';
 
@@ -1104,7 +1104,7 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   const room = rooms.create('solo')!;
   const a = join(room, 'a');
   const me = room.world.players.get(a.conn.pid)!;
-  room.onReroll(a.conn);
+  room.onReroll(a.conn, me.level);
   assert.equal(last(a.ws, 'levelup'), undefined, '선택 중이 아니면 아무것도 보내지 않는다');
   assert.equal(me.rerolls, 2);
   me.xp = me.xpNext;
@@ -1113,7 +1113,7 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   const first = last(a.ws, 'levelup')!;
   assert.deepEqual([first.timeout, first.rerolls, first.rerollable], [20, 2, true]);
   advance(8000);
-  room.onReroll(a.conn);
+  room.onReroll(a.conn, me.level);
   advance(50);
   const second = last(a.ws, 'levelup')!;
   assert.notDeepEqual(second.offers, first.offers);
@@ -1123,13 +1123,13 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   // 일시정지 중에는 틱이 돌지 않으므로 바로 보낸다
   room.onPause(a.conn, true);
   const n = a.ws.msgs.length;
-  room.onReroll(a.conn);
+  room.onReroll(a.conn, me.level);
   const third = last(a.ws, 'levelup')!;
   assert.ok(a.ws.msgs.length > n, '바로 왔다');
   assert.deepEqual([third.rerolls, third.rerollable], [0, false]);
 
   // 다 쓴 뒤의 새로고침: 위반이 아니고, 지금 선택지를 다시 보내 화면이 기다리며 멈춰 있지 않게 한다
-  room.onReroll(a.conn);
+  room.onReroll(a.conn, me.level);
   assert.deepEqual(last(a.ws, 'levelup')!.offers, third.offers);
   assert.equal(me.rerolls, 0);
   room.onPause(a.conn, false);
@@ -1145,7 +1145,7 @@ test('새로고침: 다시 연결해도 남은 새로고침 수가 이어진다'
   me.xp = me.xpNext;
   room.world.gems.push({ id: 99_999, x: me.x, y: me.y, v: 1 });
   advance(100);
-  room.onReroll(a.conn);
+  room.onReroll(a.conn, me.level);
   advance(50);
   const shown = last(a.ws, 'levelup')!;
   hangUp(room, a);
@@ -1154,4 +1154,34 @@ test('새로고침: 다시 연결해도 남은 새로고침 수가 이어진다'
   const again = last(ws, 'levelup')!;
   assert.deepEqual(again.offers, shown.offers);
   assert.deepEqual([again.rerolls, again.rerollable], [1, true]);
+});
+
+test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레벨업으로 넘어간 뒤에 늦게 온 새로고침은 받지 않는다 (보지 못한 카드에 횟수를 쓰지 않는다)', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  // 레벨업 두 번만큼의 경험치
+  me.xp = me.xpNext + xpForLevel(me.level + 1) + 1;
+  room.world.gems.push({ id: 99_999, x: me.x, y: me.y, v: 1 });
+  advance(100);
+  const first = last(a.ws, 'levelup')!;
+  assert.equal(first.level, me.level);
+  // 입력이 없으면 서버가 자리를 비운 것으로 보고 멈춰 둔다: 화면을 보고 있는 것처럼 입력을 보낸다
+  for (let i = 0; i < 21; i++) {
+    room.onInput(a.conn, i + 1, 0, 0);
+    advance(1000);
+  }
+  const second = last(a.ws, 'levelup')!;
+  assert.equal(second.level, first.level + 1, '서버가 대신 골랐고 다음 선택지가 떴다');
+  // 화면은 아직 첫 선택지를 보고 새로고침을 눌렀다
+  room.onReroll(a.conn, first.level);
+  advance(50);
+  assert.equal(me.rerolls, 2, '횟수가 줄지 않는다');
+  assert.deepEqual(me.offers, second.offers.map((o) => o.id), '다음 선택지는 그대로');
+  assert.deepEqual(last(a.ws, 'levelup')!.offers, second.offers);
+  // 지금 선택지의 레벨로 보내면 받는다
+  room.onReroll(a.conn, second.level);
+  advance(50);
+  assert.equal(me.rerolls, 1);
 });

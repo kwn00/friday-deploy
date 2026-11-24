@@ -398,7 +398,7 @@ function onConnection(ws: WebSocket, ip: string): void {
         if (!room.onPick(conn, msg.choice)) violation('bad_pick');
         break;
       case 'reroll':
-        room.onReroll(conn);
+        room.onReroll(conn, msg.level);
         break;
       case 'start':
         room.onStart(conn);

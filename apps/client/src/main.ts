@@ -161,6 +161,8 @@ let offerCards: { id: UpgradeId; btn: HTMLElement }[] = [];
  * 기다리는 사이에 누른 카드의 번호는 아직 보지 못한 새 선택지에 쓰인다. 'key' 면 키보드로 눌렀다 (답이 오면 초점을 되돌린다)
  */
 let rerollWait: false | 'pointer' | 'key' = false;
+/** 지금 떠 있는 선택지의 레벨 (서버가 보낸 값. 새로고침할 때 그대로 돌려보낸다) */
+let offerLevel = 0;
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
 let resultBoard: BoardId | null = null;
 
@@ -455,8 +457,9 @@ function showSlots(weapons: number, passives: number): void {
   el.offerSlots.replaceChildren(part('무기', weapons, WEAPON_SLOTS), ' · ', part('패시브', passives, PASSIVE_SLOTS));
 }
 
-function showOffers(offers: Offer[], timeout: number, rerolls: number, rerollable: boolean): void {
+function showOffers(offers: Offer[], timeout: number, level: number, rerolls: number, rerollable: boolean): void {
   input.reset();
+  offerLevel = Number.isInteger(level) ? level : 0;
   const refocus = rerollWait === 'key';
   rerollWait = false;
   offerDeadline = performance.now() + timeout * 1000;
@@ -504,7 +507,7 @@ el.reroll.addEventListener('click', (e) => {
   rerollWait = e.detail === 0 ? 'key' : 'pointer';
   el.reroll.disabled = true;
   el.offers.classList.add('offers--wait');
-  net.sendReroll();
+  net.sendReroll(offerLevel);
 });
 
 /** 선택지 카드의 진화 안내 (이 무기·패시브를 재료로 쓰는 진화가 있고 아직 하지 않았으면) */
@@ -793,7 +796,7 @@ function onMessage(msg: ServerMsg): void {
     case 'levelup':
       // 선택창이 이미 떠 있으면 새로고침의 답이다: 레벨업 소리를 다시 내지 않는다
       if (el.levelup.classList.contains('hidden')) sound.play('levelup');
-      showOffers(msg.offers, msg.timeout, msg.rerolls, msg.rerollable);
+      showOffers(msg.offers, msg.timeout, msg.level, msg.rerolls, msg.rerollable);
       break;
     case 'chest':
       // 내가 연 보물상자에서 무엇이 올랐는지 (모양은 net.ts 가 확인했다). 강화 칸은 다음 스냅샷이 고쳐 그린다
