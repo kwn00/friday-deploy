@@ -41,6 +41,7 @@ import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
 import { CLOSE_TIMEOUT, ConnectError, Net } from './net';
+import type { Box } from './edge';
 import { Renderer } from './render';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -345,16 +346,24 @@ function noticeItems(s: Snapshot): void {
   lastSnapshotLv = snapshotLv;
 
   let fresh: FieldItemKind | null = null;
+  let freshAt: readonly number[] = s.view;
   for (const it of s.i) {
     if (knownItems.has(it[0])) continue;
     knownItems.add(it[0]);
     const kind = FIELD_ITEM_KINDS[it[1]];
     // 한꺼번에 여럿이면 가장 드문 것을 알린다
-    if (kind && (fresh === null || FIELD_ITEMS[kind].weight < FIELD_ITEMS[fresh].weight)) fresh = kind;
+    if (kind && (fresh === null || FIELD_ITEMS[kind].weight < FIELD_ITEMS[fresh].weight)) {
+      fresh = kind;
+      freshAt = [it[2], it[3]];
+    }
   }
   if (knownItems.size > 64) for (const id of knownItems) if (!s.i.some((it) => it[0] === id)) knownItems.delete(id);
-  // 미니맵을 꺼 둔 사람에게 "미니맵을 보세요"라고 하면 헷갈린다: 켜면 보인다고 알려준다
-  if (fresh && me.alive && phase === 'playing') toast(`${FIELD_ITEMS[fresh].icon} ${ITEM_DROPPED[fresh]} · ${minimapOn ? '미니맵을 보세요' : '미니맵을 켜면 위치가 보여요'}`);
+  if (fresh && me.alive && phase === 'playing') {
+    // 화면 밖에 놓였으면 화면 가장자리에 표시가 뜬다 (미니맵을 꺼 둬도). 화면 안이면 그대로 보인다
+    const { w, h } = renderer.viewSize;
+    const away = Math.abs(freshAt[0]! - s.view[0]) > w / 2 || Math.abs(freshAt[1]! - s.view[1]) > h / 2;
+    toast(`${FIELD_ITEMS[fresh].icon} ${ITEM_DROPPED[fresh]}${away ? ' · 화면 끝 화살표를 따라가요' : ''}`);
+  }
   // 30분: 화면의 버그가 모두 사라지고 1분마다 월요일 아침(닿으면 바로 쓰러진다)이 온다. 그 순간 한 번 알린다 (다른 알림보다 먼저)
   if (s.time >= STAGE_TIME && !overtimeNoticed && phase === 'playing') {
     overtimeNoticed = true;
@@ -1190,6 +1199,38 @@ function pumpInput(now: number): void {
   }
 }
 
+/**
+ * 화면 가장자리 아이템 표시가 피해 갈 HUD 자리를 잰다 (CSS 픽셀).
+ * 글자(시간·체력)가 바뀔 때마다 재면 브라우저가 레이아웃을 자주 다시 계산하므로 0.25초에 한 번만 잰다
+ * (화면 크기가 바뀌면 바로). 숨겨진 것(display: none)은 크기가 0 이라 빠진다.
+ */
+let hudMeasuredAt = -Infinity;
+window.addEventListener('resize', () => (hudMeasuredAt = -Infinity));
+function measureHud(now: number): void {
+  if (now - hudMeasuredAt < 250) return;
+  hudMeasuredAt = now;
+  const boxes: Box[] = [];
+  const add = (node: Element): void => {
+    const r = node.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) boxes.push({ x0: r.left, y0: r.top, x1: r.right, y1: r.bottom });
+  };
+  for (const node of el.hud.children) {
+    // 장비 목록은 묶음마다 잰다 (목록 칸은 화면 폭만큼 넓지만 실제로 차지하는 것은 아이콘들뿐이다)
+    if (node === el.loadout) for (const group of node.children) add(group);
+    else add(node);
+  }
+  // 표시가 들어갈 영역 = HUD 의 안쪽 (노치와 바깥 여백을 뺀 자리. HUD 요소들과 같은 여백)
+  const hr = el.hud.getBoundingClientRect();
+  const cs = getComputedStyle(el.hud);
+  const bounds: Box = {
+    x0: hr.left + parseFloat(cs.paddingLeft),
+    y0: hr.top + parseFloat(cs.paddingTop),
+    x1: hr.right - parseFloat(cs.paddingRight),
+    y1: hr.bottom - parseFloat(cs.paddingBottom),
+  };
+  renderer.setHud(bounds.x1 > bounds.x0 && bounds.y1 > bounds.y0 ? bounds : null, boxes);
+}
+
 let last = performance.now();
 function frame(now: number): void {
   const real = Math.min(1, (now - last) / 1000);
@@ -1198,6 +1239,7 @@ function frame(now: number): void {
   // 멈췄다가 다시 움직이기 시작한 순간에는 입력을 새로 보낸다 (예측이 그 입력부터 다시 센다)
   if (renderer.predictor.advance(real, canMove(now))) lastSent.at = 0;
   pumpInput(now);
+  if (phase === 'playing' || phase === 'over') measureHud(now);
   renderer.draw(now, dt, real);
   // 메뉴나 선택창이 열려 있으면 음악을 줄인다
   sound.duck(menuOpen || !el.levelup.classList.contains('hidden'));
