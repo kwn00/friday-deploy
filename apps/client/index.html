@@ -86,19 +86,29 @@
       </div>
     </section>
 
-    <section id="screen-pause" class="screen hidden">
-      <div class="panel panel--menu">
-        <h2 id="pause-title" class="panel__title"></h2>
-        <p id="pause-sub" class="panel__sub"></p>
-        <p id="pause-code" class="code code--small hidden"></p>
-        <div class="buttons">
-          <button id="btn-resume" class="btn btn--primary" type="button">▶ git stash pop <small>계속하기</small></button>
-          <button id="btn-minimap" class="btn" type="button"></button>
-          <button id="btn-sfx" class="btn" type="button"></button>
-          <button id="btn-music" class="btn" type="button"></button>
-          <button id="btn-quit" class="btn" type="button">✕ 그만두기</button>
+    <!-- 메뉴: 계속하기는 언제나 스크롤 없이 보이고, 가진 아이템 목록만 패널 안에서 따로 스크롤된다 (style.css 의 "일시정지 메뉴") -->
+    <section id="screen-pause" class="screen screen--pause hidden">
+      <div class="panel panel--menu panel--pause">
+        <div class="pause__head">
+          <h2 id="pause-title" class="panel__title"></h2>
+          <p id="pause-sub" class="panel__sub"></p>
+          <p id="pause-code" class="code code--small hidden"></p>
         </div>
-        <p class="hint hint--keys">Esc / P 메뉴 · M 미니맵</p>
+        <div class="pause__body">
+          <button id="btn-resume" class="btn btn--primary pause__resume" type="button">▶ git stash pop <small>계속하기</small></button>
+          <div class="pause__items">
+            <h3 id="pause-items-title" class="pause__items-title">🎒 가진 아이템</h3>
+            <!-- 목록은 키보드로 스크롤할 수 있게 Tab 이 멈춘다 (메뉴가 열려 있으면 방향키를 이동으로 받지 않는다) -->
+            <div id="pause-items" class="items" tabindex="0" role="region" aria-labelledby="pause-items-title"></div>
+          </div>
+          <div class="pause__tools">
+            <button id="btn-minimap" class="btn" type="button"></button>
+            <button id="btn-sfx" class="btn" type="button"></button>
+            <button id="btn-music" class="btn" type="button"></button>
+            <button id="btn-quit" class="btn pause__quit" type="button">✕ 그만두기</button>
+          </div>
+          <p class="hint hint--keys pause__hint">Esc / P 메뉴 · M 미니맵</p>
+        </div>
       </div>
     </section>
 

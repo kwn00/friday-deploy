@@ -4,7 +4,7 @@
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
  */
-import { ENEMY_VIEW_RADIUS, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED } from './constants';
+import { ENEMY_VIEW_RADIUS, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED, SPRINT_BONUS_PER_LEVEL } from './constants';
 import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, type WeaponDef, type WeaponId, type WeaponStats, type ZoneKind } from './content';
 import type { Enemy, Gem, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf } from './stats';
@@ -864,8 +864,8 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     }
     case 'sprint': {
       // 바라보는 쪽 옆으로 여러 번 벤다. 쉬지 않고 걸은 거리만큼 고정 피해가 더해진다 (Stack Overflow 는 붙지 않는다).
-      // 뱀서는 걸은 거리 ÷ 200,000 (단위 없음). 우리는 기본 속도로 1초 걸을 때 +1, 상한은 단계 × 5
-      const bonus = Math.min(5 * lv(p, w), (p.moveTime * moveSpeedOf(p)) / PLAYER_BASE_SPEED);
+      // 뱀서는 걸은 거리 ÷ 200,000 (단위 없음). 우리는 기본 속도로 1초 걸을 때 +1, 상한은 단계 × SPRINT_BONUS_PER_LEVEL
+      const bonus = Math.min(SPRINT_BONUS_PER_LEVEL * lv(p, w), (p.moveTime * moveSpeedOf(p)) / PLAYER_BASE_SPEED);
       const side = p.face;
       for (let i = 0; i < n; i++) {
         const y = p.y + (i % 2 === 0 ? -1 : 1) * Math.ceil(i / 2) * 8;

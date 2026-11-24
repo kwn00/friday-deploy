@@ -38,6 +38,7 @@ import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
 import { sendInvite, takeInvite } from './invite';
 import { Leaderboard } from './leaderboard';
+import { loadoutOf, type LoadoutItem } from './loadout';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
 import { CLOSE_TIMEOUT, ConnectError, Net } from './net';
@@ -72,6 +73,7 @@ const el = {
   pauseTitle: $('pause-title'),
   pauseSub: $('pause-sub'),
   pauseCode: $('pause-code'),
+  pauseItems: $('pause-items'),
   resume: $<HTMLButtonElement>('btn-resume'),
   minimapBtn: $<HTMLButtonElement>('btn-minimap'),
   sfxBtn: $<HTMLButtonElement>('btn-sfx'),
@@ -145,8 +147,10 @@ let resumeUntil = 0;
 const RESUME_GRACE_MS = 600;
 let offerDeadline = 0;
 let loadoutKey = '';
-/** 마지막 스냅샷의 내 강화 단계 (레벨업 선택지에 진화 안내를 붙일 때 쓴다) */
+/** 마지막 스냅샷의 내 강화 단계 (레벨업 선택지에 진화 안내를 붙일 때, 메뉴의 가진 아이템 목록에 쓴다) */
 let myUp: Partial<Record<UpgradeId, number>> = {};
+/** 마지막 스냅샷의 내 부활 수 (백업 + 스냅샷. 메뉴의 가진 아이템 목록에 쓴다) */
+let myRevives = 0;
 /** 지금 떠 있는 선택지 카드와 그 강화 (진화 안내를 새 스냅샷에 맞춰 다시 쓴다) */
 let offerCards: { id: UpgradeId; btn: HTMLElement }[] = [];
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
@@ -267,11 +271,14 @@ function updateHud(s: Snapshot): void {
   // 페어에서 쓰러졌거나(또는 누군가 쓰러진 뒤에 들어와서) 이번 판을 관전 중일 때
   el.spectate.classList.toggle('hidden', me.alive || mode !== 'coop' || phase !== 'playing' || peerNote);
   myUp = me.up;
+  myRevives = me.revives;
   const key = `${JSON.stringify(me.up)}|${me.revives}`;
   if (key !== loadoutKey) {
     loadoutKey = key;
     // 선택지가 스냅샷보다 먼저 왔을 수 있다 (새로 고친 뒤 이어하기, 같은 틱에 상자로 진화): 진화 안내를 지금 단계로 다시 쓴다
     refreshOfferHints();
+    // 메뉴를 열어 둔 채로 강화가 바뀌었다 (함께 하기는 메뉴를 열어도 게임이 계속된다: 레벨업 선택, 보물상자): 목록도 다시 그린다
+    if (menuOpen) renderPauseItems();
     // 보물상자를 열면 진화할 무기 (재료가 모두 갖춰졌다. 1개짜리 상자는 진화 하나만 하므로 여럿이면 차례로)
     const ready = readyMaterials(me.up);
     // 무기 칸, 패시브 칸을 따로 묶는다 (각각 최대 6개). 좁은 화면에서는 묶음마다 줄을 바꿔 무기와 패시브가 섞이지 않게 한다
@@ -495,6 +502,54 @@ function hideMenu(): void {
   el.pause.classList.add('hidden');
 }
 
+/**
+ * 메뉴의 가진 아이템 목록 (무기 묶음, 패시브 묶음, 백업). 수치와 문구는 loadout.ts 가 서버 시뮬레이션의 공용 함수로 만든다.
+ * 서버가 보낸 내 강화 단계를 보여 주기만 한다. 모든 문자열은 textContent 로 넣는다
+ */
+function renderPauseItems(): void {
+  const lo = loadoutOf(myUp, myRevives);
+  const parts: HTMLElement[] = lo.groups.map((g) => {
+    const group = node('section', `items__group items__group--${g.kind}`);
+    group.append(node('h4', 'items__title', g.title));
+    if (g.items.length === 0) {
+      group.append(node('p', 'items__empty', g.empty));
+    } else {
+      const list = node('ul', 'items__list');
+      list.append(...g.items.map(itemRow));
+      group.append(list);
+    }
+    return group;
+  });
+  if (lo.revives) parts.push(node('p', 'items__revive', lo.revives));
+  el.pauseItems.replaceChildren(...parts);
+}
+
+/** 가진 아이템 한 줄: 아이콘 · 이름과 단계 · 설명 · 지금 효과 · 다음 단계 · 진화 안내 */
+function itemRow(it: LoadoutItem): HTMLElement {
+  const li = node('li', `item item--${it.kind}${it.evolved ? ' item--evolved' : ''}${it.ready ? ' item--ready' : ''}`);
+  const head = node('p', 'item__head');
+  head.append(node('span', 'item__name', it.name), node('em', 'item__lv', it.tag));
+  if (it.badge) head.append(node('em', 'item__badge', it.badge));
+  li.append(node('span', 'item__icon', it.icon), head, node('p', 'item__desc', it.desc));
+  if (it.now.length > 0) {
+    const now = node('p', 'item__now');
+    now.append(node('em', 'item__tag', '지금'));
+    for (const e of it.now) {
+      const stat = node('span', 'item__stat', `${e.label} `);
+      stat.append(node('b', '', e.value));
+      now.append(stat);
+    }
+    li.append(now);
+  }
+  if (it.next) {
+    const next = node('p', 'item__next');
+    next.append(node('em', 'item__tag', it.next.tag), node('span', '', it.next.text));
+    li.append(next);
+  }
+  for (const line of it.evo) li.append(node('p', `item__evo item__evo--${line.tone}`, line.text));
+  return li;
+}
+
 /** 메뉴 화면만 연다 (서버에 일시정지를 요청하지 않는다) */
 function showMenu(): void {
   if (phase !== 'playing' || menuOpen) return;
@@ -508,7 +563,9 @@ function showMenu(): void {
   el.pause.classList.toggle('screen--live', !solo);
   el.pauseCode.classList.toggle('hidden', solo);
   el.pauseCode.textContent = solo ? '' : `방 코드 ${roomCode}`;
+  renderPauseItems();
   el.pause.classList.remove('hidden');
+  el.pauseItems.scrollTop = 0;
   el.resume.focus({ preventScroll: true });
 }
 
@@ -654,8 +711,13 @@ function onMessage(msg: ServerMsg): void {
       mode = msg.mode;
       roomCode = msg.code;
       loadoutKey = '';
-      // 하던 판으로 돌아온 것이면, 이미 알린 아이템을 새로 떨어진 것처럼 다시 알리지 않는다
-      if (!sameRun) resetItemNotices();
+      // 하던 판으로 돌아온 것이면, 이미 알린 아이템을 새로 떨어진 것처럼 다시 알리지 않는다.
+      // 새 판이면 지난 판의 강화도 잊는다 (첫 스냅샷이 오기 전에 메뉴를 열어도 지난 판의 목록이 보이지 않게)
+      if (!sameRun) {
+        resetItemNotices();
+        myUp = {};
+        myRevives = 0;
+      }
       if (msg.resumed === true) {
         // 끊겨 있던 동안의 화면 상태(선택창, 메뉴)는 믿을 수 없다. 서버가 지금 상태를 바로 이어서 알려준다
         el.levelup.classList.add('hidden');

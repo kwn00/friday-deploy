@@ -54,6 +54,12 @@ export const PLAYER_BASE_HP = 100;
 export const PLAYER_BASE_PICKUP = 36;
 
 /**
+ * 스프린트: 쉬지 않고 걸은 만큼 한 번 벨 때 더해지는 고정 피해의 상한 (단계 × 이 값).
+ * 기본 속도로 1초 걸을 때 +1 이다 (combat.ts 의 sprint). 메뉴의 가진 아이템 목록도 이 값을 쓴다
+ */
+export const SPRINT_BONUS_PER_LEVEL = 5;
+
+/**
  * 관전(페어 방에서 쓰러졌거나, 관전으로 합류한 경우): 입력으로 시점만 움직인다. 월드에는 아무 영향이 없다.
  * 살아 있는 캐릭터(최고 105px/s)보다 빨라서 동료를 따라다닐 수 있다.
  */

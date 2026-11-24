@@ -1330,3 +1330,385 @@ body {
     padding-inline: 52px;
   }
 }
+
+/* ───────────── 일시정지 메뉴: 가진 아이템 ─────────────
+ * 계속하기(가장 중요한 동작)는 제목 바로 아래에 두어 어느 화면에서도 스크롤 없이 보인다.
+ * 패널은 화면 높이를 넘지 않고, 가진 아이템 목록만 패널 안에서 따로 스크롤된다 (순위표와 같은 방식).
+ * 세로 화면: 제목 · 계속하기 · 목록 · 미니맵/효과음/음악 한 줄 · 그만두기 를 위에서 아래로.
+ * 넓은 화면(≥ 768px)과 낮은 가로 화면: 왼쪽에 계속하기와 버튼, 오른쪽에 목록.
+ * 무기·패시브의 바탕색은 게임 화면의 칩(chip--weapon / chip--passive)과 같은 색이다 (패시브는 작은 글자가 잘 읽히게 더 옅게 깐다). */
+.panel.panel--pause {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+  min-height: 0;
+  max-height: 100%;
+}
+.pause__head {
+  flex: none;
+}
+.panel--pause .panel__sub {
+  margin: 4px 0 0;
+}
+.panel--pause .code--small {
+  margin: 8px 0 0;
+}
+.pause__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pause__resume,
+.pause__tools,
+.pause__hint {
+  flex: none;
+}
+.pause__hint {
+  margin: 0;
+}
+/* 미니맵 · 효과음 · 음악은 한 줄에 (좁으면 낱말 사이에서 두 줄로), 그만두기는 따로 한 줄 (잘못 누르지 않게) */
+.pause__tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.pause__tools .btn {
+  min-height: 44px;
+  padding: 6px 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+.pause__tools .pause__quit {
+  grid-column: 1 / -1;
+}
+.pause__items {
+  flex: 1 1 auto;
+  min-height: 132px; /* 화면이 낮아도 목록이 두어 줄은 보이게 */
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+.pause__items-title {
+  flex: none;
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: normal;
+  color: var(--blue);
+}
+.items {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px;
+  background: var(--bg-2);
+  border: var(--px) solid var(--line);
+}
+/* 목록은 키보드로 스크롤할 수 있게 Tab 이 멈춘다. 테두리는 안쪽으로 (패널 밖으로 잘리지 않게) */
+.items:focus-visible {
+  outline: var(--px) solid var(--yellow);
+  outline-offset: calc(var(--px) * -1);
+}
+.items__group + .items__group {
+  margin-top: 10px;
+}
+.items__title {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--muted);
+}
+.items__empty {
+  margin: 0;
+  padding: 4px 2px;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: keep-all;
+}
+.items__list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.item {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 1px 6px;
+  align-items: start;
+  padding: 5px 6px;
+  background: rgba(var(--glass-rgb), 0.8);
+  border: var(--px) solid var(--line);
+}
+/* 패시브는 게임 화면의 패시브 칩처럼 버튼색 바탕. 작은 회색 글자(설명, "지금")가 잘 읽히게 옅게 깐다 (기본 테마 대비 4.8:1) */
+.item--passive {
+  background: rgba(var(--btn-rgb), 0.45);
+}
+/* 보물상자를 열면 진화할 무기 / 진화한 무기 (게임 화면의 칩과 같은 테두리 색) */
+.item--ready {
+  border-color: var(--yellow);
+}
+.item--evolved {
+  border-color: var(--purple);
+}
+.item__icon {
+  grid-row: 1 / span 6;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', var(--font);
+  font-size: 20px;
+  line-height: 1.2;
+  text-align: center;
+}
+.item > p {
+  grid-column: 2;
+  margin: 0;
+  min-width: 0;
+}
+.item__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+}
+.item__name {
+  font-size: 13px;
+  color: var(--text);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.item__lv,
+.item__badge {
+  font-style: normal;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.item__lv {
+  color: var(--yellow);
+}
+.item--evolved .item__lv {
+  color: var(--purple);
+}
+/* 최대 단계: 눈에 띄게 채운 표시 */
+.item__badge {
+  padding: 0 4px;
+  color: var(--line);
+  background: var(--green);
+}
+.item__desc {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  word-break: keep-all;
+}
+.item__now,
+.item__next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.item__next {
+  color: var(--green);
+  word-break: keep-all;
+}
+/* "지금" · "다음 Lv.4" */
+.item__tag {
+  font-style: normal;
+  font-size: 10px;
+  padding: 0 3px;
+  color: var(--muted);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.item__next .item__tag {
+  color: var(--green);
+}
+.item__stat {
+  color: var(--text);
+  white-space: nowrap;
+}
+.item__stat b {
+  font-weight: normal;
+  color: var(--yellow);
+}
+.item__evo {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--purple);
+  word-break: keep-all;
+}
+.item__evo--ready {
+  font-size: 11px;
+  color: var(--yellow);
+}
+.item__evo--from {
+  color: var(--muted);
+}
+/* 가지고 있는 백업(부활): 게임 화면의 💾 칩과 같은 색 테두리 */
+.items__revive {
+  margin: 10px 0 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(var(--glass-rgb), 0.8);
+  border: var(--px) solid var(--cyan);
+  word-break: keep-all;
+}
+
+/* 넓은 화면: 왼쪽에 계속하기와 버튼, 오른쪽에 목록 */
+@media (min-width: 768px) {
+  .panel.panel--pause {
+    max-width: 860px;
+    padding: 20px 22px;
+    gap: 12px;
+  }
+  .pause__body {
+    display: grid;
+    grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+    grid-template-rows: auto auto auto 1fr;
+    grid-template-areas:
+      'resume items'
+      'tools items'
+      'hint items'
+      '. items';
+    gap: 8px 18px;
+  }
+  .pause__resume {
+    grid-area: resume;
+  }
+  .pause__tools {
+    grid-area: tools;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .pause__tools .btn {
+    min-height: 48px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .pause__hint {
+    grid-area: hint;
+  }
+  .pause__items {
+    grid-area: items;
+    min-height: 0;
+  }
+  .pause__items-title,
+  .items__title {
+    font-size: 13px;
+  }
+  .items {
+    padding: 8px;
+  }
+  .item {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 2px 8px;
+    padding: 6px 8px;
+  }
+  .item__icon {
+    font-size: 24px;
+  }
+  .item__name {
+    font-size: 14px;
+  }
+  .item__lv,
+  .item__badge,
+  .item__desc,
+  .item__now,
+  .item__next,
+  .item__evo--ready,
+  .items__empty {
+    font-size: 12px;
+  }
+  .item__evo,
+  .item__tag {
+    font-size: 11px;
+  }
+  .items__revive {
+    font-size: 13px;
+  }
+}
+@media (min-width: 1024px) {
+  .item__name {
+    font-size: 15px;
+  }
+  .item__lv,
+  .item__badge,
+  .item__desc,
+  .item__now,
+  .item__next,
+  .item__evo--ready {
+    font-size: 13px;
+  }
+}
+
+/* 낮은 가로 화면(가로 폰): 세로가 모자라니 제목 둘레를 줄이고, 왼쪽에 계속하기와 버튼(2×2), 오른쪽에 목록.
+ * 요즘 폰은 가로로 돌리면 폭이 768px 을 넘으므로, 넓은 화면용 규칙보다 뒤에 두어야 이 규칙이 이긴다. */
+@media (orientation: landscape) and (max-height: 480px) {
+  .panel.panel--pause {
+    max-width: 820px;
+    padding: 8px 12px;
+    gap: 6px;
+  }
+  .pause__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0 12px;
+  }
+  .panel--pause .panel__title {
+    font-size: 18px;
+  }
+  .panel--pause .panel__sub {
+    flex-basis: 100%;
+    order: 2;
+    margin: 0;
+  }
+  .panel--pause .code--small {
+    margin: 0;
+    padding: 2px 8px;
+    font-size: 13px;
+  }
+  .pause__body {
+    display: grid;
+    grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas:
+      'resume items'
+      'tools items'
+      'hint items';
+    gap: 6px 10px;
+  }
+  .pause__resume {
+    grid-area: resume;
+  }
+  .pause__tools {
+    grid-area: tools;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .pause__tools .btn {
+    min-height: 44px;
+    padding: 6px 4px;
+    font-size: 12px;
+  }
+  .pause__tools .pause__quit {
+    grid-column: auto;
+  }
+  .pause__hint {
+    grid-area: hint;
+    align-self: start;
+  }
+  .pause__items {
+    grid-area: items;
+    min-height: 0;
+  }
+}
