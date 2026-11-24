@@ -17,7 +17,7 @@ import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
 import { Predictor } from './predict';
-import { SoundCues, erasedIn, type Cue } from './sound-cues';
+import { SoundCues, insideAny, wipesBetween, type Cue } from './sound-cues';
 import { THEMES, type Theme } from './themes';
 import { cameraPx, computeView, toScreen } from './view';
 import { hiddenAt, pickEdgeTargets, placeEdge, type Box, type EdgeTarget } from './edge';
@@ -357,7 +357,10 @@ export class Renderer {
 
   /** 화면에 보이는 스냅샷이 바뀌는 순간, 사라진 것들에 이펙트를 붙인다 (보이는 시점과 이펙트 시점을 맞춘다) */
   private onShown(prev: Snapshot, next: Snapshot, now: number): void {
-    if (this.onCue) for (const cue of this.cues.diff(prev, next)) this.onCue(cue);
+    // git clean 이 지운 자리: 거기서 사라진 경험치·아이템은 주운 것이 아니다 (반짝이거나 소리 내지 않는다. 지우기 고리가 대신 보인다).
+    // 받는 대로 기억해 둔 영역에서 찾는다: 영역을 실은 스냅샷이 화면에 나오지 않고 지나가도 놓치지 않게
+    const erased = insideAny(wipesBetween(this.zones.values(), prev.tick, next.tick));
+    if (this.onCue) for (const cue of this.cues.diff(prev, next, erased)) this.onCue(cue);
     // 화면의 중심 (내 캐릭터 또는 관전 시점)
     const [vx, vy] = next.view;
     // 방금 맞은 적: 번쩍임 + 밀려남 + 작은 불꽃. 월드가 멈춰 같은 틱이 다시 올 때는 되풀이하지 않는다.
@@ -369,8 +372,6 @@ export class Renderer {
       }
       if (this.hits.size > 256) for (const [id, at] of this.hits) if (now - at > HIT_MS) this.hits.delete(id);
     }
-    // git clean 이 지운 자리: 거기서 사라진 경험치·아이템은 주운 것이 아니다 (반짝이지 않는다. 지우기 고리가 대신 보인다)
-    const erased = erasedIn(next);
     const alive = this.indexOf(next).e;
     for (const e of prev.e) {
       if (alive.has(e[0]) || Math.hypot(e[2]! - vx, e[3]! - vy) > 280) continue;
@@ -389,7 +390,7 @@ export class Renderer {
     const items = new Set(next.i.map((it) => it[0]));
     for (const it of prev.i) {
       const kind = FIELD_ITEM_KINDS[it[1]];
-      if (!kind || items.has(it[0]) || erased(it[2], it[3]) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
+      if (!kind || items.has(it[0]) || (kind !== 'chest' && erased(it[2], it[3])) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
       // 보물상자는 크게 터진다
       const [n, speed] = kind === 'heal' ? [14, 40] : kind === 'chest' ? [44, 100] : [24, 70];
       this.burst(it[2], it[3], n, speed, ITEM_FX[kind].spark, kind === 'heal' ? 2 : 3);
@@ -688,8 +689,8 @@ export class Renderer {
 
     const half = EDGE_HALF * S;
     const arrow = EDGE_ARROW * S;
-    // 화면 끝·HUD 에서 띄울 거리: 상자 모서리와 화살표 끝이 들어가고 한 칸 남게
-    const r = half + arrow + S;
+    // 화면 끝·HUD 에서 띄울 거리: 화살표 끝(어두운 테두리 포함)과, 아이템 쪽으로 들썩이는 거리(2칸)까지 들어가게
+    const r = half + arrow + 3 * S;
     const min = EDGE_MIN * S;
     const targets = pickEdgeTargets(hidden, (t) => t.kind === 'chest', cx, cy);
     // 몰려 있으면 방향을 조금씩 돌려 겹치지 않게 놓는다 (상자 바깥 테두리끼리 한 칸 띄운다)
