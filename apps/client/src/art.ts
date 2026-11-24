@@ -482,4 +482,18 @@ export const ITEM_ART: Record<FieldItemKind, string[]> = {
     'kYYYYYYYYYYYYk',
     '.kkkkkkkkkkkk.',
   ],
+  /** 자석 (주우면 맵의 경험치가 모두 끌려온다): 빨간 말굽 자석, 두 끝은 은색 */
+  magnet: [
+    '..kkkkkkk..',
+    '.keeeeeeek.',
+    'kewweeeeeEk',
+    'keeekkkeeEk',
+    'keEk...keEk',
+    'keEk...keEk',
+    'keEk...keEk',
+    'kkkk...kkkk',
+    'kwlk...kwlk',
+    'kllk...kllk',
+    'kkkk...kkkk',
+  ],
 };

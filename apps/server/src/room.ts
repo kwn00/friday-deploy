@@ -527,6 +527,10 @@ export class Room {
         // 보물상자: 연 사람에게만 무엇이 올랐는지 알려 준다 (끊겨 있으면 다음 스냅샷의 강화 단계로 알 수 있다)
         const conn = this.conns.get(ev.pid);
         if (conn) this.send(conn, { t: 'chest', items: ev.items, heal: ev.heal });
+      } else if (ev.type === 'magnet' || ev.type === 'refill') {
+        // 자석을 주운 사람, 체력이 가득 찬 사람에게만 알린다 (화면의 알림용. 끊겨 있으면 보내지 않는다: 결과는 스냅샷에 이미 있다)
+        const conn = this.conns.get(ev.pid);
+        if (conn) this.send(conn, ev.type === 'magnet' ? { t: 'magnet', gems: ev.gems } : { t: 'refill', hp: ev.hp });
       } else if (ev.type === 'over') {
         this.finish();
         return true;

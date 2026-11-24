@@ -47,6 +47,12 @@ test('sound: 내 근처에서 사라진 경험치·아이템만 내가 먹은 �
   assert.deepEqual(ids(c.diff(a, snap(2))), ['gem', 'chest', 'heal']);
 });
 
+test('sound: 자석을 주우면 자석 소리 (멀리서 사라진 자석은 조용하다)', () => {
+  const c = new SoundCues();
+  const magnet = FIELD_ITEM_KINDS.indexOf('magnet');
+  assert.deepEqual(ids(c.diff(snap(1, { i: [[5, magnet, 20, 0, 0], [6, magnet, 900, 0, 0]] }), snap(2))), ['magnet']);
+});
+
 test('sound: git clean 에 지워진 경험치·아이템은 내 근처에서 사라져도 먹은 소리를 내지 않는다', () => {
   const c = new SoundCues();
   const wipe = ZONE_KINDS.indexOf('wipe');

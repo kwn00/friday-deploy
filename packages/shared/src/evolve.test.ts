@@ -44,6 +44,7 @@ function quietWorld(seed: number): { w: World; p: Player } {
   const p = addPlayer(w, 'a');
   p.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   noSpawn(w);
   return { w, p };
 }
@@ -118,8 +119,10 @@ test('보물상자: 진화할 수 있으면 그 몫이 진화가 되고, 재료 
   assert.equal(p.tally.chest.debugger, 1, '통계: 진화한 횟수');
   assert.equal(p.tally.chest.console_log, undefined);
   // 다음 상자부터는 평소처럼 (진화한 무기는 더 오르지 않는다)
+  // (무엇이 오를지는 비밀 난수다: 가진 것 중 최대가 아닌 러버덕이나 짝 패시브)
   const next = openChestHere(w, p);
-  assert.deepEqual(next, ['rubber_duck']);
+  assert.equal(next.length, 1);
+  assert.ok(next[0] === 'rubber_duck' || next[0] === 'test_coverage', `${next[0]}`);
   assert.equal(p.up.debugger, 1);
 });
 
@@ -254,6 +257,7 @@ test('rm -rf node_modules: 화면을 지워도 경험치와 아이템은 언제�
 function coopRmRf(seed: number): { w: World; a: Player; b: Player } {
   const w = createWorld(seed);
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
   b.x = a.x + 3000;

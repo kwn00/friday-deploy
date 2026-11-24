@@ -114,7 +114,7 @@ export class Minimap {
       // 새로 놓인 것: 4초 동안 테두리가 퍼져 나간다 (동작 줄이기 설정에서는 고정된 테두리)
       if (age < 4000) {
         const grow = this.calm ? u * 4 : u * 3 + ((age % 1000) / 1000) * u * 5;
-        ctx.strokeStyle = kind === 'revive' ? '#89dceb' : kind === 'levelup' ? '#f9e2af' : kind === 'chest' ? '#fab387' : '#a6e3a1';
+        ctx.strokeStyle = kind === 'revive' ? '#89dceb' : kind === 'levelup' ? '#f9e2af' : kind === 'chest' ? '#fab387' : kind === 'magnet' ? '#f38ba8' : '#a6e3a1';
         ctx.lineWidth = Math.max(1, u >> 1);
         ctx.strokeRect(Math.round(x - grow) + 0.5, Math.round(y - grow) + 0.5, Math.round(grow * 2), Math.round(grow * 2));
       }
@@ -140,6 +140,20 @@ export class Minimap {
         ctx.fillStyle = '#f9e2af';
         ctx.fillRect(x - u * 2, top + u, u * 4, Math.max(1, u >> 1));
         ctx.fillRect(x - (u >> 1), top + u, u, u);
+      } else if (kind === 'magnet') {
+        // 자석: 빨간 말굽 (아래가 열린 U 자, 두 끝은 은색). 적의 작은 분홍 점과 모양으로 구별된다
+        const top = y - Math.round(u * 1.5);
+        ctx.fillStyle = '#11111b';
+        ctx.fillRect(x - u * 2 - 1, top - 1, u * 4 + 2, u + 2);
+        ctx.fillRect(x - u * 2 - 1, top - 1, u + 2, u * 3 + 2);
+        ctx.fillRect(x + u - 1, top - 1, u + 2, u * 3 + 2);
+        ctx.fillStyle = '#f38ba8';
+        ctx.fillRect(x - u * 2, top, u * 4, u);
+        ctx.fillRect(x - u * 2, top, u, u * 2);
+        ctx.fillRect(x + u, top, u, u * 2);
+        ctx.fillStyle = '#eff1f5';
+        ctx.fillRect(x - u * 2, top + u * 2, u, u);
+        ctx.fillRect(x + u, top + u * 2, u, u);
       } else {
         // 백업: 하늘색 네모 (가장 드물다. 조금 크게)
         dot(x, y, u * 4 + 2, '#11111b');

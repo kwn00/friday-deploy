@@ -34,6 +34,7 @@ import {
 } from '@friday-deploy/shared';
 import { applyTheme } from './apply-theme';
 import { Sound } from './audio';
+import { magnetText, refillText } from './alerts';
 import { chestText } from './chest';
 import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
@@ -400,6 +401,7 @@ const ITEM_DROPPED: Record<FieldItemKind, string> = {
   levelup: 'LGTM 이 떨어졌어요',
   revive: '백업이 떨어졌어요!',
   chest: '보물상자가 떨어졌어요! 닿으면 열려요',
+  magnet: '자석이 떨어졌어요! 주우면 경험치가 모두 끌려와요',
 };
 
 let minimapOn = store.get('minimap') !== '0';
@@ -825,6 +827,17 @@ function onMessage(msg: ServerMsg): void {
         toast(chestText(msg.items, msg.heal));
         // 진화했으면 한 번 더 축하한다 (상자 여는 소리는 화면의 상자가 사라질 때 이미 났다)
         if (msg.items.some((id) => evolutionOf(id))) sound.play('evolve');
+      }
+      break;
+    case 'magnet':
+      // 내가 주운 자석: 몇 개가 끌려오는지 (모양이 맞을 때만 숫자를 쓴다. 주운 소리는 화면의 자석이 사라질 때 이미 났다)
+      if (phase === 'playing') toast(magnetText(msg.gems));
+      break;
+    case 'refill':
+      // 강화를 모두 마친 뒤의 레벨업: 체력이 가득 찼다 (체력은 다음 스냅샷이 그린다)
+      if (phase === 'playing') {
+        toast(refillText(msg.hp));
+        sound.play('heal');
       }
       break;
     case 'pause':

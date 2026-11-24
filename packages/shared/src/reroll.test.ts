@@ -28,6 +28,7 @@ function quietWorld(seed: number): { w: World; p: Player } {
   const p = addPlayer(w, 'a');
   p.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   return { w, p };
 }
 
@@ -222,6 +223,7 @@ test('통신: reroll 은 어느 선택지(레벨)를 새로고침하는지만 �
 test('새로고침: 함께 하기에서는 사람마다 두 번이고, 한 사람의 새로고침은 다른 사람의 선택지와 횟수를 건드리지 않는다', () => {
   const w = createWorld(15);
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   const a = addPlayer(w, 'a');
   const b = addPlayer(w, 'b');
   for (const p of [a, b]) {

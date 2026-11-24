@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import type { WebSocket } from 'ws';
-import { decodeSnapshot, xpForLevel, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
+import { UPGRADES, decodeSnapshot, maxHpOf, xpForLevel, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
 import { Leaderboard, MemoryStore, type RunReport } from './leaderboard';
 import { RoomManager, type Conn, type Room } from './room';
 
@@ -1042,6 +1042,7 @@ test('바닥 영역: 연결마다 한 번씩만 보낸다 (레벨업 선택으�
   p.up = { console_log: 1, hotfix: 3 };
   p.xpNext = 1e9;
   room.world.itemCd = 1e9;
+  room.world.magnetCd = 1e9;
   const seen = new Map<number, number>();
   const count = (): void => {
     for (const s of a.ws.snaps.splice(0)) for (const z of s.z) seen.set(z[0], (seen.get(z[0]) ?? 0) + 1);
@@ -1205,4 +1206,47 @@ test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레�
   room.onReroll(a.conn, second.level);
   advance(50);
   assert.equal(me.rerolls, 1);
+});
+
+test('자석·체력 채우기: 주운 사람(채워진 사람)에게만 알린다. 끌어당기기와 체력은 서버가 한다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b');
+  room.onStart(a.conn);
+  const w = room.world;
+  w.itemCd = 1e9;
+  w.magnetCd = 1e9;
+  const pa = w.players.get(a.conn.pid)!;
+  const pb = w.players.get(b.conn.pid)!;
+  pb.x = pa.x + 3000;
+  pb.y = pa.y;
+  for (const p of [pa, pb]) {
+    p.xpNext = 1e9;
+    p.cd.console_log = 1e9;
+  }
+  w.gems.push({ id: 90_001, x: pa.x + 2000, y: pa.y, v: 1 }, { id: 90_002, x: pa.x - 1200, y: pa.y + 900, v: 1 });
+  w.items.push({ id: 90_010, kind: 'magnet', x: pa.x + 3, y: pa.y, ttl: 90 });
+  mock.timers.tick(50);
+  assert.deepEqual(last(a.ws, 'magnet'), { t: 'magnet', gems: 2 });
+  assert.equal(last(b.ws, 'magnet'), undefined, '다른 사람에게는 보내지 않는다');
+  assert.ok(w.gems.every((g) => g.to === pa.id), '끌어당기는 것은 서버');
+
+  // 강화를 모두 마친 뒤의 레벨업 (무기 6칸·패시브 6칸이 모두 최대. 저절로 차는 워라밸은 빼서 찬 양을 정확히 잰다): 체력이 가득 차고 그 사람에게만 알린다
+  for (const id of ['console_log', 'rubber_duck', 'hotfix', 'regex', 'ai_agent', 'firewall', 'coffee', 'cdn', 'stack_overflow', 'dark_mode', 'npm_install', 'mech_keyboard'] as const) {
+    pb.up[id] = UPGRADES[id].max;
+  }
+  pb.hp = 7;
+  pb.xp = 0;
+  pb.xpNext = 5;
+  w.gems.push({ id: 90_003, x: pb.x + 2, y: pb.y, v: 5 });
+  mock.timers.tick(50);
+  const refill = last(b.ws, 'refill');
+  assert.ok(refill, '알림이 간다');
+  assert.equal(refill.hp, Math.ceil(maxHpOf(pb)) - 7);
+  assert.equal(pb.hp, maxHpOf(pb));
+  assert.equal(last(b.ws, 'levelup'), undefined, '선택지는 오지 않는다');
+  assert.equal(last(a.ws, 'refill'), undefined);
+  room.leave(a.conn);
+  room.leave(b.conn);
 });

@@ -9,7 +9,9 @@ import {
   FIELD_ITEM_MAX_DIST,
   FIELD_ITEM_MIN_DIST,
   FIELD_ITEM_TTL,
+  MAGNET_INTERVAL,
   MAX_FIELD_ITEMS,
+  MAX_MAGNETS,
   MAX_REVIVES,
   REVIVE_BLAST_RADIUS,
   REVIVE_HP_FRACTION,
@@ -273,7 +275,11 @@ export type WorldEvent =
   | { type: 'offers'; pid: number }
   | { type: 'over' }
   /** 보물상자를 열었다: 오른 것들 (같은 것이 여러 번 있을 수 있다)과 대신 찬 체력 */
-  | { type: 'chest'; pid: number; items: UpgradeId[]; heal: number };
+  | { type: 'chest'; pid: number; items: UpgradeId[]; heal: number }
+  /** 자석을 주웠다: 이번에 끌어당기기 시작한 경험치의 수 (이미 내게 끌려오던 것은 세지 않는다) */
+  | { type: 'magnet'; pid: number; gems: number }
+  /** 더 올릴 것이 없는 레벨업이라 체력을 가득 채웠다: 찬 양 (올림. 이미 가득이었으면 이벤트가 없다) */
+  | { type: 'refill'; pid: number; hp: number };
 
 /** 예약된 맵 이벤트 (버그 떼, 깨지는 테스트 포위) */
 interface PendingEvent {
@@ -311,6 +317,8 @@ export interface World {
   items: FieldItem[];
   /** 다음 필드 아이템이 놓이기까지 남은 시간(초) */
   itemCd: number;
+  /** 다음 자석이 놓이기까지 남은 시간(초). 다른 필드 아이템과 따로 센다 */
+  magnetCd: number;
   /** 마지막 step 에서 틱이 실제로 진행됐는지 (멈춰 있으면 false) */
   stepped: boolean;
   /** 다음 회복 아이템이 떨어질 수 있을 때까지 남은 시간(초) */
@@ -362,6 +370,7 @@ export function createWorld(source: Seed | WorldRandom, secret?: Rand): World {
     healCd: HEAL_DROP_COOLDOWN,
     items: [],
     itemCd: fieldItemDelay(random.secret),
+    magnetCd: magnetDelay(random.secret),
     stepped: false,
     wave: -1,
     spawnCd: 0,
@@ -535,14 +544,26 @@ function fieldItemDelay(secret: Rand): number {
   return FIELD_ITEM_INTERVAL * (1 - FIELD_ITEM_JITTER + 2 * FIELD_ITEM_JITTER * secret());
 }
 
+/** 다음 자석까지의 시간. 필드 아이템처럼 비밀 난수로 흔든다 */
+function magnetDelay(secret: Rand): number {
+  return MAGNET_INTERVAL * (1 - FIELD_ITEM_JITTER + 2 * FIELD_ITEM_JITTER * secret());
+}
+
 /**
  * 필드 아이템 하나를 놓는다. 누구 근처에, 어느 방향·거리에, 무엇을 놓을지 모두 비밀 난수로 정한다
  * (보이는 난수를 쓰지 않으므로 적 스폰의 흐름에 영향을 주지 않는다).
+ * kind 를 주면(자석) 종류는 굴리지 않고 그것을 놓는다.
  */
-function spawnFieldItem(world: World, alive: Player[]): void {
+function spawnFieldItem(world: World, alive: Player[], fixed?: FieldItemKind): void {
   const anchor = alive[Math.floor(world.secret() * alive.length)]!;
   const a = world.secret() * Math.PI * 2;
   const d = FIELD_ITEM_MIN_DIST + world.secret() * (FIELD_ITEM_MAX_DIST - FIELD_ITEM_MIN_DIST);
+  const x = anchor.x + Math.cos(a) * d;
+  const y = anchor.y + Math.sin(a) * d;
+  if (fixed) {
+    world.items.push({ id: world.nextId++, kind: fixed, x, y, ttl: FIELD_ITEM_TTL });
+    return;
+  }
   const total = FIELD_ITEM_KINDS.reduce((sum, k) => sum + FIELD_ITEMS[k].weight, 0);
   let roll = world.secret() * total;
   let kind: FieldItemKind = FIELD_ITEM_KINDS[0];
@@ -553,8 +574,11 @@ function spawnFieldItem(world: World, alive: Player[]): void {
       break;
     }
   }
-  world.items.push({ id: world.nextId++, kind, x: anchor.x + Math.cos(a) * d, y: anchor.y + Math.sin(a) * d, ttl: FIELD_ITEM_TTL });
+  world.items.push({ id: world.nextId++, kind, x, y, ttl: FIELD_ITEM_TTL });
 }
+
+/** 피자·LGTM·백업처럼 저절로 놓이는 것 (MAX_FIELD_ITEMS 로 세는 것). 보물상자와 자석은 따로 센다 */
+const isRegularItem = (it: FieldItem): boolean => it.kind !== 'chest' && it.kind !== 'magnet';
 
 /** 이 플레이어가 지금 이 아이템을 주울 수 있는지 (못 줍는 것은 그 자리에 남는다) */
 function canTake(p: Player, kind: FieldItemKind): boolean {
@@ -579,11 +603,35 @@ function takeItem(world: World, p: Player, it: FieldItem): void {
   } else if (kind === 'revive') {
     p.revives++;
     p.backups++;
+  } else if (kind === 'magnet') {
+    pullAllGems(world, p);
   } else {
     // 지금 레벨을 채우는 데 필요한 만큼을 통째로 준다: 정확히 한 레벨 오르고, 모으던 경험치는 그대로 남는다
     p.xp += p.xpNext;
     checkLevelUp(world, p);
   }
+}
+
+/**
+ * 자석 (뱀서 Vacuum): 맵의 경험치를 거리와 상관없이 모두 이 사람에게 끌어당긴다. 주운 순간 땅에 있는 것만 (나중에 떨어지는 것은 끌지 않는다).
+ * - 다른 살아 있는 사람이 이미 끌어당기고 있는 것은 그대로 둔다 (곧 그 사람이 먹는다). 다만 그 사람이 레벨업을 고르는 중이라
+ *   다음 틱에 놓을 것(rm -rf node_modules 가 끈 것이 아닌 것)과, 쓰러졌거나 나간 사람이 끌던 것은 내가 가져온다
+ * - rm -rf node_modules 가 끈 것처럼(hold) 내가 레벨업을 고르는 동안에도 놓지 않고 그 자리에서 기다렸다가 이어서 끌려간다
+ *   (자석으로 레벨이 여러 번 오를 수 있고, 함께 하는 판에서는 고르는 동안에도 월드가 돈다. 놓아 버리면 내 획득 범위 밖에 그대로 남는다)
+ */
+function pullAllGems(world: World, p: Player): void {
+  let pulled = 0;
+  for (const g of world.gems) {
+    if (g.to !== p.id) {
+      const owner = g.to === undefined ? undefined : world.players.get(g.to);
+      if (owner && owner.alive && (g.hold || owner.offers === null)) continue;
+      g.to = p.id;
+      g.sp = GEM_PULL_SPEED;
+      pulled++;
+    }
+    g.hold = true;
+  }
+  world.events.push({ type: 'magnet', pid: p.id, gems: pulled });
 }
 
 /**
@@ -668,7 +716,7 @@ function revive(world: World, p: Player): void {
  * - 가진 것은 최대 단계 전까지, 새 것은 칸이 남아 있을 때만 (무기 6칸, 패시브 6칸)
  * - 칸이 다 차지 않았으면 먼저 두 번, 확률 1 + 0.3x - 1/운 (x: 짝수 레벨 2, 홀수 레벨 1) 으로 가진 것 하나씩을 넣는다
  * - 나머지는 rarity 를 무게로 겹치지 않게 뽑는다. 3개, 확률 1 - 1/운 으로 4개
- * - 올릴 것이 하나도 없으면 회복 아이템 하나만큼 회복한다
+ * - 올릴 것이 하나도 없으면(강화를 모두 마쳤다) 선택지 대신 체력을 가득 채운다 (뱀서는 금화나 닭고기를 준다. 우리 규칙)
  * 모두 비밀 난수로 정한다: 보이는 스폰을 관찰해도 다음 선택지를 알 수 없게
  */
 function checkLevelUp(world: World, p: Player): void {
@@ -678,7 +726,7 @@ function checkLevelUp(world: World, p: Player): void {
     p.xpNext = xpForLevel(p.level);
     const pool = offerPool(p);
     if (pool.length === 0) {
-      heal(p);
+      refill(world, p);
       continue;
     }
     const count = Math.min(pool.length, OFFER_COUNT + (world.secret() < extraOfferChanceOf(p) ? 1 : 0));
@@ -689,6 +737,18 @@ function checkLevelUp(world: World, p: Player): void {
     for (const u of picked) tallyUp(p.tally.offered, u);
     world.events.push({ type: 'offers', pid: p.id });
   }
+}
+
+/**
+ * 강화를 모두 마친 뒤의 레벨업: 체력을 가득 채운다. 화면에 보이는 체력(올림)이 이미 가득이면 아무것도 하지 않는다 (알림도 없다).
+ * 쓰러진 사람에게는 오지 않는다 (경험치는 살아 있는 사람만 줍는다)
+ */
+function refill(world: World, p: Player): void {
+  const max = maxHpOf(p);
+  if (!p.alive || Math.ceil(p.hp) >= Math.ceil(max)) return;
+  const before = p.hp;
+  p.hp = max;
+  world.events.push({ type: 'refill', pid: p.id, hp: Math.ceil(max) - Math.ceil(before) });
 }
 
 /** 선택지에 나올 수 있는 것: 가진 것은 최대 단계 전까지, 새 것은 칸이 남아 있을 때만 */
@@ -942,7 +1002,13 @@ function advance(world: World, dt: number): void {
   world.itemCd -= dt;
   if (world.itemCd <= 0) {
     world.itemCd = fieldItemDelay(world.secret);
-    if (world.items.filter((it) => it.kind !== 'chest').length < MAX_FIELD_ITEMS) spawnFieldItem(world, alive);
+    if (world.items.filter(isRegularItem).length < MAX_FIELD_ITEMS) spawnFieldItem(world, alive);
+  }
+  // 자석: 다른 필드 아이템과 따로 센다 (맵에 이미 MAX_MAGNETS 개 있으면 이번 차례는 건너뛴다)
+  world.magnetCd -= dt;
+  if (world.magnetCd <= 0) {
+    world.magnetCd = magnetDelay(world.secret);
+    if (world.items.filter((it) => it.kind === 'magnet').length < MAX_MAGNETS) spawnFieldItem(world, alive, 'magnet');
   }
   for (const p of players) {
     if (p.shield > 0) p.shield = Math.max(0, p.shield - dt);

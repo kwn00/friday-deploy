@@ -90,6 +90,16 @@ const SFX_DEFS = {
   pickup: { tones: seq('square', ['E5', 'B5'], 0.06, 0.15, 0.1), gap: 120, voices: 1 },
   /** 백업(부활 아이템)을 주움 */
   backup: { tones: seq('sine', ['G5', 'B5', 'D6', 'G6'], 0.05, 0.22, 0.25), gap: 300, voices: 1 },
+  /** 자석을 주움: 위로 휘감아 올라가는 소리 (경험치가 끌려오기 시작한다) */
+  magnet: {
+    tones: [
+      { wave: 'sine', f: 220, to: 880, dur: 0.3, vol: 0.22 },
+      { wave: 'triangle', f: 440, to: 1760, at: 0.08, dur: 0.3, vol: 0.12 },
+      ...seq('square', ['E6', 'G6'], 0.05, 0.1, 0.12).map((t) => ({ ...t, at: (t.at ?? 0) + 0.32 })),
+    ],
+    gap: 500,
+    voices: 1,
+  },
   /** 보물상자를 엶 */
   chest: {
     tones: [{ wave: 'noise', f: 400, dur: 0.12, vol: 0.35 }, ...seq('triangle', ['C5', 'E5', 'G5', 'C6', 'E6', 'G6'], 0.07, 0.28, 0.4).map((t) => ({ ...t, at: (t.at ?? 0) + 0.1 }))],

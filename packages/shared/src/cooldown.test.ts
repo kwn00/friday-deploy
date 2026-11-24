@@ -15,6 +15,7 @@ function setup(seed: number, up: Partial<Record<UpgradeId, number>>): { w: World
   p.xpNext = 1e12;
   p.shield = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   p.up = { ...up };
   return { w, p };
 }

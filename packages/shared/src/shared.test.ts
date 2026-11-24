@@ -284,6 +284,7 @@ test('sim: 러버덕은 정해진 시간 돌고 쉬기를 되풀이하고, 화�
   const p = addPlayer(w, 'a');
   p.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   p.up.rubber_duck = 4; // 2마리 (2단계에 +1), 3단계에 반경·속도 +, 4단계에 지속 +0.5초
   const st = effectiveStats(p, 'rubber_duck');
   assert.equal(st.amount, 2);
@@ -746,8 +747,10 @@ test('필드 아이템: 아주 가끔, 화면 밖 적당한 거리에 놓이고,
   for (let i = 0; i < 20 * 60 * 60; i++) {
     p.hp = 1e9;
     quietStep(w);
-    assert.ok(w.items.length <= MAX_FIELD_ITEMS);
-    for (const it of w.items) {
+    // 자석은 따로 센다 (아래의 자석 테스트)
+    const regular = w.items.filter((it) => it.kind !== 'magnet');
+    assert.ok(regular.length <= MAX_FIELD_ITEMS);
+    for (const it of regular) {
       if (born.has(it.id)) continue;
       born.set(it.id, w.time);
       kinds.push(it.kind);
@@ -809,6 +812,7 @@ test('필드 아이템: 피자는 체력이 닳았을 때만, LGTM 은 정확히
   const p = addPlayer(w, 'a');
   p.xpNext = 1e9;
   w.itemCd = 1e9; // 저절로 놓이는 것은 끄고 직접 놓는다
+  w.magnetCd = 1e9;
   const put = (kind: 'heal' | 'levelup' | 'revive', dx = 5): number => {
     const id = w.nextId++;
     w.items.push({ id, kind, x: p.x + dx, y: p.y, ttl: FIELD_ITEM_TTL });
@@ -865,6 +869,7 @@ test('필드 아이템: 함께 할 때는 가장 가까운 사람이 갖고, 쓰
   const watcher = addPlayer(w, 'w', true);
   a.xpNext = b.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   a.x = a.y = b.y = 0;
   b.x = 40;
   w.items.push({ id: 9101, kind: 'revive', x: 25, y: 0, ttl: 90 });
@@ -889,6 +894,7 @@ test('부활: 백업이 있으면 쓰러질 순간에 그 자리에서 되살아
   const p = addPlayer(w, 'a');
   p.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   p.revives = 1;
   p.hp = 0.5;
   const swarm = (): void => {
@@ -936,6 +942,7 @@ test('필드 아이템: 멀리 있어도 스냅샷에 실린다 (미니맵용). 
   const b = addPlayer(w, 'b');
   a.xpNext = b.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   a.x = a.y = 0;
   b.x = 9000;
   b.y = -4000;
@@ -980,6 +987,7 @@ test('듀얼 모니터: 공격 범위(크기)가 한 단계에 10% 씩 커진다
     const p = addPlayer(w, 'a');
     p.xpNext = 1e9;
     w.itemCd = 1e9;
+    w.magnetCd = 1e9;
     if (level > 0) p.up.dual_monitor = level;
     const target = { id: 9500, type: 'merge_conflict' as const, x: p.x + dist, y: p.y, hp: 1e9, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false };
     for (let i = 0; i < 20 * 4; i++) {

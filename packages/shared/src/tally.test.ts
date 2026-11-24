@@ -8,6 +8,7 @@ function quiet(seed: number): { w: World; p: Player } {
   const p = addPlayer(w, 'a');
   p.cd.console_log = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   return { w, p };
 }
 function still(w: World): void {

@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -136,6 +136,15 @@ export const FIELD_ITEM_FADE = 10;
 /** 살아 있는 플레이어 한 명에게서 이 거리 범위에 놓인다 (화면 밖. 기본 속도로 걸어서 7~11초) */
 export const FIELD_ITEM_MIN_DIST = 500;
 export const FIELD_ITEM_MAX_DIST = 800;
+
+/**
+ * 자석: 주우면 맵의 경험치가 거리와 상관없이 모두 주운 사람에게 끌려온다 (뱀서 Vacuum).
+ * 다른 필드 아이템(피자·LGTM·백업)과 따로 센다: 평균 MAGNET_INTERVAL 초에 하나 (간격은 FIELD_ITEM_JITTER 만큼 흔들린다).
+ * 놓이는 거리와 수명은 다른 필드 아이템과 같다. 다른 아이템의 수(MAX_FIELD_ITEMS)에 세지 않아서, 자석 때문에 피자·LGTM 이 줄지 않는다
+ */
+export const MAGNET_INTERVAL = 180;
+/** 맵에 동시에 있을 수 있는 자석 수. 이미 있으면 그 차례는 건너뛴다 */
+export const MAX_MAGNETS = 1;
 
 /** 부활(백업): 한 번에 가질 수 있는 개수 */
 export const MAX_REVIVES = 1;
