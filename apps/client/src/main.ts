@@ -163,6 +163,12 @@ let offerCards: { id: UpgradeId; btn: HTMLElement }[] = [];
 let rerollWait: false | 'pointer' | 'key' = false;
 /** 지금 떠 있는 선택지의 레벨 (서버가 보낸 값. 새로고침할 때 그대로 돌려보낸다) */
 let offerLevel = 0;
+/**
+ * 선택지가 새로 뜬 뒤 잠깐은 새로고침을 받지 않는다: 두 번 누르기(두 번 탭)의 두 번째가 방금 온 새 카드에 쓰여
+ * 한 판에 두 번뿐인 새로고침을 한꺼번에 써 버리지 않게. 레벨업 창이 뜨는 순간 화면을 누르던 손가락도 막는다
+ */
+let rerollReadyAt = 0;
+const REROLL_GUARD_MS = 400;
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
 let resultBoard: BoardId | null = null;
 
@@ -256,7 +262,7 @@ function setPhase(next: Phase): void {
     // 판이 끝나거나 나가면 떠 있던 아이템 알림도 치운다
     window.clearTimeout(toastTimer);
     el.toast.classList.add('hidden');
-    el.levelup.classList.add('hidden');
+    hideLevelup();
     hideMenu();
     // 일시정지한 채로 판을 떠나면 "재개" 알림이 오지 않는다. 남겨 두면 다음 판의 선택 시간 표시가 틀어진다.
     pausedSince = 0;
@@ -462,7 +468,9 @@ function showOffers(offers: Offer[], timeout: number, level: number, rerolls: nu
   offerLevel = Number.isInteger(level) ? level : 0;
   const refocus = rerollWait === 'key';
   rerollWait = false;
-  offerDeadline = performance.now() + timeout * 1000;
+  rerollReadyAt = performance.now() + REROLL_GUARD_MS;
+  // 멈춰 있는 동안 온 선택지는 멈춘 때부터 센다 (다시 움직일 때 멈춘 시간만큼 미루므로, 서버처럼 다시 움직인 때부터 timeout 이 된다)
+  offerDeadline = (pausedSince > 0 ? pausedSince : performance.now()) + timeout * 1000;
   // 선택지는 보통 3개, 배포 기도로 4개가 되기도 하고, 거의 다 최대 단계면 그보다 적다. 개수에 맞춰 배치한다
   el.offers.dataset.n = String(offers.length);
   el.offers.replaceChildren(
@@ -479,7 +487,7 @@ function showOffers(offers: Offer[], timeout: number, level: number, rerolls: nu
         if (rerollWait) return;
         sound.play('pick');
         net.sendPick(i);
-        el.levelup.classList.add('hidden');
+        hideLevelup();
         if (mode === 'solo') resumeUntil = performance.now() + RESUME_GRACE_MS;
       });
       return btn;
@@ -489,8 +497,15 @@ function showOffers(offers: Offer[], timeout: number, level: number, rerolls: nu
   refreshOfferHints();
   showReroll(rerolls, rerollable);
   el.levelup.classList.remove('hidden');
-  // 키보드로 새로고침했으면 초점을 되돌린다 (누르는 동안 버튼이 꺼져서 초점을 잃었다)
-  if (refocus) (el.reroll.disabled ? (el.offers.firstElementChild as HTMLElement | null) : el.reroll)?.focus();
+  // 키보드로 새로고침했으면 초점을 되돌린다 (누르는 동안 버튼이 꺼져서 초점을 잃었다). 그사이 메뉴를 열었으면 메뉴의 초점을 뺏지 않는다
+  if (refocus && !menuOpen && phase === 'playing') (el.reroll.disabled ? (el.offers.firstElementChild as HTMLElement | null) : el.reroll)?.focus();
+}
+
+/** 선택창을 닫는다. 새로고침의 답을 기다리던 중이었으면 그것도 잊는다 (답 없이 닫혔다: 시간이 끝났거나, 판이 끝났거나, 다시 연결했다) */
+function hideLevelup(): void {
+  el.levelup.classList.add('hidden');
+  rerollWait = false;
+  el.offers.classList.remove('offers--wait');
 }
 
 /** 새로고침 버튼: 남은 횟수 (서버가 보낸 값. 모양을 확인하고 쓴다) */
@@ -502,6 +517,8 @@ function showReroll(rerolls: number, rerollable: boolean): void {
 }
 
 el.reroll.addEventListener('click', (e) => {
+  // e.detail > 1: 두 번 누르기의 두 번째 클릭
+  if (e.detail > 1 || performance.now() < rerollReadyAt) return;
   if (rerollWait || el.reroll.disabled || el.levelup.classList.contains('hidden')) return;
   // 키보드(Enter·Space)로 누른 클릭은 detail 이 0 이다
   rerollWait = e.detail === 0 ? 'key' : 'pointer';
@@ -534,6 +551,7 @@ function refreshOfferHints(): void {
 function hideMenu(): void {
   menuOpen = false;
   el.pause.classList.add('hidden');
+  el.levelup.inert = false;
 }
 
 /**
@@ -599,6 +617,8 @@ function showMenu(): void {
   el.pauseCode.textContent = solo ? '' : `방 코드 ${roomCode}`;
   renderPauseItems();
   el.pause.classList.remove('hidden');
+  // 메뉴 뒤에 가려진 선택창(카드, 새로고침)에는 Tab·Enter 가 닿지 않게 한다 (멈춘 채로 고르거나 새로고침하지 않게)
+  el.levelup.inert = true;
   el.pauseItems.scrollTop = 0;
   el.resume.focus({ preventScroll: true });
 }
@@ -754,7 +774,7 @@ function onMessage(msg: ServerMsg): void {
       }
       if (msg.resumed === true) {
         // 끊겨 있던 동안의 화면 상태(선택창, 메뉴)는 믿을 수 없다. 서버가 지금 상태를 바로 이어서 알려준다
-        el.levelup.classList.add('hidden');
+        hideLevelup();
         hideMenu();
         pausedSince = 0;
       }
@@ -794,8 +814,9 @@ function onMessage(msg: ServerMsg): void {
       updateHud(msg);
       break;
     case 'levelup':
-      // 선택창이 이미 떠 있으면 새로고침의 답이다: 레벨업 소리를 다시 내지 않는다
-      if (el.levelup.classList.contains('hidden')) sound.play('levelup');
+      // 선택창이 이미 같은 레벨로 떠 있으면 새로고침의 답이다: 레벨업 소리를 다시 내지 않는다.
+      // 레벨이 다르면(시간이 끝나 서버가 대신 고르고 다음 레벨업으로 넘어갔다) 창이 떠 있어도 새 레벨업이다
+      if (el.levelup.classList.contains('hidden') || msg.level !== offerLevel) sound.play('levelup');
       showOffers(msg.offers, msg.timeout, msg.level, msg.rerolls, msg.rerollable);
       break;
     case 'chest':
@@ -1344,7 +1365,7 @@ function frame(now: number): void {
   if (!el.levelup.classList.contains('hidden')) {
     const left = pausedSince > 0 ? offerDeadline - pausedSince : offerDeadline - now;
     // 시간이 끝나면 서버가 첫 번째 것을 대신 고르고 게임을 이어 간다. 선택창을 남겨 두면 화면과 조작을 가린다.
-    if (left <= 0) el.levelup.classList.add('hidden');
+    if (left <= 0) hideLevelup();
     else el.offerTimer.textContent = `(${Math.ceil(left / 1000)}s)`;
   }
   requestAnimationFrame(frame);

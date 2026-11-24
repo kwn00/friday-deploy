@@ -1234,6 +1234,14 @@ body {
   }
 }
 
+/* 좁은 가로 화면(480×320 등): 왼쪽 위 새로고침 버튼이 제목·안내 글자를 가리지 않게 글자를 그만큼 오른쪽으로 비켜 둔다 */
+@media (orientation: landscape) and (max-height: 480px) and (max-width: 559px) {
+  .panel--levelup .panel__title,
+  .panel--levelup .panel__sub {
+    padding-left: 132px;
+  }
+}
+
 /* 입력 장치에 따른 안내 문구 (화면 크기가 아니라 포인터 종류 기준) */
 @media (hover: hover) and (pointer: fine) {
   .hint--touch {

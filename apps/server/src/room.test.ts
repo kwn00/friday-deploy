@@ -1128,9 +1128,12 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   assert.ok(a.ws.msgs.length > n, '바로 왔다');
   assert.deepEqual([third.rerolls, third.rerollable], [0, false]);
 
-  // 다 쓴 뒤의 새로고침: 위반이 아니고, 지금 선택지를 다시 보내 화면이 기다리며 멈춰 있지 않게 한다
+  // 다 쓴 뒤의 새로고침: 위반이 아니고, 지금 선택지를 (한 번) 다시 보내 화면이 기다리며 멈춰 있지 않게 한다
+  const before = a.ws.msgs.length;
   room.onReroll(a.conn, me.level);
-  assert.deepEqual(last(a.ws, 'levelup')!.offers, third.offers);
+  const resent = a.ws.msgs.slice(before).filter((m) => m.t === 'levelup');
+  assert.equal(resent.length, 1, '지금 선택지를 다시 보냈다');
+  assert.deepEqual(resent[0], third);
   assert.equal(me.rerolls, 0);
   // 같은 선택지에는 한 번만 답한다: 멈춰 둔 채 거듭 보내도 답이 쌓이지 않는다 (전송량)
   const sent = a.ws.msgs.length;
@@ -1140,6 +1143,17 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   room.onPause(a.conn, false);
   assert.equal(room.onPick(a.conn, 0), true);
   assert.equal(me.up[third.offers[0]!.id], third.offers[0]!.level, '고른 것은 마지막 새 선택지의 첫 카드');
+
+  // 새 선택지가 뜨면 다시 한 번 답한다 (한 번만 답하는 것은 선택지마다다)
+  me.xp = me.xpNext;
+  room.world.gems.push({ id: 99_998, x: me.x, y: me.y, v: 1 });
+  advance(100);
+  const next = last(a.ws, 'levelup')!;
+  assert.deepEqual([next.level, next.rerolls, next.rerollable], [third.level + 1, 0, false]);
+  const m0 = a.ws.msgs.length;
+  room.onReroll(a.conn, next.level);
+  room.onReroll(a.conn, next.level);
+  assert.equal(a.ws.msgs.slice(m0).filter((m) => m.t === 'levelup').length, 1);
 });
 
 test('새로고침: 다시 연결해도 남은 새로고침 수가 이어진다', () => {
@@ -1180,8 +1194,10 @@ test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레�
   const second = last(a.ws, 'levelup')!;
   assert.equal(second.level, first.level + 1, '서버가 대신 골랐고 다음 선택지가 떴다');
   // 화면은 아직 첫 선택지를 보고 새로고침을 눌렀다
+  const before = a.ws.msgs.length;
   room.onReroll(a.conn, first.level);
   advance(50);
+  assert.equal(a.ws.msgs.slice(before).filter((m) => m.t === 'levelup').length, 1, '지금 선택지를 한 번 다시 보낸다');
   assert.equal(me.rerolls, 2, '횟수가 줄지 않는다');
   assert.deepEqual(me.offers, second.offers.map((o) => o.id), '다음 선택지는 그대로');
   assert.deepEqual(last(a.ws, 'levelup')!.offers, second.offers);
