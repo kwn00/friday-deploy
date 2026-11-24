@@ -2,7 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;
@@ -82,8 +82,13 @@ export const GEM_CONTACT = 6;
 
 /** 레벨업 선택지 수 (배포 기도로 가끔 하나 더) */
 export const OFFER_COUNT = 3;
-/** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. */
+/** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. 새로고침하면 다시 이 시간부터 센다 */
 export const OFFER_TIMEOUT = 20;
+/**
+ * 한 판에 레벨업 선택지를 새로고침할 수 있는 횟수 (사람마다. 레벨업마다가 아니라 한 판 전체에서).
+ * 새로고침하면 지금 보이는 카드를 빼고 같은 규칙으로 다시 뽑는다 (sim.ts 의 rerollOffers)
+ */
+export const OFFER_REROLLS = 2;
 
 /**
  * 적 수의 상한 (뱀서): 살아 있는 적이 300 이상이면 주기적인 스폰을 멈추고, 보스·이벤트는 500 까지만 나온다.

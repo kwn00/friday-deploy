@@ -644,6 +644,26 @@ body {
   color: var(--muted);
   word-break: keep-all;
 }
+/* 새로고침을 보내고 새 카드를 기다리는 동안: 지금 카드는 누를 수 없다 (main.ts 의 rerollWait) */
+.offers--wait .offer {
+  opacity: 0.5;
+  pointer-events: none;
+}
+/* 새로고침 버튼: 카드와 헷갈려 누르지 않게 카드 아래에 떨어뜨려 작게 */
+.reroll {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+.reroll__btn {
+  min-width: 200px;
+}
+.reroll__btn:disabled {
+  cursor: default;
+}
+.offers--wait + .reroll .reroll__btn:disabled {
+  cursor: wait;
+}
 /* 진화의 짝 안내: 글자 칸(한 줄 배치면 오른쪽, 세로 배치면 그대로 아래)에 */
 .offer__evo {
   grid-column: -2 / -1;
@@ -1141,6 +1161,23 @@ body {
   .offers[data-n='4'] .offer__icon {
     grid-row: 1 / 3;
   }
+  /* 새로고침: 세로가 모자라니 카드 아래 줄 대신 왼쪽 위 구석에 (오른쪽 위 Ⅱ 와 마주 보게). 글자는 두 줄로 좁게 */
+  .reroll {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    margin: 0;
+  }
+  .reroll__btn {
+    min-width: 0;
+    min-height: 44px;
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .reroll__btn small {
+    display: block;
+  }
   .hint {
     margin-top: 6px;
   }
@@ -1194,6 +1231,14 @@ body {
   }
   .hint--result {
     margin: -2px 0 8px;
+  }
+}
+
+/* 좁은 가로 화면(480×320 등): 왼쪽 위 새로고침 버튼이 제목·안내 글자를 가리지 않게 글자를 그만큼 오른쪽으로 비켜 둔다 */
+@media (orientation: landscape) and (max-height: 480px) and (max-width: 559px) {
+  .panel--levelup .panel__title,
+  .panel--levelup .panel__sub {
+    padding-left: 132px;
   }
 }
 

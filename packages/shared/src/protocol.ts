@@ -16,6 +16,12 @@ export type ClientMsg =
   | { t: 'resume'; v: number; token: string; key: string }
   | { t: 'input'; seq: number; dx: number; dy: number }
   | { t: 'pick'; choice: number }
+  /**
+   * 지금 떠 있는 레벨업 선택지를 새로 뽑아 달라는 요청. 남은 횟수와 새 선택지는 서버가 정한다.
+   * level: 새로고침하려는 선택지의 레벨 (서버가 levelup 에 실어 준 값 그대로). 시간이 다 되어 서버가 대신 고르고 다음 레벨업으로
+   * 넘어간 뒤에 늦게 도착한 새로고침이, 아직 보지도 못한 다음 선택지에 쓰이지 않게 한다 (서버는 자기 값과 같을 때만 받는다)
+   */
+  | { t: 'reroll'; level: number }
   /** 페어 방의 호스트가 대기실에서 게임을 시작한다. */
   | { t: 'start' }
   /** 일시정지 요청. 서버는 솔로 방에서만 받아들인다 (페어에서는 다른 사람의 게임을 멈출 수 없다). */
@@ -245,7 +251,12 @@ export type ServerMsg =
   | Snapshot
   /** 솔로 일시정지 상태가 바뀔 때마다 서버가 알려준다. max: 자동 재개까지 남은 최대 시간(초) */
   | { t: 'pause'; on: boolean; max: number }
-  | { t: 'levelup'; offers: Offer[]; timeout: number }
+  /**
+   * 레벨업 선택지. 새로고침한 뒤에도 같은 메시지로 새 선택지를 보낸다 (timeout 은 다시 처음부터).
+   * level: 이 선택지로 오르는 레벨 (새로고침할 때 돌려보낸다). rerolls: 이번 판에 남은 새로고침 수. rerollable: 지금 새로고침하면 다른 카드가 나올 수 있는지
+   * (false 면 올릴 수 있는 것이 이미 다 나와 있다: 새로고침해도 횟수만 줄어서 서버가 받지 않는다)
+   */
+  | { t: 'levelup'; offers: Offer[]; timeout: number; level: number; rerolls: number; rerollable: boolean }
   /** 보물상자를 열었다: 한 단계씩 오른 것들 (같은 것이 여러 번 있을 수 있다)과, 올릴 것이 없어 대신 찬 체력 */
   | { t: 'chest'; items: UpgradeId[]; heal: number }
   /** place: 이번 판이 순위표에 올랐을 때의 순위 (오르지 못했으면 없음) */
@@ -335,6 +346,10 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     case 'pick': {
       if (!isInt(o.choice, 0, 7)) return null;
       return { t: 'pick', choice: o.choice };
+    }
+    case 'reroll': {
+      if (!isInt(o.level, 0, 1_000_000)) return null;
+      return { t: 'reroll', level: o.level };
     }
     case 'start':
       return { t: 'start' };

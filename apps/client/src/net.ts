@@ -202,6 +202,11 @@ export class Net {
     this.send({ t: 'pick', choice });
   }
 
+  /** level: 새로고침하려는 선택지의 레벨 (서버가 levelup 에 실어 준 값) */
+  sendReroll(level: number): void {
+    this.send({ t: 'reroll', level });
+  }
+
   sendStart(): void {
     this.send({ t: 'start' });
   }
