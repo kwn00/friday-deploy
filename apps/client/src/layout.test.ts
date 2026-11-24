@@ -7,22 +7,28 @@ import { test } from 'node:test';
 
 const CSS = readFileSync(new URL('./style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** 맨 위(top-level) 또는 head 로 시작하는 @media 블록 안의 규칙들: 선택자 → 선언들 (같은 선택자가 여럿이면 뒤의 것이 덮는다) */
+/**
+ * 맨 위(top-level) 또는 head 로 시작하는 @media 블록들 안의 규칙들: 선택자 → 선언들
+ * (같은 head 의 블록이 여럿이면 모두 합친다. 같은 선택자가 여럿이면 뒤의 것이 덮는다)
+ */
 function rules(head?: string): Map<string, Record<string, string>> {
   let body = CSS;
   if (head) {
-    const start = CSS.indexOf(`${head} {`);
-    assert.ok(start >= 0, `style.css 에 ${head} 가 없다`);
-    let depth = 0;
-    let end = start;
-    for (let i = CSS.indexOf('{', start); i < CSS.length; i++) {
-      if (CSS[i] === '{') depth++;
-      else if (CSS[i] === '}' && --depth === 0) {
-        end = i;
-        break;
+    const blocks: string[] = [];
+    for (let start = CSS.indexOf(`${head} {`); start >= 0; start = CSS.indexOf(`${head} {`, start + 1)) {
+      let depth = 0;
+      let end = start;
+      for (let i = CSS.indexOf('{', start); i < CSS.length; i++) {
+        if (CSS[i] === '{') depth++;
+        else if (CSS[i] === '}' && --depth === 0) {
+          end = i;
+          break;
+        }
       }
+      blocks.push(CSS.slice(CSS.indexOf('{', start) + 1, end));
     }
-    body = CSS.slice(CSS.indexOf('{', start) + 1, end);
+    assert.ok(blocks.length > 0, `style.css 에 ${head} 가 없다`);
+    body = blocks.join('\n');
   } else {
     // 맨 위 규칙만: @media 블록을 지운다
     body = body.replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');
@@ -74,4 +80,32 @@ test('화면: 낮은 가로 화면 결과 화면은 보이는 버튼(2~3개)을 
   assert.equal(low['grid-template-columns'], 'none');
   assert.equal(low['grid-auto-flow'], 'column');
   assert.equal(low['grid-auto-columns'], 'minmax(0, 1fr)');
+});
+
+test('화면: 메뉴의 계속하기는 가진 아이템 목록보다 앞에 있고, 목록만 따로 스크롤된다 (Tab 으로 고를 수 있다)', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const pause = html.slice(html.indexOf('id="screen-pause"'), html.indexOf('id="screen-over"'));
+  assert.match(pause, /class="panel panel--menu panel--pause"/);
+  const at = (id: string): number => {
+    const i = pause.indexOf(`id="${id}"`);
+    assert.ok(i >= 0, id);
+    return i;
+  };
+  // 목록이 길어도 계속하기가 밀려 내려가지 않게 목록보다 앞에 둔다 (세로 화면은 위에서 아래로 이 순서)
+  for (const id of ['pause-items', 'btn-minimap', 'btn-sfx', 'btn-music', 'btn-quit']) assert.ok(at('btn-resume') < at(id), id);
+  assert.match(pause, /id="pause-items"[^>]*tabindex="0"/, '목록은 키보드로 스크롤할 수 있게 Tab 이 멈춘다');
+
+  const top = rules();
+  assert.equal(top.get('.panel.panel--pause')?.['max-height'], '100%', '패널이 화면 높이를 넘지 않는다');
+  assert.equal(top.get('.pause__body')?.['min-height'], '0');
+  assert.equal(top.get('.items')?.['overflow-y'], 'auto');
+  assert.equal(top.get('.items')?.['min-height'], '0');
+  // 버튼은 어느 배치에서도 손가락 크기(44px) 이상
+  for (const [where, r] of [
+    ['세로', top],
+    ['넓은 화면', rules('@media (min-width: 768px)')],
+    ['낮은 가로', rules(LOW_LANDSCAPE)],
+  ] as const) {
+    assert.ok(px(r.get('.pause__tools .btn')?.['min-height'], `${where} .pause__tools .btn`) >= 44, where);
+  }
 });
