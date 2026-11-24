@@ -61,7 +61,7 @@ function tick(w: World, keep: Enemy[]): void {
 }
 /** 발밑에 보물상자를 두고 연다 (odds: [기본 단계, 5개 %, 3개 %, 1개 %]) */
 function openChestHere(w: World, p: Player, odds: ChestOdds = [1, 0, 0, 0]): UpgradeId[] {
-  w.items.push({ id: w.nextId++, kind: 'chest', x: p.x, y: p.y, ttl: Infinity, chest: odds, born: w.tick });
+  w.items.push({ id: w.nextId++, kind: 'chest', x: p.x, y: p.y, ttl: Infinity, chest: odds });
   const before = w.events.length;
   tick(w, []);
   const ev = w.events.slice(before).find((e) => e.type === 'chest');

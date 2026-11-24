@@ -266,7 +266,7 @@ test('2단계 인증: 방패가 한 대를 대신 막고 잠깐 무적이 된다
   assert.equal(p.charges, 1);
 });
 
-test('git clean (뱀서 Pentagram): 화면 안의 적을 사신만 빼고 지운다. 한 번 굴려 아이템까지 지우거나, 경험치를 주고 아이템은 남긴다', () => {
+test('git clean (뱀서 Pentagram): 화면 안의 적을 사신만 빼고 지운다. 한 번 굴려 아이템까지 지우거나, 경험치를 주고 아이템은 남긴다. 보물상자는 언제나 남는다', () => {
   for (const keep of [false, true]) {
     const { w, p } = quietWorld(83);
     p.up = { git_clean: 1 };
@@ -278,20 +278,48 @@ test('git clean (뱀서 Pentagram): 화면 안의 적을 사신만 빼고 지운
     const reaper = enemy(9305, p.x - 40, p.y - 40, 'monday', 1e9);
     w.gems.push({ id: 9304, x: p.x + 50, y: p.y + 50, v: 3 });
     w.heals.push({ id: 9306, x: p.x - 60, y: p.y });
+    // 필드 아이템: 화면 안(주울 수 있는 거리 밖)의 셋과 화면 밖의 하나. 보물상자: 전에 잡은 보스가 화면 안과 밖에 남긴 것
+    const inView = [9310, 9311, 9312];
+    w.items.push(
+      { id: 9310, kind: 'heal', x: p.x + 120, y: p.y, ttl: 60 },
+      { id: 9311, kind: 'levelup', x: p.x, y: p.y - 200, ttl: 60 },
+      { id: 9312, kind: 'revive', x: p.x - 150, y: p.y + 150, ttl: 60 },
+      { id: 9313, kind: 'levelup', x: p.x + VIEW_RADIUS + 30, y: p.y, ttl: 60 },
+      { id: 9314, kind: 'chest', x: p.x - 100, y: p.y - 100, ttl: Infinity, chest: [1, 0, 0, 0] },
+      { id: 9315, kind: 'chest', x: p.x, y: p.y + VIEW_RADIUS + 30, ttl: Infinity, chest: [1, 0, 0, 0] },
+    );
     tick(w, [...bugs, far, boss, reaper]);
     assert.ok(bugs.every((e) => e.hp <= 0) && boss.hp <= 0, `${keep}: 화면 안의 적(보스 포함)은 지워진다`);
     assert.ok(far.hp > 0, '화면 밖은 그대로');
     assert.ok(reaper.hp > 0, '사신은 버틴다');
     assert.equal(p.kills, 3);
-    assert.ok(w.items.some((it) => it.kind === 'chest'), '지워진 보스의 상자는 떨어진다');
+    const ids = new Set(w.items.map((it) => it.id));
+    assert.equal(w.items.filter((it) => it.kind === 'chest' && it.id !== 9314 && it.id !== 9315).length, 1, `${keep}: 지워진 보스의 상자는 떨어진다`);
+    assert.ok(ids.has(9314) && ids.has(9315), `${keep}: 땅에 있던 보물상자는 화면 안이어도 남는다`);
+    assert.ok(ids.has(9313), `${keep}: 화면 밖의 필드 아이템은 그대로`);
     if (keep) {
       assert.ok(w.gems.length >= 4, `남기는 쪽: 처치한 것처럼 경험치가 떨어지고 있던 것도 남는다 (${w.gems.length})`);
       assert.equal(w.heals.length, 1);
+      assert.ok(inView.every((id) => ids.has(id)), '남기는 쪽: 화면 안의 필드 아이템도 남는다');
     } else {
       assert.equal(w.gems.length, 0, '지우는 쪽: 경험치를 남기지 않고, 있던 것도 지운다');
       assert.equal(w.heals.length, 0);
+      assert.ok(inView.every((id) => !ids.has(id)), '지우는 쪽: 화면 안의 필드 아이템(피자·LGTM·백업)도 지운다');
     }
   }
+});
+
+test('rm -rf node_modules: 화면 안의 필드 아이템과 보물상자를 지우지 않는다', () => {
+  const { w, p } = quietWorld(85);
+  p.up = { rm_rf: 1 };
+  w.rng = () => 0.99; // git clean 이었다면 지우는 쪽이 나올 난수
+  w.items.push(
+    { id: 9320, kind: 'levelup', x: p.x + 150, y: p.y, ttl: 60 },
+    { id: 9321, kind: 'chest', x: p.x - 150, y: p.y, ttl: Infinity, chest: [1, 0, 0, 0] },
+  );
+  tick(w, [enemy(9322, p.x + 100, p.y, 'bug', 10)]);
+  assert.ok(w.zones.some((z) => z.kind === 'wipe'), '썼다');
+  assert.deepEqual(w.items.map((it) => it.id).sort(), [9320, 9321]);
 });
 
 test('영역은 생긴 틱의 스냅샷에만 남는 시간과 함께 실린다 (전송량)', () => {

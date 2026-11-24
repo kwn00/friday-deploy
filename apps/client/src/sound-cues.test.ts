@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ENEMY_IDS, FIELD_ITEM_KINDS, STAGE_TIME, type Snapshot } from '@friday-deploy/shared';
-import { SoundCues, type Cue } from './sound-cues';
+import { ENEMY_IDS, FIELD_ITEM_KINDS, STAGE_TIME, ZONE_KINDS, type Snapshot } from '@friday-deploy/shared';
+import { SoundCues, erasedIn, type Cue } from './sound-cues';
 
 const BUG = ENEMY_IDS.indexOf('bug');
 const BOSS = ENEMY_IDS.indexOf('boss_bug');
@@ -45,6 +45,22 @@ test('sound: 내 근처에서 사라진 경험치·아이템만 내가 먹은 �
   const chest = FIELD_ITEM_KINDS.indexOf('chest');
   const a = snap(1, { g: [[1, 10, 0, 0], [2, 300, 0, 0]], i: [[5, chest, 50, 0, 0]], h: [[7, 20, 0]] });
   assert.deepEqual(ids(c.diff(a, snap(2))), ['gem', 'chest', 'heal']);
+});
+
+test('sound: git clean 에 지워진 경험치·아이템은 내 근처에서 사라져도 먹은 소리를 내지 않는다', () => {
+  const c = new SoundCues();
+  const wipe = ZONE_KINDS.indexOf('wipe');
+  const lgtm = FIELD_ITEM_KINDS.indexOf('levelup');
+  const a = snap(1, { g: [[1, 10, 0, 0]], i: [[5, lgtm, 50, 0, 0]], h: [[7, 20, 0]] });
+  // 지우는 쪽이 나온 git clean (aux 0): 그 자리(반경 304)에서 사라진 것은 지워진 것
+  assert.deepEqual(ids(c.diff(a, snap(2, { z: [[90, wipe, 0, 0, 304, 0, 20]] }))), []);
+  // rm -rf node_modules (aux 1) 는 지우지 않으므로 사라진 것은 먹은 것
+  assert.deepEqual(ids(c.diff(a, snap(2, { z: [[91, wipe, 0, 0, 304, 1, 20]] }))), ['gem', 'pickup', 'heal']);
+  // 다른 사람이 멀리서 쓴 git clean 은 내 근처와 상관없다
+  assert.deepEqual(ids(c.diff(a, snap(2, { z: [[92, wipe, 1000, 0, 304, 0, 20]] }))), ['gem', 'pickup', 'heal']);
+  const erased = erasedIn(snap(2, { z: [[93, wipe, 0, 0, 304, 0, 20]] }));
+  assert.ok(erased(0, 304) && !erased(0, 310), '지우는 범위 안쪽만');
+  assert.equal(erasedIn(snap(2))(0, 0), false, '지우기 영역이 없으면 아무것도 지워지지 않았다');
 });
 
 test('sound: 쓰러져 있으면 근처의 경험치가 사라져도 내 소리를 내지 않는다', () => {

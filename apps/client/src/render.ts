@@ -17,7 +17,7 @@ import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
 import { Predictor } from './predict';
-import { SoundCues, type Cue } from './sound-cues';
+import { SoundCues, erasedIn, type Cue } from './sound-cues';
 import { THEMES, type Theme } from './themes';
 import { cameraPx, computeView, toScreen } from './view';
 
@@ -334,6 +334,8 @@ export class Renderer {
       }
       if (this.hits.size > 256) for (const [id, at] of this.hits) if (now - at > HIT_MS) this.hits.delete(id);
     }
+    // git clean 이 지운 자리: 거기서 사라진 경험치·아이템은 주운 것이 아니다 (반짝이지 않는다. 지우기 고리가 대신 보인다)
+    const erased = erasedIn(next);
     const alive = this.indexOf(next).e;
     for (const e of prev.e) {
       if (alive.has(e[0]) || Math.hypot(e[2]! - vx, e[3]! - vy) > 280) continue;
@@ -344,15 +346,15 @@ export class Renderer {
     if (!this.calm) {
       const gems = this.indexOf(next).g;
       for (const g of prev.g) {
-        if (gems.has(g[0])) continue;
+        if (gems.has(g[0]) || erased(g[1], g[2])) continue;
         if (next.p.some((p) => p[4] && Math.hypot(g[1] - p[1], g[2] - p[2]) < 40)) this.burst(g[1], g[2], 2, 30, [GEM_COLOR[g[3]] ?? GEM_COLOR[0], '#eff1f5'], 1, 0.12);
       }
     }
-    // 필드 아이템: 누군가 주워서 사라진 자리에 반짝임 (수명이 다해 사라진 것은 조용히 없어진다)
+    // 필드 아이템: 누군가 주워서 사라진 자리에 반짝임 (수명이 다해 사라진 것, git clean 에 지워진 것은 조용히 없어진다)
     const items = new Set(next.i.map((it) => it[0]));
     for (const it of prev.i) {
       const kind = FIELD_ITEM_KINDS[it[1]];
-      if (!kind || items.has(it[0]) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
+      if (!kind || items.has(it[0]) || erased(it[2], it[3]) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
       // 보물상자는 크게 터진다
       const [n, speed] = kind === 'heal' ? [14, 40] : kind === 'chest' ? [44, 100] : [24, 70];
       this.burst(it[2], it[3], n, speed, ITEM_FX[kind].spark, kind === 'heal' ? 2 : 3);
@@ -365,7 +367,7 @@ export class Renderer {
     const heals = new Set(next.h.map((h) => h[0]));
     for (const h of prev.h) {
       // 시야 밖으로 나간 것이 아니라 누군가 먹어서 사라진 경우만
-      if (!heals.has(h[0]) && next.p.some((p) => Math.hypot(h[1] - p[1], h[2] - p[2]) < 90)) this.burst(h[1], h[2], 14, 40, ['#a6e3a1', '#eff1f5']);
+      if (!heals.has(h[0]) && !erased(h[1], h[2]) && next.p.some((p) => Math.hypot(h[1] - p[1], h[2] - p[2]) < 90)) this.burst(h[1], h[2], 14, 40, ['#a6e3a1', '#eff1f5']);
     }
   }
 
