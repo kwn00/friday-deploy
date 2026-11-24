@@ -218,3 +218,26 @@ test('통신: reroll 은 어느 선택지(레벨)를 새로고침하는지만 �
   for (const bad of ['{"t":"reroll"}', '{"t":"reroll","level":-1}', '{"t":"reroll","level":1.5}', '{"t":"reroll","level":"3"}', '{"t":"reroll","level":1e9}'])
     assert.equal(parseClientMsg(bad), null, bad);
 });
+
+test('새로고침: 함께 하기에서는 사람마다 두 번이고, 한 사람의 새로고침은 다른 사람의 선택지와 횟수를 건드리지 않는다', () => {
+  const w = createWorld(15);
+  w.itemCd = 1e9;
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  for (const p of [a, b]) {
+    p.xp = p.xpNext = 5;
+    w.gems.push({ id: w.nextId++, x: p.x, y: p.y, v: 1 });
+  }
+  w.wave = Math.floor((w.time + DT) / 60);
+  w.spawnCd = 1e9;
+  step(w, DT);
+  assert.ok(a.offers && b.offers);
+  const bOffers = [...b.offers];
+  assert.equal(rerollOffers(w, a.id), true);
+  assert.equal(rerollOffers(w, a.id), true);
+  assert.equal(rerollOffers(w, a.id), false);
+  assert.deepEqual([a.rerolls, b.rerolls], [0, 2]);
+  assert.deepEqual(b.offers, bOffers, '다른 사람의 선택지는 그대로');
+  assert.equal(rerollOffers(w, b.id), true);
+  assert.equal(b.rerolls, 1);
+});
