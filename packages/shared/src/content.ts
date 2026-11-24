@@ -425,7 +425,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   sprint: W('스프린트', '🌪️', '바라보는 쪽 옆으로 여러 번 벤다. 쉬지 않고 걸을수록 피해가 늘어난다.',
     { dmg: 2, cd: 2.0, amount: 4, area: 48, speed: 0, dur: 0.4, pierce: 0 },
     [{ dmg: 1 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 1 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 1 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 1 }],
-    { rarity: 50, kb: 0.1, crit: { chance: 0.05, mult: 2 } }),
+    { rarity: 50, kb: 0.1, crit: { chance: 0.05, mult: 2 }, ignores: ['dur'] }),
   logic_bomb: W('멀티스레드', '🧵', '무작위 버그 하나에게 스레드 여러 개를 한꺼번에 보낸다.',
     { dmg: 10, cd: 1.4, amount: 3, area: 22, speed: 500, dur: 0.4, pierce: 0 },
     [{ dmg: 10 }, { pierce: 1 }, { amount: 1, area: 0.1 / 0.9 }, { pierce: 1 }, { dmg: 10 }],

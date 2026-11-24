@@ -1446,8 +1446,9 @@ body {
   background: rgba(var(--glass-rgb), 0.8);
   border: var(--px) solid var(--line);
 }
+/* 패시브는 게임 화면의 패시브 칩처럼 버튼색 바탕. 작은 회색 글자(설명, "지금")가 잘 읽히게 옅게 깐다 (기본 테마 대비 4.8:1) */
 .item--passive {
-  background: rgba(var(--btn-rgb), 0.85);
+  background: rgba(var(--btn-rgb), 0.45);
 }
 /* 보물상자를 열면 진화할 무기 / 진화한 무기 (게임 화면의 칩과 같은 테두리 색) */
 .item--ready {

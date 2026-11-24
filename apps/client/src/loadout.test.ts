@@ -9,19 +9,26 @@ import {
   UPGRADES,
   UPGRADE_IDS,
   WEAPON_IDS,
+  SPRINT_BONUS_PER_LEVEL,
   addPlayer,
+  areaMultOf,
   cooldownMultOf,
   createWorld,
+  curseOf,
+  durationMultOf,
   effectiveStats,
   extraOfferChanceOf,
+  growthOf,
   healAmountOf,
   luckOf,
   maxHpOf,
   moveSpeedOf,
   pickupOf,
   recoveryOf,
+  speedMultOf,
   step,
   upgradeText,
+  weaponStats,
   type UpgradeId,
   type WeaponDef,
 } from '@friday-deploy/shared';
@@ -70,6 +77,11 @@ test('가진 아이템: 패시브의 지금 효과가 모든 단계에서 서버
     ['npm_install', '끌어당기는 범위', pickupOf, 'times'],
     ['dark_mode', '최대 체력', maxHpOf, 'times'],
     ['deploy_prayer', '운', luckOf, 'pct'],
+    ['dual_monitor', '공격 범위', areaMultOf, 'pct'],
+    ['cdn', '속도', speedMultOf, 'pct'],
+    ['keep_alive', '지속 시간', durationMultOf, 'pct'],
+    ['side_project', '얻는 경험치', growthOf, 'pct'],
+    ['prod_hotfix', '버그 체력·속도·수·빈도', curseOf, 'pct'],
   ] as const) {
     for (let level = 1; level <= UPGRADES[id].max; level++) {
       const only = { up: { [id]: level } };
@@ -132,8 +144,20 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
   assert.equal(value({ sprint: 1 }, 'sprint', '치명타'), '5% ×2');
   assert.equal(value({ sprint: 1, deploy_prayer: 3 }, 'sprint', '치명타'), '6.5% ×2');
 
-  // 모든 무기 · 여러 패시브 조합에서 피해 · 쿨다운 값이 effectiveStats 와 같다
-  for (const passives of [{}, { stack_overflow: 3, mech_keyboard: 5 }, { stack_overflow: 5, mech_keyboard: 2, git_fork: 2 }] as Levels[]) {
+  // 스프린트: 걸으면 더해지는 피해의 상한 (단계 × 5). 지속은 베는 모습에만 쓰여 줄이 없다
+  assert.equal(value({ sprint: 1 }, 'sprint', '걸으면 피해'), `최대 +${SPRINT_BONUS_PER_LEVEL}`);
+  assert.equal(value({ sprint: 8, stack_overflow: 5 }, 'sprint', '걸으면 피해'), '최대 +40', 'Stack Overflow 는 붙지 않는다');
+  assert.equal(value({ sprint: 1, keep_alive: 5 }, 'sprint', '지속'), undefined);
+  assert.equal(value({ console_log: 1 }, 'console_log', '걸으면 피해'), undefined);
+
+  // 모든 무기 · 여러 패시브 조합에서 모든 줄의 값이 effectiveStats 와 같다
+  for (const passives of [
+    {},
+    { stack_overflow: 3, mech_keyboard: 5 },
+    { stack_overflow: 5, mech_keyboard: 2, git_fork: 2 },
+    { dual_monitor: 3, cdn: 4, keep_alive: 2, deploy_prayer: 4 },
+    Object.fromEntries(PASSIVE_IDS.map((id) => [id, UPGRADES[id].max])),
+  ] as Levels[]) {
     for (const id of WEAPON_IDS) {
       const def = UPGRADES[id] as WeaponDef;
       for (let level = 1; level <= def.max; level++) {
@@ -145,6 +169,40 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
         // 러버덕은 쿨다운을 그대로 쓰지 않아 쿨다운 줄이 없다 (아래 러버덕 테스트가 지속·쉬는 시간을 판과 비교한다)
         if (id === 'rubber_duck') assert.equal(value(all, id, '쿨다운'), undefined, `${id} ${level}: 쿨다운 줄`);
         else assert.ok(Math.abs(numberIn(value(all, id, def.labels?.cd ?? '쿨다운')) - s.cd) <= 0.005 + 1e-9, `${id} ${level}: 쿨다운`);
+        const at = `${id} ${level} ${JSON.stringify(passives)}`;
+        /** 무기가 받지 않는 패시브의 능력치는 이름을 따로 붙였을 때만 보인다 */
+        const shown = (k: 'amount' | 'area' | 'speed' | 'dur', kind: 'amount' | 'area' | 'speed' | 'dur'): boolean =>
+          !def.ignores?.includes(kind) || def.labels?.[k] !== undefined;
+        // 개수
+        const amount = value(all, id, def.labels?.amount ?? '개수');
+        if (shown('amount', 'amount') && s.amount > 0) assert.equal(numberIn(amount), s.amount, `${at}: 개수`);
+        else assert.equal(amount, undefined, `${at}: 개수 줄`);
+        // 범위 · 속도: 그 무기 1단계 · 패시브 없음 대비, 늘지 않았으면 줄이 없다
+        const first = weaponStats(id, 1);
+        for (const [k, label] of [
+          ['area', '범위'],
+          ['speed', '속도'],
+        ] as const) {
+          const v = value(all, id, def.labels?.[k] ?? label);
+          const d = first[k] > 0 ? (s[k] / first[k] - 1) * 100 : 0;
+          if (shown(k, k) && first[k] > 0 && Math.abs(d) >= 0.05) assert.ok(Math.abs(numberIn(v) - d) <= 0.5 + 1e-9, `${at}: ${label} ${v} ≠ ${d}%`);
+          else assert.equal(v, undefined, `${at}: ${label} 줄`);
+        }
+        // 지속 (러버덕은 위 테스트가 따로 본다)
+        if (id !== 'rubber_duck') {
+          const dur = value(all, id, def.labels?.dur ?? '지속');
+          if (shown('dur', 'dur') && s.dur > 0) assert.ok(Math.abs(numberIn(dur) - s.dur) <= 0.005 + 1e-9, `${at}: 지속 ${dur} ≠ ${s.dur}`);
+          else assert.equal(dur, undefined, `${at}: 지속 줄`);
+        }
+        // 관통 (999 는 무한)
+        const pierce = value(all, id, def.labels?.pierce ?? '관통');
+        if (s.pierce >= 999) assert.equal(pierce, '무한', `${at}: 관통`);
+        else if (s.pierce > 0) assert.equal(numberIn(pierce), s.pierce, `${at}: 관통`);
+        else assert.equal(pierce, undefined, `${at}: 관통 줄`);
+        // 확률 (운 반영, 100% 에서 자른다). 늘 걸리는 확률은 줄이 없다
+        const chance = value(all, id, def.labels?.chance ?? '확률');
+        if (s.chance > 0 && def.base.chance < 1) assert.ok(Math.abs(numberIn(chance) - Math.min(1, s.chance) * 100) <= 0.5 + 1e-9, `${at}: 확률 ${chance}`);
+        else assert.equal(chance, undefined, `${at}: 확률 줄`);
       }
     }
   }

@@ -11,6 +11,7 @@ import {
   FIELD_ITEMS,
   PASSIVE_IDS,
   PASSIVE_SLOTS,
+  SPRINT_BONUS_PER_LEVEL,
   UPGRADES,
   WEAPON_IDS,
   WEAPON_SLOTS,
@@ -245,6 +246,8 @@ function weaponEffects(id: WeaponId, up: Levels): Effect[] {
   const duck = id === 'rubber_duck';
   const out: Effect[] = [];
   if (shown('dmg') && s.dmg > 0) out.push({ label: name('dmg', '피해'), value: num(s.dmg, 1) });
+  // 스프린트는 쉬지 않고 걸은 만큼 고정 피해가 더해진다 (Stack Overflow 는 붙지 않는다. combat.ts 의 sprint)
+  if (id === 'sprint') out.push({ label: '걸으면 피해', value: `최대 +${SPRINT_BONUS_PER_LEVEL * lv(me, id)}` });
   if (shown('amount') && s.amount > 0) out.push({ label: name('amount', '개수'), value: num(s.amount) });
   if (shown('cd') && !duck) out.push({ label: name('cd', '쿨다운'), value: `${num(s.cd)}초` });
   for (const [k, fallback] of [
