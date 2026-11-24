@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  DT,
   EVOLUTIONS,
   PASSIVE_IDS,
   PLAYER_BASE_HP,
@@ -8,7 +9,9 @@ import {
   UPGRADES,
   UPGRADE_IDS,
   WEAPON_IDS,
+  addPlayer,
   cooldownMultOf,
+  createWorld,
   effectiveStats,
   extraOfferChanceOf,
   healAmountOf,
@@ -17,11 +20,12 @@ import {
   moveSpeedOf,
   pickupOf,
   recoveryOf,
+  step,
   upgradeText,
   type UpgradeId,
   type WeaponDef,
 } from '@friday-deploy/shared';
-import { effectText, loadoutOf, type LoadoutItem } from './loadout';
+import { duckCycleOf, effectText, loadoutOf, type LoadoutItem } from './loadout';
 
 type Levels = Partial<Record<UpgradeId, number>>;
 
@@ -138,8 +142,100 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
         const dmg = value(all, id, def.labels?.dmg ?? '피해');
         if (dmg !== undefined) assert.ok(Math.abs(numberIn(dmg) - s.dmg) <= 0.05 + 1e-9, `${id} ${level}: 피해 ${dmg} ≠ ${s.dmg}`);
         else assert.ok(s.dmg === 0 || def.ignores?.includes('might'), `${id}: 피해 줄이 없다`);
-        assert.ok(Math.abs(numberIn(value(all, id, def.labels?.cd ?? '쿨다운')) - s.cd) <= 0.005 + 1e-9, `${id} ${level}: 쿨다운`);
+        // 러버덕은 쿨다운을 그대로 쓰지 않아 쿨다운 줄이 없다 (아래 러버덕 테스트가 지속·쉬는 시간을 판과 비교한다)
+        if (id === 'rubber_duck') assert.equal(value(all, id, '쿨다운'), undefined, `${id} ${level}: 쿨다운 줄`);
+        else assert.ok(Math.abs(numberIn(value(all, id, def.labels?.cd ?? '쿨다운')) - s.cd) <= 0.005 + 1e-9, `${id} ${level}: 쿨다운`);
       }
+    }
+  }
+});
+
+test('가진 아이템: 러버덕은 쿨다운 대신 지속과 쉬는 시간 (다시 나오는 주기 = (쿨다운 + 지속) × 쿨다운 배율)', () => {
+  assert.deepEqual(nowText({ rubber_duck: 1 }, 'rubber_duck'), ['피해 10', '개수 1', '지속 3초', '쉬는 시간 3초']);
+  // 기계식 키보드는 주기를 줄인다: (3 + 3) × 0.92 = 5.52초 → 3초 돌고 2.52초 쉰다 (쿨다운 3 × 0.92 = 2.76초가 아니다)
+  assert.equal(value({ rubber_duck: 1, mech_keyboard: 1 }, 'rubber_duck', '쉬는 시간'), '2.52초');
+  assert.equal(value({ rubber_duck: 1, mech_keyboard: 5 }, 'rubber_duck', '쉬는 시간'), '0.6초');
+  // keep-alive 는 도는 시간만 늘린다 (주기는 그대로 6초)
+  assert.equal(value({ rubber_duck: 1, keep_alive: 5 }, 'rubber_duck', '지속'), '4.5초');
+  assert.equal(value({ rubber_duck: 1, keep_alive: 5 }, 'rubber_duck', '쉬는 시간'), '1.5초');
+  // 둘 다 최대면 주기 3.6초 < 도는 시간 4.5초: 쉬지 않는다
+  assert.equal(value({ rubber_duck: 1, mech_keyboard: 5, keep_alive: 5 }, 'rubber_duck', '쉬는 시간'), '없음 (계속 돌아요)');
+  assert.deepEqual(duckCycleOf({ rubber_duck: 8 }), { on: 4, period: 7 }, '8단계: 지속 3 + 0.5 + 0.5');
+});
+
+/** 실제 판에서 잰 러버덕: 도는 구간·쉬는 구간의 평균 길이와 다시 나오는 평균 주기 (초). 첫 구간과 마지막 구간은 잘렸을 수 있어 뺀다 */
+function measureDuck(up: Levels, seconds: number): { on: number[]; rest: number[]; period: number; cycles: number } {
+  const w = createWorld(311);
+  const p = addPlayer(w, 'a');
+  // 스폰·아이템·레벨업이 끼어들지 않게 (cooldown.test.ts 와 같은 차림)
+  p.xpNext = 1e12;
+  p.shield = 1e9;
+  w.itemCd = 1e9;
+  p.up = { ...up };
+  const states: boolean[] = [];
+  const starts: number[] = [];
+  let last = Infinity;
+  for (let i = 0; i < seconds / DT; i++) {
+    w.enemies = [];
+    w.wave = Math.floor((w.time + DT) / 60);
+    w.spawnCd = 1e9;
+    step(w, DT);
+    // 오리가 도는지는 시뮬레이션의 duckOn 그대로 (duckState 도 이것으로 정한다)
+    states.push(p.duckOn > 0);
+    // 다시 켜진 틱: 주기 타이머가 다시 채워졌다
+    const cd = p.cd.rubber_duck ?? 0;
+    if (cd > last) starts.push(i);
+    last = cd;
+  }
+  const runs: { on: boolean; len: number }[] = [];
+  for (const s of states) {
+    const r = runs.at(-1);
+    if (r && r.on === s) r.len++;
+    else runs.push({ on: s, len: 1 });
+  }
+  const inner = runs.slice(1, -1);
+  return {
+    on: inner.filter((r) => r.on).map((r) => r.len * DT),
+    rest: inner.filter((r) => !r.on).map((r) => r.len * DT),
+    period: ((starts.at(-1)! - starts[0]!) / (starts.length - 1)) * DT,
+    cycles: starts.length - 1,
+  };
+}
+
+test('가진 아이템: 러버덕의 지속·쉬는 시간이 실제 판(runDucks)에서 잰 것과 같다', () => {
+  const mean = (a: number[]): number => a.reduce((x, y) => x + y, 0) / a.length;
+  for (const passives of [
+    {},
+    { mech_keyboard: 1 },
+    { mech_keyboard: 3 },
+    { mech_keyboard: 5 },
+    { keep_alive: 2 },
+    { keep_alive: 5 },
+    { mech_keyboard: 2, keep_alive: 3 },
+    { mech_keyboard: 5, keep_alive: 5 },
+  ] as Levels[]) {
+    for (let level = 1; level <= UPGRADES.rubber_duck.max; level++) {
+      const up = { ...passives, rubber_duck: level };
+      const at = `${JSON.stringify(up)}`;
+      const { on, period } = duckCycleOf(up);
+      const m = measureDuck(up, 80);
+      // 다시 나오는 주기는 틱 단위로 올림되지 않는다 (cooldown.test.ts): 넘친 몫을 넘기므로 처음과 마지막 사이가
+      // 주기 × 횟수와 한 틱 안쪽으로 같다 (평균은 한 틱 ÷ 횟수 안쪽)
+      assert.ok(m.cycles >= 10, `${at}: 주기 ${m.cycles}번`);
+      assert.ok(Math.abs(m.period - period) <= DT / m.cycles + 1e-9, `${at}: 주기 ${m.period} ≠ ${period}`);
+      const shownOn = numberIn(value(up, 'rubber_duck', '지속'));
+      assert.ok(Math.abs(shownOn - on) <= 0.005 + 1e-9, `${at}: 지속 ${shownOn} ≠ ${on}`);
+      const rest = value(up, 'rubber_duck', '쉬는 시간');
+      if (m.rest.length === 0) {
+        // 한 번 켜진 뒤로 한 틱도 쉬지 않았다
+        assert.equal(rest, '없음 (계속 돌아요)', `${at}: 판에서는 쉬지 않는다`);
+        assert.equal(m.on.length, 0, `${at}: 도는 구간이 끊기지 않는다`);
+        continue;
+      }
+      assert.ok(m.rest.length >= 5, `${at}: 쉬는 구간 ${m.rest.length}개`);
+      // 한 번의 도는·쉬는 구간은 틱(0.05초) 단위로 재므로 한 틱까지 어긋날 수 있다
+      assert.ok(Math.abs(mean(m.on) - shownOn) <= DT + 0.005, `${at}: 판의 지속 ${mean(m.on)} ≠ 화면 ${shownOn}`);
+      assert.ok(Math.abs(mean(m.rest) - numberIn(rest)) <= DT + 0.005, `${at}: 판의 쉬는 시간 ${mean(m.rest)} ≠ 화면 ${rest}`);
     }
   }
 });

@@ -192,8 +192,40 @@ const STAT_KIND: Record<keyof WeaponStats, StatKind | null> = {
 /** 이만큼 이상이면 사실상 끝없이 꿰뚫는다 (롤백·핑퐁 등의 999) */
 const PIERCE_ENDLESS = 999;
 
+/** 러버덕이 한 번 나와서 도는 시간(on)과 다시 나오는 주기(period), 초 */
+export interface DuckCycle {
+  on: number;
+  period: number;
+}
+
 /**
- * 무기의 지금 수치: 내 강화 전체(패시브 포함)로 effectiveStats 를 그대로 쓴다.
+ * 러버덕은 쿨다운을 그대로 쓰지 않는다 (packages/shared/src/combat.ts 의 runDucks, 뱀서 King Bible):
+ * (그 단계의 쿨다운 + 그 단계의 지속) × 쿨다운 배율마다 다시 나오고, 나오면 그 단계의 지속 × 지속 배율 동안 돈다.
+ * 그래서 effectiveStats 의 쿨다운(쿨다운 × 배율)은 주기도 쉬는 시간도 아니다.
+ * runDucks 와 같은 공용 함수(weaponStats, cooldownMultOf, durationMultOf)를 같은 식으로 조합한다.
+ * 실제 시뮬레이션과 어긋나지 않는지는 loadout.test.ts 가 판을 돌려 잰다 (runDucks 를 바꾸면 그 테스트가 실패한다).
+ */
+export function duckCycleOf(up: Levels): DuckCycle {
+  const me: HasUpgrades = { up };
+  const s = weaponStats('rubber_duck', lv(me, 'rubber_duck'));
+  return { on: s.dur * durationMultOf(me), period: (s.cd + s.dur) * cooldownMultOf(me) };
+}
+
+/** 쉬는 시간이 이만큼 이하면 쉬지 않는다 (도는 시간이 주기 이상이면 끝나기 전에 다시 켜진다) */
+const NO_REST = 1e-9;
+
+/** 러버덕의 지속(도는 시간)과 쉬는 시간. keep-alive 로 도는 시간이 주기 이상이면 쉬지 않고 계속 돈다 */
+function duckEffects(up: Levels): Effect[] {
+  const { on, period } = duckCycleOf(up);
+  const rest = period - on;
+  return [
+    { label: '지속', value: `${num(on)}초` },
+    { label: '쉬는 시간', value: rest > NO_REST ? `${num(rest)}초` : '없음 (계속 돌아요)' },
+  ];
+}
+
+/**
+ * 무기의 지금 수치: 내 강화 전체(패시브 포함)로 effectiveStats 를 그대로 쓴다 (러버덕의 쿨다운·지속만 예외: duckCycleOf).
  * 그 무기에 뜻이 있는 것만: 무기가 받지 않는 패시브의 능력치(ignores)는 빼고 (따로 이름을 붙인 것은 남긴다: 2단계 인증의 방패·무적),
  * 기본값이 0 이라 쓰지 않는 것도 뺀다. 범위·속도는 px 이 뜻이 없으니 그 무기 1단계·패시브 없음 대비로, 늘지 않았으면 뺀다.
  * 순서는 레벨업 선택지 문구(upgradeText)와 같다.
@@ -209,10 +241,12 @@ function weaponEffects(id: WeaponId, up: Levels): Effect[] {
     const kind = STAT_KIND[k];
     return kind === null || !ignores.includes(kind) || def.labels?.[k] !== undefined;
   };
+  // 러버덕은 쿨다운 대신 시뮬레이션이 실제로 쓰는 지속·쉬는 시간을 보여 준다 (duckCycleOf)
+  const duck = id === 'rubber_duck';
   const out: Effect[] = [];
   if (shown('dmg') && s.dmg > 0) out.push({ label: name('dmg', '피해'), value: num(s.dmg, 1) });
   if (shown('amount') && s.amount > 0) out.push({ label: name('amount', '개수'), value: num(s.amount) });
-  if (shown('cd')) out.push({ label: name('cd', '쿨다운'), value: `${num(s.cd)}초` });
+  if (shown('cd') && !duck) out.push({ label: name('cd', '쿨다운'), value: `${num(s.cd)}초` });
   for (const [k, fallback] of [
     ['area', '범위'],
     ['speed', '속도'],
@@ -221,7 +255,8 @@ function weaponEffects(id: WeaponId, up: Levels): Effect[] {
     const d = s[k] / first[k] - 1;
     if (!zeroPct(d)) out.push({ label: name(k, fallback), value: signedPct(d) });
   }
-  if (shown('dur') && s.dur > 0) out.push({ label: name('dur', '지속'), value: `${num(s.dur)}초` });
+  if (duck) out.push(...duckEffects(up));
+  else if (shown('dur') && s.dur > 0) out.push({ label: name('dur', '지속'), value: `${num(s.dur)}초` });
   if (s.pierce > 0) out.push({ label: name('pierce', '관통'), value: s.pierce >= PIERCE_ENDLESS ? '무한' : num(s.pierce) });
   // 언제나 걸리는 확률(rm -rf node_modules 는 늘 남긴다)은 뜻이 없다
   if (s.chance > 0 && def.base.chance < 1) out.push({ label: name('chance', '확률'), value: pct(Math.min(1, s.chance)) });
