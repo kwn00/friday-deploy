@@ -21,6 +21,17 @@ export interface ReleaseNote {
 /** 최신 버전이 맨 위 */
 export const RELEASES: readonly ReleaseNote[] = [
   {
+    version: '0.3.3',
+    date: '2026-11-24',
+    title: '화면 밖 아이템이 보여요',
+    items: [
+      '화면 밖 아이템과 보물상자가 화면 가장자리에 화살표로 보여요.',
+      '미니맵을 꺼 둬도 화살표만 따라가면 찾을 수 있어요.',
+      'git clean 이 이제 보물상자를 지우지 않아요.',
+      'git clean 이 화면을 지울 때는 피자·LGTM·백업도 함께 지워져요.',
+    ],
+  },
+  {
     version: '0.3.2',
     date: '2026-11-24',
     title: '메뉴에서 가진 아이템을 봐요',

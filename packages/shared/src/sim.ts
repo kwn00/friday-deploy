@@ -262,9 +262,8 @@ export interface FieldItem {
   y: number;
   /** 사라지기까지 남은 시간(초) */
   ttl: number;
-  /** 보물상자: 떨어뜨린 보스의 상자 설정과 떨어진 틱 */
+  /** 보물상자: 떨어뜨린 보스의 상자 설정 */
   chest?: ChestOdds;
-  born?: number;
 }
 
 export type WorldEvent =

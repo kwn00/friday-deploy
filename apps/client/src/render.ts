@@ -17,9 +17,10 @@ import type { Input } from './input';
 import { labelSprite, loadSprites, scaleSprites, textSprite, upscale, type Sprite, type SpriteSet } from './sprites';
 import { Timeline, type Sample } from './timeline';
 import { Predictor } from './predict';
-import { SoundCues, type Cue } from './sound-cues';
+import { SoundCues, insideAny, wipesBetween, type Cue } from './sound-cues';
 import { THEMES, type Theme } from './themes';
 import { cameraPx, computeView, toScreen } from './view';
+import { hiddenAt, pickEdgeTargets, placeEdge, type Box, type EdgeTarget } from './edge';
 
 interface Particle {
   x: number;
@@ -60,6 +61,25 @@ const ITEM_FX: Record<FieldItemKind, { glow: string; spark: [string, string] }> 
   revive: { glow: '137,220,235', spark: ['#89dceb', '#eff1f5'] },
   chest: { glow: '249,226,175', spark: ['#f9e2af', '#fab387'] },
 };
+
+/** 화면 가장자리 표시의 테두리·화살표 색 (미니맵의 표시와 같은 색) */
+const EDGE_COLOR: Record<FieldItemKind, string> = {
+  heal: '#a6e3a1',
+  levelup: '#f9e2af',
+  revive: '#89dceb',
+  chest: '#fab387',
+};
+/** 가장자리 표시: 상자 반쪽 크기, 화살표 길이, 화면 가운데(캐릭터)에서 떨어뜨릴 최소 거리 (논리 픽셀. 캐릭터와 닉네임을 덮지 않을 만큼) */
+const EDGE_HALF = 9;
+const EDGE_ARROW = 6;
+const EDGE_MIN = 26;
+/** 새로 놓인 아이템의 표시가 눈에 띄게 퍼지는 시간 (ms. 미니맵과 같다) */
+const EDGE_NEW_MS = 4000;
+
+interface EdgeItem extends EdgeTarget {
+  kind: FieldItemKind;
+  fading: boolean;
+}
 
 /** 경험치 색 단계(0 파랑, 1 초록, 2 빨강)의 반짝임 색 */
 const GEM_COLOR = ['#89b4fa', '#a6e3a1', '#e64553'] as const;
@@ -189,6 +209,11 @@ export class Renderer {
   private zones = new Map<number, LiveZone>();
   /** 카나리아가 왼쪽으로 날고 있는지 (id → 왼쪽). 멈칫할 때 좌우가 떨리지 않게 마지막 방향을 기억한다 */
   private facingLeft = new Map<number, boolean>();
+  /** 화면 가장자리 표시가 피해 갈 HUD 자리와 표시가 들어갈 영역 (CSS 픽셀. main.ts 가 가끔 잰다) */
+  private hudBoxes: Box[] = [];
+  private hudBounds: Box | null = null;
+  /** 필드 아이템 id → 처음 본 시각(ms). 새로 놓인 것의 가장자리 표시를 잠깐 강조한다 */
+  private edgeSeen = new Map<number, number>();
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -232,6 +257,15 @@ export class Renderer {
     this.resize();
   }
 
+  /**
+   * 화면 가장자리 표시가 피해 갈 HUD 자리 (CSS 픽셀).
+   * bounds: 표시가 들어갈 영역 (노치와 HUD 의 바깥 여백을 뺀 것), boxes: 가리면 안 되는 HUD 요소들
+   */
+  setHud(bounds: Box | null, boxes: Box[]): void {
+    this.hudBounds = bounds;
+    this.hudBoxes = boxes;
+  }
+
   /** 연결이 끊겼거나 화면을 떠난 사람(가만히 서 있다)은 이름 옆에 표시한다 */
   setRoster(players: RosterPlayer[]): void {
     this.names = new Map(players.map((p) => [p.id, p.away || p.idle ? `${p.name} 💤` : p.name]));
@@ -246,6 +280,7 @@ export class Renderer {
     this.hits.clear();
     this.zones.clear();
     this.facingLeft.clear();
+    this.edgeSeen.clear();
     this.cues.reset();
   }
 
@@ -322,7 +357,10 @@ export class Renderer {
 
   /** 화면에 보이는 스냅샷이 바뀌는 순간, 사라진 것들에 이펙트를 붙인다 (보이는 시점과 이펙트 시점을 맞춘다) */
   private onShown(prev: Snapshot, next: Snapshot, now: number): void {
-    if (this.onCue) for (const cue of this.cues.diff(prev, next)) this.onCue(cue);
+    // git clean 이 지운 자리: 거기서 사라진 경험치·아이템은 주운 것이 아니다 (반짝이거나 소리 내지 않는다. 지우기 고리가 대신 보인다).
+    // 받는 대로 기억해 둔 영역에서 찾는다: 영역을 실은 스냅샷이 화면에 나오지 않고 지나가도 놓치지 않게
+    const erased = insideAny(wipesBetween(this.zones.values(), prev.tick, next.tick));
+    if (this.onCue) for (const cue of this.cues.diff(prev, next, erased)) this.onCue(cue);
     // 화면의 중심 (내 캐릭터 또는 관전 시점)
     const [vx, vy] = next.view;
     // 방금 맞은 적: 번쩍임 + 밀려남 + 작은 불꽃. 월드가 멈춰 같은 틱이 다시 올 때는 되풀이하지 않는다.
@@ -344,15 +382,15 @@ export class Renderer {
     if (!this.calm) {
       const gems = this.indexOf(next).g;
       for (const g of prev.g) {
-        if (gems.has(g[0])) continue;
+        if (gems.has(g[0]) || erased(g[1], g[2])) continue;
         if (next.p.some((p) => p[4] && Math.hypot(g[1] - p[1], g[2] - p[2]) < 40)) this.burst(g[1], g[2], 2, 30, [GEM_COLOR[g[3]] ?? GEM_COLOR[0], '#eff1f5'], 1, 0.12);
       }
     }
-    // 필드 아이템: 누군가 주워서 사라진 자리에 반짝임 (수명이 다해 사라진 것은 조용히 없어진다)
+    // 필드 아이템: 누군가 주워서 사라진 자리에 반짝임 (수명이 다해 사라진 것, git clean 에 지워진 것은 조용히 없어진다)
     const items = new Set(next.i.map((it) => it[0]));
     for (const it of prev.i) {
       const kind = FIELD_ITEM_KINDS[it[1]];
-      if (!kind || items.has(it[0]) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
+      if (!kind || items.has(it[0]) || (kind !== 'chest' && erased(it[2], it[3])) || !next.p.some((p) => p[4] && Math.hypot(it[2] - p[1], it[3] - p[2]) < 110)) continue;
       // 보물상자는 크게 터진다
       const [n, speed] = kind === 'heal' ? [14, 40] : kind === 'chest' ? [44, 100] : [24, 70];
       this.burst(it[2], it[3], n, speed, ITEM_FX[kind].spark, kind === 'heal' ? 2 : 3);
@@ -365,7 +403,7 @@ export class Renderer {
     const heals = new Set(next.h.map((h) => h[0]));
     for (const h of prev.h) {
       // 시야 밖으로 나간 것이 아니라 누군가 먹어서 사라진 경우만
-      if (!heals.has(h[0]) && next.p.some((p) => Math.hypot(h[1] - p[1], h[2] - p[2]) < 90)) this.burst(h[1], h[2], 14, 40, ['#a6e3a1', '#eff1f5']);
+      if (!heals.has(h[0]) && !erased(h[1], h[2]) && next.p.some((p) => Math.hypot(h[1] - p[1], h[2] - p[2]) < 90)) this.burst(h[1], h[2], 14, 40, ['#a6e3a1', '#eff1f5']);
     }
   }
 
@@ -428,7 +466,7 @@ export class Renderer {
       blit(this.spr.gems[Math.min(2, Math.max(0, g[3]))]!, mix(q?.[1], g[1]), mix(q?.[2], g[2]) + Math.sin(now / 200 + g[0]) * 1.5);
     }
 
-    // 필드 아이템 (화면 안에 들어온 것만 보인다. 멀리 있는 것은 미니맵이 알려준다)
+    // 필드 아이템 (화면 안에 들어온 것만 보인다. 멀리 있는 것은 화면 가장자리의 표시와 미니맵이 알려준다)
     for (const it of curr.i) {
       const kind = FIELD_ITEM_KINDS[it[1]];
       if (!kind) continue;
@@ -613,7 +651,103 @@ export class Renderer {
     }
 
     this.drawWeather(cx, cy, dt);
+    this.drawEdgeItems(curr.i, sx, sy, now);
     this.drawStick();
+  }
+
+  /**
+   * 화면 밖(또는 HUD 에 가려진) 필드 아이템과 보물상자를 화면 가장자리에 표시한다: 아이템 그림을 담은 상자와 그쪽을 가리키는 화살표.
+   * 화면 가운데에서 아이템 쪽으로 가다가 화면 끝이나 HUD 에 닿기 직전에 놓는다 (edge.ts). 보물상자는 가까운 3개까지.
+   * 새로 놓인 것은 4초 동안 테두리가 퍼지고, 곧 사라질 것은 깜빡인다 (동작 줄이기 설정에서는 고정된 테두리, 흐리게).
+   * 서버가 이미 보내 준 것(필드 아이템은 거리와 상관없이, 보물상자는 미니맵 범위의 두 배 안)만 쓴다.
+   */
+  private drawEdgeItems(items: Snapshot['i'], sx: (x: number) => number, sy: (y: number) => number, now: number): void {
+    const { ctx, pxW, pxH } = this;
+    const S = this.scale;
+    // HUD 의 자리는 CSS 픽셀로 온다. 캔버스는 기기 픽셀 (조이스틱과 같은 비율)
+    const k = pxW / Math.max(1, window.innerWidth);
+    const dev = (b: Box): Box => ({ x0: b.x0 * k, y0: b.y0 * k, x1: b.x1 * k, y1: b.y1 * k });
+    const hud = this.hudBoxes.map(dev);
+    const hb = this.hudBounds && this.hudBounds.x1 > this.hudBounds.x0 && this.hudBounds.y1 > this.hudBounds.y0 ? dev(this.hudBounds) : null;
+    const bounds: Box = hb ?? { x0: 0, y0: 0, x1: pxW, y1: pxH };
+    const cx = pxW >> 1;
+    const cy = pxH >> 1;
+
+    const present = new Set<number>();
+    const hidden: EdgeItem[] = [];
+    for (const it of items) {
+      const kind = FIELD_ITEM_KINDS[it[1]];
+      if (!kind) continue;
+      present.add(it[0]);
+      if (!this.edgeSeen.has(it[0])) this.edgeSeen.set(it[0], now);
+      const x = sx(it[2]);
+      const y = sy(it[3]);
+      if (hiddenAt(x, y, pxW, pxH, hud)) hidden.push({ id: it[0], x, y, kind, fading: it[4] === 1 });
+    }
+    for (const id of this.edgeSeen.keys()) if (!present.has(id)) this.edgeSeen.delete(id);
+    if (hidden.length === 0) return;
+
+    const half = EDGE_HALF * S;
+    const arrow = EDGE_ARROW * S;
+    // 화면 끝·HUD 에서 띄울 거리: 화살표 끝(어두운 테두리 포함)과, 아이템 쪽으로 들썩이는 거리(2칸)까지 들어가게
+    const r = half + arrow + 3 * S;
+    const min = EDGE_MIN * S;
+    const targets = pickEdgeTargets(hidden, (t) => t.kind === 'chest', cx, cy);
+    // 몰려 있으면 방향을 조금씩 돌려 겹치지 않게 놓는다 (상자 바깥 테두리끼리 한 칸 띄운다)
+    const spots = placeEdge(targets, cx, cy, bounds, hud, r, min, half * 2 + 3 * S);
+
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i]!;
+      // 곧 사라질 것은 깜빡인다 (미니맵과 같은 박자)
+      if (t.fading && !this.calm && Math.floor(now / 250) % 2 === 0) continue;
+      // 화살표는 표시 자리에서 아이템 쪽을 가리킨다 (겹치지 않게 비켜 놓았어도 아이템을 가리키도록)
+      const [ox, oy] = spots[i]!;
+      const len = Math.hypot(t.x - ox, t.y - oy) || 1;
+      const ux = (t.x - ox) / len;
+      const uy = (t.y - oy) / len;
+      // 아이템 쪽으로 살짝 들썩인다 ("이쪽")
+      const nudge = this.calm ? 0 : (0.5 + 0.5 * Math.sin(now / 180)) * 2 * S;
+      const x = Math.round(ox + ux * nudge);
+      const y = Math.round(oy + uy * nudge);
+      const color = EDGE_COLOR[t.kind];
+      if (t.fading && this.calm) ctx.globalAlpha = 0.5;
+
+      // 화살표: 상자 가장자리에서 아이템 쪽으로 (어두운 테두리를 먼저)
+      const out = half / Math.max(Math.abs(ux), Math.abs(uy));
+      const px = -uy;
+      const py = ux;
+      const tri = (back: number, tip: number, w: number, fill: string): void => {
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.moveTo(x + ux * tip, y + uy * tip);
+        ctx.lineTo(x + ux * back + px * w, y + uy * back + py * w);
+        ctx.lineTo(x + ux * back - px * w, y + uy * back - py * w);
+        ctx.closePath();
+        ctx.fill();
+      };
+      tri(out - S, out + arrow + S, 4 * S + S, '#11111b');
+      tri(out, out + arrow, 4 * S, color);
+
+      // 상자: 어두운 바탕, 아이템 색 테두리, 가운데에 아이템 그림
+      ctx.fillStyle = '#11111b';
+      ctx.fillRect(x - half - S, y - half - S, half * 2 + 2 * S, half * 2 + 2 * S);
+      ctx.fillStyle = color;
+      ctx.fillRect(x - half, y - half, half * 2, half * 2);
+      ctx.fillStyle = 'rgba(17,17,27,0.88)';
+      ctx.fillRect(x - half + S, y - half + S, half * 2 - 2 * S, half * 2 - 2 * S);
+      const sp = this.spr.items[t.kind];
+      ctx.drawImage(sp, x - (sp.width >> 1), y - (sp.height >> 1));
+
+      // 새로 놓인 것: 테두리가 퍼져 나간다
+      const age = now - (this.edgeSeen.get(t.id) ?? now);
+      if (age < EDGE_NEW_MS) {
+        const grow = this.calm ? 3 * S : Math.round(S + ((age % 1000) / 1000) * 6 * S);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = S;
+        ctx.strokeRect(x - half - grow + S / 2, y - half - grow + S / 2, half * 2 + grow * 2 - S, half * 2 + grow * 2 - S);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
   /**

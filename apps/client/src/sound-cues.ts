@@ -5,8 +5,48 @@
  *
  * 이 파일은 화면(DOM)과 Web Audio 를 쓰지 않는다 (단위 테스트에서 검사한다).
  */
-import { ENEMIES, ENEMY_IDS, FIELD_ITEM_KINDS, STAGE_TIME, type Snapshot } from '@friday-deploy/shared';
+import { ENEMIES, ENEMY_IDS, FIELD_ITEM_KINDS, STAGE_TIME, ZONE_KINDS, type Snapshot, type ZoneKind } from '@friday-deploy/shared';
 import type { SfxId } from './sounds';
+
+const WIPE = ZONE_KINDS.indexOf('wipe');
+
+/**
+ * git clean 이 지운 자리인지 (x, y 는 월드 좌표).
+ * git clean 은 지우는 쪽이 나오면 화면 안의 경험치·회복 아이템·필드 아이템을 지운다. 지워진 것은 내 몸 가까이에서 사라져도
+ * 주운 것이 아니므로 반짝임과 소리를 내지 않는다. 그 사이에 생긴 지우기 영역(wipe, aux 0 = git clean) 안에서 사라진 것을 지워진 것으로 본다.
+ * (rm -rf node_modules 는 aux 1 이고 아무것도 지우지 않는다. 남기는 쪽이 나온 git clean 과 같은 틱에 주운 것도 조용해지지만,
+ * 1/20초가 겹치는 드문 경우이고 주운 효과(체력·레벨업·알림)는 그대로다. 보물상자는 지워지지 않으므로 이 검사를 하지 않는다)
+ */
+export type Erased = (x: number, y: number) => boolean;
+
+/** 지우기 영역 하나: 가운데와 반지름 (월드 좌표) */
+export interface WipeArea {
+  x: number;
+  y: number;
+  r: number;
+}
+
+/** 영역들 중 하나라도 안인지 (스냅샷 좌표는 0.1 단위로 반올림되어 오므로 1 만큼 여유를 둔다) */
+export function insideAny(areas: readonly WipeArea[]): Erased {
+  if (areas.length === 0) return () => false;
+  return (x, y) => areas.some((a) => Math.hypot(x - a.x, y - a.y) <= a.r + 1);
+}
+
+/** 이 스냅샷에 실려 온 git clean 의 지우기 영역 */
+export function erasedIn(next: Snapshot): Erased {
+  return insideAny(next.z.filter((z) => z[1] === WIPE && z[5] === 0).map((z) => ({ x: z[2], y: z[3], r: z[4] })));
+}
+
+/**
+ * 화면이 기억해 둔 영역 중, 직전에 보인 스냅샷(prevTick) 뒤부터 지금 보이는 스냅샷(nextTick)까지 실려 온 git clean 의 지우기 영역.
+ * 영역은 한 번만 오므로, 그 스냅샷이 화면에 나오지 않고 지나가면(긴 프레임, 멈춘 동안 같은 틱의 스냅샷이 덮어씀) next 만 봐서는 놓친다.
+ * from 은 영역을 실어 온 스냅샷의 틱 - 1 이다 (render.ts 의 rememberZones).
+ */
+export function wipesBetween(zones: Iterable<{ kind: ZoneKind; aux: number; from: number; x: number; y: number; size: number }>, prevTick: number, nextTick: number): WipeArea[] {
+  const out: WipeArea[] = [];
+  for (const z of zones) if (z.kind === 'wipe' && z.aux === 0 && z.from >= prevTick && z.from < nextTick) out.push({ x: z.x, y: z.y, r: z.size });
+  return out;
+}
 
 export interface Cue {
   id: SfxId;
@@ -38,7 +78,8 @@ export class SoundCues {
     this.bosses.clear();
   }
 
-  diff(prev: Snapshot, next: Snapshot): Cue[] {
+  /** erased: git clean 이 지운 자리 (화면이 기억한 영역으로 만든 것을 넘긴다. 없으면 next 에 실려 온 영역만 본다) */
+  diff(prev: Snapshot, next: Snapshot, erased: Erased = erasedIn(next)): Cue[] {
     const out: Cue[] = [];
     const add = (id: SfxId, n = 1): void => {
       if (n > 0) out.push({ id, n });
@@ -74,19 +115,19 @@ export class SoundCues {
     add('bossAppear', bossNew);
     if (this.bosses.size > 64) for (const id of this.bosses) if (!alive.has(id)) this.bosses.delete(id);
 
-    // 내가 먹은 경험치
+    // 내가 먹은 경험치 (git clean 에 지워진 것은 빼고)
     const gems = new Set(next.g.map((g) => g[0]));
-    add('gem', prev.g.filter((g) => !gems.has(g[0]) && near(g[1], g[2], GEM_RANGE)).length);
+    add('gem', prev.g.filter((g) => !gems.has(g[0]) && near(g[1], g[2], GEM_RANGE) && !erased(g[1], g[2])).length);
 
     // 내가 주운 필드 아이템
     const items = new Set(next.i.map((it) => it[0]));
     for (const it of prev.i) {
       const kind = FIELD_ITEM_KINDS[it[1]];
-      if (kind && !items.has(it[0]) && near(it[2], it[3], ITEM_RANGE)) add(ITEM_SOUND[kind]);
+      if (kind && !items.has(it[0]) && near(it[2], it[3], ITEM_RANGE) && (kind === 'chest' || !erased(it[2], it[3]))) add(ITEM_SOUND[kind]);
     }
     // 적이 떨어뜨린 회복 아이템
     const heals = new Set(next.h.map((h) => h[0]));
-    if (prev.h.some((h) => !heals.has(h[0]) && near(h[1], h[2], HEAL_RANGE))) add('heal');
+    if (prev.h.some((h) => !heals.has(h[0]) && near(h[1], h[2], HEAL_RANGE) && !erased(h[1], h[2]))) add('heal');
 
     // 나: 맞음, 쓰러짐, 되살아남
     const meBefore = prev.p.find((p) => p[0] === meId);

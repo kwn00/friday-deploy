@@ -244,7 +244,7 @@ function dropChest(world: World, e: Enemy): void {
   if (!e.chest) return;
   const chests = world.items.filter((it) => it.kind === 'chest');
   if (chests.length >= MAX_CHESTS) world.items.splice(world.items.indexOf(chests[0]!), 1);
-  world.items.push({ id: world.nextId++, kind: 'chest', x: e.x, y: e.y, ttl: Infinity, chest: e.chest, born: world.tick });
+  world.items.push({ id: world.nextId++, kind: 'chest', x: e.x, y: e.y, ttl: Infinity, chest: e.chest });
 }
 
 function addZone(world: World, z: Omit<Zone, 'id' | 'born' | 'w'> & { w?: WeaponId }): Zone | null {
@@ -766,8 +766,10 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     case 'git_clean':
     case 'rm_rf': {
       // 뱀서 Pentagram: 화면 안의 적을 모두 지운다 (사신만 버틴다). 쓸 때마다 한 번 굴려서
-      // - 대개는 경험치 없이 지우고, 화면의 경험치·회복 아이템·보물상자도 함께 지운다 (지워진 보스의 상자는 그 자리에 떨어진다)
+      // - 대개는 경험치 없이 지우고, 화면의 경험치·회복 아이템·필드 아이템(피자·LGTM·백업)도 함께 지운다
       // - '남길 확률'(단계와 운으로 오른다)에 걸리면 처치한 것처럼 경험치를 떨어뜨리고, 아이템은 그대로 둔다
+      // 보물상자는 어느 쪽이든 지우지 않는다 (git clean 은 저절로 터지므로, 보스를 잡고 상자로 가는 사이에 터져도 상자는 남는다.
+      // 지워진 보스의 상자도 그 자리에 떨어진다)
       // rm -rf node_modules 는 언제나 남기고, 화면의 경험치를 모두 나에게 끌어당긴다 (굴리기는 똑같이 한 번 한다: 보이는 난수의 흐름을 같게)
       // 화면 안 = 화면의 가장 먼 모서리 바로 바깥까지 (일반 적을 보내는 범위와 같다)
       const r = ENEMY_VIEW_RADIUS;
@@ -782,7 +784,7 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       if (!keep) {
         world.gems = world.gems.filter((g) => !inView(g.x, g.y));
         world.heals = world.heals.filter((h) => !inView(h.x, h.y));
-        world.items = world.items.filter((it) => it.kind !== 'chest' || !inView(it.x, it.y) || it.born === world.tick);
+        world.items = world.items.filter((it) => it.kind === 'chest' || !inView(it.x, it.y));
       }
       if (w === 'rm_rf') {
         // 방금 떨어진 것까지 화면의 경험치를 모두 나에게 (이미 다른 사람에게 끌려가는 것은 그대로).

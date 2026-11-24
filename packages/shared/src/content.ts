@@ -390,7 +390,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
     { dmg: 15, cd: 4.5, amount: 2, area: 14, speed: 0, dur: 0.25, pierce: 0 },
     [{ amount: 1 }, { area: 1.0, dmg: 10 }, { amount: 1 }, { area: 1.0, dmg: 20 }, { amount: 1 }, { area: 1.0, dmg: 20 }, { amount: 1 }],
     { rarity: 80, kb: 1, ignores: ['speed', 'dur'] }),
-  git_clean: W('git clean -fd', '🧹', '가끔 화면의 버그를 통째로 지운다. 경험치와 아이템까지 지워질 때가 많다.',
+  git_clean: W('git clean -fd', '🧹', '가끔 화면의 버그를 통째로 지운다. 경험치·아이템도 자주 지워지지만 보물상자는 남는다.',
     { dmg: 0, cd: 90, amount: 1, area: 0, speed: 0, dur: 1.0, pierce: 0, chance: 0.1 },
     [{ cd: -10 }, { chance: 0.15 }, { cd: -10 }, { chance: 0.2 }, { cd: -5 }, { chance: 0.2 }, { cd: -5 }],
     { rarity: 60, kb: 0, ignores: ['might', 'amount', 'area', 'speed', 'dur'], labels: { chance: '아이템과 경험치를 남길 확률' } }),
