@@ -15,8 +15,10 @@ import {
   addPlayer,
   buildSnapshot,
   encodeSnapshot,
+  canReroll,
   offersOf,
   pickOffer,
+  rerollOffers,
   removePlayer,
   setInput,
   step,
@@ -26,6 +28,7 @@ import {
   type RosterPlayer,
   type RunResult,
   type ServerMsg,
+  type Player,
   type World,
 } from '@friday-deploy/shared';
 import { safeEqual, sign } from './security';
@@ -286,7 +289,7 @@ export class Room {
     this.broadcastRoster();
     if (this.started) {
       const p = this.world.players.get(conn.pid);
-      if (p?.offers) this.send(conn, { t: 'levelup', offers: offersOf(p), timeout: Math.max(1, Math.ceil(OFFER_TIMEOUT - p.offerTimer)) });
+      if (p?.offers) this.sendOffers(conn, p);
       // 멈춰 있는 동안에는 틱이 스냅샷을 보내지 않으므로 지금 상태를 한 장 보낸다
       this.sendSnapshot(conn);
       if (this.mode === 'solo') {
@@ -368,6 +371,36 @@ export class Room {
     // 일시정지 중에는 틱이 돌지 않으므로 연속 레벨업의 다음 선택지를 여기서 바로 보낸다
     if (ok && this.userPaused) this.flushEvents();
     return ok;
+  }
+
+  /**
+   * 레벨업 선택지 새로고침. 선택 중이 아니거나(시간이 끝나 서버가 대신 고른 직후에 도착), 횟수를 다 썼거나, 새로 나올 것이 없으면
+   * 아무것도 바꾸지 않는다 (위반이 아니다: 두 번 누른 것이 늦게 도착할 수 있다). 그때도 선택 중이면 지금 선택지를 다시 보내서
+   * 화면이 새 카드를 기다리며 멈춰 있지 않게 한다. 남은 횟수와 새 선택지는 모두 서버가 정한다
+   */
+  onReroll(conn: Conn): void {
+    const p = this.world.players.get(conn.pid);
+    if (!p?.offers) return;
+    const now = Date.now();
+    if (this.started) this.lastActivity = now;
+    this.active(conn, now);
+    if (!canReroll(p) || !rerollOffers(this.world, conn.pid)) {
+      this.sendOffers(conn, p);
+      return;
+    }
+    // 새 선택지는 이벤트로 보낸다. 일시정지 중에는 틱이 돌지 않으므로 여기서 바로 보낸다
+    if (this.userPaused) this.flushEvents();
+  }
+
+  /** 지금 떠 있는 레벨업 선택지를 보낸다 (남은 선택 시간, 새로고침 남은 수와 함께) */
+  private sendOffers(conn: Conn, p: Player): void {
+    this.send(conn, {
+      t: 'levelup',
+      offers: offersOf(p),
+      timeout: Math.max(1, Math.ceil(OFFER_TIMEOUT - p.offerTimer)),
+      rerolls: p.rerolls,
+      rerollable: canReroll(p),
+    });
   }
 
   /**
@@ -476,7 +509,7 @@ export class Room {
       if (ev.type === 'offers') {
         const conn = this.conns.get(ev.pid);
         const p = this.world.players.get(ev.pid);
-        if (conn && p) this.send(conn, { t: 'levelup', offers: offersOf(p), timeout: OFFER_TIMEOUT });
+        if (conn && p?.offers) this.sendOffers(conn, p);
       } else if (ev.type === 'chest') {
         // 보물상자: 연 사람에게만 무엇이 올랐는지 알려 준다 (끊겨 있으면 다음 스냅샷의 강화 단계로 알 수 있다)
         const conn = this.conns.get(ev.pid);

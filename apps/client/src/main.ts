@@ -6,6 +6,7 @@ import {
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SIZE,
   MAX_PAUSE_SECONDS,
+  OFFER_REROLLS,
   PASSIVE_IDS,
   PASSIVE_SLOTS,
   RELEASES,
@@ -90,6 +91,8 @@ const el = {
   offers: $('offers'),
   offerTimer: $('offer-timer'),
   offerSlots: $('offer-slots'),
+  reroll: $<HTMLButtonElement>('btn-reroll'),
+  rerollLeft: $('reroll-left'),
   result: $('result'),
   place: $('result-place'),
   resultHint: $('result-hint'),
@@ -152,6 +155,11 @@ let myUp: Partial<Record<UpgradeId, number>> = {};
 let myRevives = 0;
 /** 지금 떠 있는 선택지 카드와 그 강화 (진화 안내를 새 스냅샷에 맞춰 다시 쓴다) */
 let offerCards: { id: UpgradeId; btn: HTMLElement }[] = [];
+/**
+ * 새로고침을 보내고 새 선택지를 기다리는 중. 그동안에는 카드를 누를 수 없다: 서버는 받은 순서대로 처리하므로,
+ * 기다리는 사이에 누른 카드의 번호는 아직 보지 못한 새 선택지에 쓰인다. 'key' 면 키보드로 눌렀다 (답이 오면 초점을 되돌린다)
+ */
+let rerollWait: false | 'pointer' | 'key' = false;
 /** 방금 끝난 판이 오른 순위표 (결과 화면의 "순위표 보기" 버튼이 이 순위표를 연다) */
 let resultBoard: BoardId | null = null;
 
@@ -438,8 +446,10 @@ function showSlots(weapons: number, passives: number): void {
   el.offerSlots.replaceChildren(part('무기', weapons, WEAPON_SLOTS), ' · ', part('패시브', passives, PASSIVE_SLOTS));
 }
 
-function showOffers(offers: Offer[], timeout: number): void {
+function showOffers(offers: Offer[], timeout: number, rerolls: number, rerollable: boolean): void {
   input.reset();
+  const refocus = rerollWait === 'key';
+  rerollWait = false;
   offerDeadline = performance.now() + timeout * 1000;
   // 선택지는 보통 3개, 배포 기도로 4개가 되기도 하고, 거의 다 최대 단계면 그보다 적다. 개수에 맞춰 배치한다
   el.offers.dataset.n = String(offers.length);
@@ -454,6 +464,7 @@ function showOffers(offers: Offer[], timeout: number): void {
       name.append(' ', node('em', o.level >= def.max ? 'offer__max' : '', tag));
       btn.append(node('span', 'offer__icon', def.icon), name, node('span', 'offer__desc', upgradeText(o.id, o.level)));
       btn.addEventListener('click', () => {
+        if (rerollWait) return;
         sound.play('pick');
         net.sendPick(i);
         el.levelup.classList.add('hidden');
@@ -464,8 +475,28 @@ function showOffers(offers: Offer[], timeout: number): void {
   );
   offerCards = offers.map((o, i) => ({ id: o.id, btn: el.offers.children[i] as HTMLElement }));
   refreshOfferHints();
+  showReroll(rerolls, rerollable);
   el.levelup.classList.remove('hidden');
+  // 키보드로 새로고침했으면 초점을 되돌린다 (누르는 동안 버튼이 꺼져서 초점을 잃었다)
+  if (refocus) (el.reroll.disabled ? (el.offers.firstElementChild as HTMLElement | null) : el.reroll)?.focus();
 }
+
+/** 새로고침 버튼: 남은 횟수 (서버가 보낸 값. 모양을 확인하고 쓴다) */
+function showReroll(rerolls: number, rerollable: boolean): void {
+  const left = Number.isInteger(rerolls) ? Math.max(0, Math.min(OFFER_REROLLS, rerolls)) : 0;
+  el.reroll.disabled = left === 0 || rerollable !== true;
+  el.rerollLeft.textContent = left === 0 ? '새로고침을 다 썼어요' : rerollable !== true ? '새로 나올 카드가 없어요' : `새로고침 · ${left}번 남음`;
+  el.offers.classList.remove('offers--wait');
+}
+
+el.reroll.addEventListener('click', (e) => {
+  if (rerollWait || el.reroll.disabled || el.levelup.classList.contains('hidden')) return;
+  // 키보드(Enter·Space)로 누른 클릭은 detail 이 0 이다
+  rerollWait = e.detail === 0 ? 'key' : 'pointer';
+  el.reroll.disabled = true;
+  el.offers.classList.add('offers--wait');
+  net.sendReroll();
+});
 
 /** 선택지 카드의 진화 안내 (이 무기·패시브를 재료로 쓰는 진화가 있고 아직 하지 않았으면) */
 function refreshOfferHints(): void {
@@ -751,8 +782,9 @@ function onMessage(msg: ServerMsg): void {
       updateHud(msg);
       break;
     case 'levelup':
-      sound.play('levelup');
-      showOffers(msg.offers, msg.timeout);
+      // 선택창이 이미 떠 있으면 새로고침의 답이다: 레벨업 소리를 다시 내지 않는다
+      if (el.levelup.classList.contains('hidden')) sound.play('levelup');
+      showOffers(msg.offers, msg.timeout, msg.rerolls, msg.rerollable);
       break;
     case 'chest':
       // 내가 연 보물상자에서 무엇이 올랐는지 (모양은 net.ts 가 확인했다). 강화 칸은 다음 스냅샷이 고쳐 그린다

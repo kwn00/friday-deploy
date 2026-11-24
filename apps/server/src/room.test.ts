@@ -1098,3 +1098,60 @@ test('입력 확인: 스냅샷에 마지막으로 받은 입력 번호, 그 입�
   mock.timers.tick(50);
   assert.equal(ws.snaps.at(-1)!.ack, 0);
 });
+
+test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하면 새 선택지가 제한 시간을 처음부터 다시 세며 온다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  room.onReroll(a.conn);
+  assert.equal(last(a.ws, 'levelup'), undefined, '선택 중이 아니면 아무것도 보내지 않는다');
+  assert.equal(me.rerolls, 2);
+  me.xp = me.xpNext;
+  room.world.gems.push({ id: 99_999, x: me.x, y: me.y, v: 1 });
+  advance(100);
+  const first = last(a.ws, 'levelup')!;
+  assert.deepEqual([first.timeout, first.rerolls, first.rerollable], [20, 2, true]);
+  advance(8000);
+  room.onReroll(a.conn);
+  advance(50);
+  const second = last(a.ws, 'levelup')!;
+  assert.notDeepEqual(second.offers, first.offers);
+  assert.ok(second.offers.every((o) => !first.offers.some((f) => f.id === o.id)), '지금 카드는 다시 나오지 않는다');
+  assert.deepEqual([second.timeout, second.rerolls, second.rerollable], [20, 1, true]);
+
+  // 일시정지 중에는 틱이 돌지 않으므로 바로 보낸다
+  room.onPause(a.conn, true);
+  const n = a.ws.msgs.length;
+  room.onReroll(a.conn);
+  const third = last(a.ws, 'levelup')!;
+  assert.ok(a.ws.msgs.length > n, '바로 왔다');
+  assert.deepEqual([third.rerolls, third.rerollable], [0, false]);
+
+  // 다 쓴 뒤의 새로고침: 위반이 아니고, 지금 선택지를 다시 보내 화면이 기다리며 멈춰 있지 않게 한다
+  room.onReroll(a.conn);
+  assert.deepEqual(last(a.ws, 'levelup')!.offers, third.offers);
+  assert.equal(me.rerolls, 0);
+  room.onPause(a.conn, false);
+  assert.equal(room.onPick(a.conn, 0), true);
+  assert.equal(me.up[third.offers[0]!.id], third.offers[0]!.level, '고른 것은 마지막 새 선택지의 첫 카드');
+});
+
+test('새로고침: 다시 연결해도 남은 새로고침 수가 이어진다', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  me.xp = me.xpNext;
+  room.world.gems.push({ id: 99_999, x: me.x, y: me.y, v: 1 });
+  advance(100);
+  room.onReroll(a.conn);
+  advance(50);
+  const shown = last(a.ws, 'levelup')!;
+  hangUp(room, a);
+  const ws = socket();
+  assert.ok(rooms.resume(keyOf(a.ws), ws as unknown as WebSocket));
+  const again = last(ws, 'levelup')!;
+  assert.deepEqual(again.offers, shown.offers);
+  assert.deepEqual([again.rerolls, again.rerollable], [1, true]);
+});

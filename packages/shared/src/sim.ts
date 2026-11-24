@@ -24,6 +24,7 @@ import {
   MAX_ENEMIES_ALL,
   MAX_ENEMIES_REGULAR,
   OFFER_COUNT,
+  OFFER_REROLLS,
   OFFER_TIMEOUT,
   PLAYER_BASE_HP,
   PLAYER_RADIUS,
@@ -155,6 +156,8 @@ export interface Player {
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
   offerTimer: number;
+  /** 이번 판에 남은 레벨업 선택지 새로고침 수 (OFFER_REROLLS 에서 시작한다) */
+  rerolls: number;
   /** 이번 판에서 센 무기·패시브 횟수 (통계용) */
   tally: UpgradeTally;
 }
@@ -428,6 +431,7 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     cd: {},
     offers: null,
     offerTimer: 0,
+    rerolls: OFFER_REROLLS,
     tally: newTally(),
   };
   world.players.set(id, p);
@@ -494,6 +498,37 @@ function levelUp(p: Player, up: UpgradeId): void {
 
 export function offersOf(p: Player): Offer[] {
   return (p.offers ?? []).map((id) => ({ id, level: lv(p, id) + 1 }));
+}
+
+/**
+ * 레벨업 선택지 새로고침 (한 판에 OFFER_REROLLS 번). 지금 보이는 카드를 빼고 레벨업과 같은 규칙(drawOffers)으로 다시 뽑는다.
+ * - 카드 수는 그대로다 (배포 기도로 4개였으면 4개). 뺀 나머지로 모자라면 지금 카드 중에서 무작위로 채운다
+ * - 새로 나올 것이 하나도 없으면(올릴 수 있는 것이 이미 다 나와 있다) 받지 않는다: 횟수가 줄지 않는다
+ * - 제한 시간은 처음부터 다시 센다
+ * 모두 비밀 난수로 정한다. 통계의 offered 에는 새로 나온 카드만 더한다 (그대로 남은 카드는 이미 셌다)
+ */
+export function rerollOffers(world: World, id: number): boolean {
+  const p = world.players.get(id);
+  if (!p || !p.offers || !canReroll(p)) return false;
+  const old = p.offers;
+  const fresh = offerPool(p).filter((u) => !old.includes(u));
+  const next = drawOffers(world, p, fresh, Math.min(old.length, fresh.length));
+  const keep = [...old];
+  while (next.length < old.length && keep.length > 0) next.push(keep.splice(Math.floor(world.secret() * keep.length), 1)[0]!);
+  shuffleOffers(world, next);
+  p.rerolls--;
+  for (const u of next) if (!old.includes(u)) tallyUp(p.tally.offered, u);
+  p.offers = next;
+  p.offerTimer = 0;
+  world.events.push({ type: 'offers', pid: p.id });
+  return true;
+}
+
+/** 지금 새로고침할 수 있는지: 선택 중이고, 횟수가 남았고, 지금 카드 말고 나올 수 있는 것이 있다 */
+export function canReroll(p: Player): boolean {
+  const shown = p.offers;
+  if (!shown || p.rerolls <= 0) return false;
+  return offerPool(p).some((u) => !shown.includes(u));
 }
 
 /** 다음 필드 아이템까지의 시간. 비밀 난수로 정해서 언제 나올지 관찰로 맞힐 수 없다 */
@@ -642,53 +677,69 @@ function checkLevelUp(world: World, p: Player): void {
     p.xp = Math.max(0, p.xp - p.xpNext);
     p.level++;
     p.xpNext = xpForLevel(p.level);
-    const weapons = WEAPON_IDS.filter((u) => lv(p, u) > 0).length;
-    const passives = PASSIVE_IDS.filter((u) => lv(p, u) > 0).length;
-    const pool = UPGRADE_IDS.filter((u) => {
-      const l = lv(p, u);
-      if (l >= UPGRADES[u].max) return false;
-      if (l > 0) return true;
-      // 진화한 무기는 보물상자로만 얻는다. 진화해서 없어진 재료 무기도 다시 나오지 않는다
-      if (evolutionOf(u) || evolvedAway(p.up, u)) return false;
-      return isWeapon(u) ? weapons < WEAPON_SLOTS : passives < PASSIVE_SLOTS;
-    });
+    const pool = offerPool(p);
     if (pool.length === 0) {
       heal(p);
       continue;
     }
-    const luck = luckOf(p);
     const count = Math.min(pool.length, OFFER_COUNT + (world.secret() < extraOfferChanceOf(p) ? 1 : 0));
-    const picked: UpgradeId[] = [];
-    if (weapons < WEAPON_SLOTS || passives < PASSIVE_SLOTS) {
-      const ownedChance = 1 + 0.3 * (p.level % 2 === 0 ? 2 : 1) - 1 / luck;
-      for (let k = 0; k < 2 && picked.length < count; k++) {
-        if (world.secret() >= ownedChance) continue;
-        const owned = pool.filter((u) => lv(p, u) > 0 && !picked.includes(u));
-        if (owned.length > 0) picked.push(owned[Math.floor(world.secret() * owned.length)]!);
-      }
-    }
-    while (picked.length < count) {
-      const rest = pool.filter((u) => !picked.includes(u));
-      let roll = world.secret() * rest.reduce((sum, u) => sum + UPGRADES[u].rarity, 0);
-      let choice = rest[rest.length - 1]!;
-      for (const u of rest) {
-        roll -= UPGRADES[u].rarity;
-        if (roll < 0) {
-          choice = u;
-          break;
-        }
-      }
-      picked.push(choice);
-    }
-    // 보여 주는 순서도 섞는다 (가진 것이 늘 앞에 오지 않게)
-    for (let i = picked.length - 1; i > 0; i--) {
-      const j = Math.floor(world.secret() * (i + 1));
-      [picked[i], picked[j]] = [picked[j]!, picked[i]!];
-    }
+    const picked = drawOffers(world, p, pool, count);
+    shuffleOffers(world, picked);
     p.offers = picked;
     p.offerTimer = 0;
     for (const u of picked) tallyUp(p.tally.offered, u);
     world.events.push({ type: 'offers', pid: p.id });
+  }
+}
+
+/** 선택지에 나올 수 있는 것: 가진 것은 최대 단계 전까지, 새 것은 칸이 남아 있을 때만 */
+function offerPool(p: Player): UpgradeId[] {
+  const weapons = WEAPON_IDS.filter((u) => lv(p, u) > 0).length;
+  const passives = PASSIVE_IDS.filter((u) => lv(p, u) > 0).length;
+  return UPGRADE_IDS.filter((u) => {
+    const l = lv(p, u);
+    if (l >= UPGRADES[u].max) return false;
+    if (l > 0) return true;
+    // 진화한 무기는 보물상자로만 얻는다. 진화해서 없어진 재료 무기도 다시 나오지 않는다
+    if (evolutionOf(u) || evolvedAway(p.up, u)) return false;
+    return isWeapon(u) ? weapons < WEAPON_SLOTS : passives < PASSIVE_SLOTS;
+  });
+}
+
+/** pool 에서 count 개를 겹치지 않게 뽑는다 (가진 것을 먼저 넣는 굴림, 나머지는 rarity 무게). count 는 pool 의 길이 이하 */
+function drawOffers(world: World, p: Player, pool: UpgradeId[], count: number): UpgradeId[] {
+  const weapons = WEAPON_IDS.filter((u) => lv(p, u) > 0).length;
+  const passives = PASSIVE_IDS.filter((u) => lv(p, u) > 0).length;
+  const picked: UpgradeId[] = [];
+  if (weapons < WEAPON_SLOTS || passives < PASSIVE_SLOTS) {
+    const ownedChance = 1 + 0.3 * (p.level % 2 === 0 ? 2 : 1) - 1 / luckOf(p);
+    for (let k = 0; k < 2 && picked.length < count; k++) {
+      if (world.secret() >= ownedChance) continue;
+      const owned = pool.filter((u) => lv(p, u) > 0 && !picked.includes(u));
+      if (owned.length > 0) picked.push(owned[Math.floor(world.secret() * owned.length)]!);
+    }
+  }
+  while (picked.length < count) {
+    const rest = pool.filter((u) => !picked.includes(u));
+    let roll = world.secret() * rest.reduce((sum, u) => sum + UPGRADES[u].rarity, 0);
+    let choice = rest[rest.length - 1]!;
+    for (const u of rest) {
+      roll -= UPGRADES[u].rarity;
+      if (roll < 0) {
+        choice = u;
+        break;
+      }
+    }
+    picked.push(choice);
+  }
+  return picked;
+}
+
+/** 보여 주는 순서도 섞는다 (가진 것이 늘 앞에 오지 않게) */
+function shuffleOffers(world: World, picked: UpgradeId[]): void {
+  for (let i = picked.length - 1; i > 0; i--) {
+    const j = Math.floor(world.secret() * (i + 1));
+    [picked[i], picked[j]] = [picked[j]!, picked[i]!];
   }
 }
 

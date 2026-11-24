@@ -202,6 +202,10 @@ export class Net {
     this.send({ t: 'pick', choice });
   }
 
+  sendReroll(): void {
+    this.send({ t: 'reroll' });
+  }
+
   sendStart(): void {
     this.send({ t: 'start' });
   }

@@ -16,6 +16,8 @@ export type ClientMsg =
   | { t: 'resume'; v: number; token: string; key: string }
   | { t: 'input'; seq: number; dx: number; dy: number }
   | { t: 'pick'; choice: number }
+  /** 지금 떠 있는 레벨업 선택지를 새로 뽑아 달라는 요청. 남은 횟수와 새 선택지는 서버가 정한다 */
+  | { t: 'reroll' }
   /** 페어 방의 호스트가 대기실에서 게임을 시작한다. */
   | { t: 'start' }
   /** 일시정지 요청. 서버는 솔로 방에서만 받아들인다 (페어에서는 다른 사람의 게임을 멈출 수 없다). */
@@ -245,7 +247,12 @@ export type ServerMsg =
   | Snapshot
   /** 솔로 일시정지 상태가 바뀔 때마다 서버가 알려준다. max: 자동 재개까지 남은 최대 시간(초) */
   | { t: 'pause'; on: boolean; max: number }
-  | { t: 'levelup'; offers: Offer[]; timeout: number }
+  /**
+   * 레벨업 선택지. 새로고침한 뒤에도 같은 메시지로 새 선택지를 보낸다 (timeout 은 다시 처음부터).
+   * rerolls: 이번 판에 남은 새로고침 수. rerollable: 지금 새로고침하면 다른 카드가 나올 수 있는지
+   * (false 면 올릴 수 있는 것이 이미 다 나와 있다: 새로고침해도 횟수만 줄어서 서버가 받지 않는다)
+   */
+  | { t: 'levelup'; offers: Offer[]; timeout: number; rerolls: number; rerollable: boolean }
   /** 보물상자를 열었다: 한 단계씩 오른 것들 (같은 것이 여러 번 있을 수 있다)과, 올릴 것이 없어 대신 찬 체력 */
   | { t: 'chest'; items: UpgradeId[]; heal: number }
   /** place: 이번 판이 순위표에 올랐을 때의 순위 (오르지 못했으면 없음) */
@@ -336,6 +343,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       if (!isInt(o.choice, 0, 7)) return null;
       return { t: 'pick', choice: o.choice };
     }
+    case 'reroll':
+      return { t: 'reroll' };
     case 'start':
       return { t: 'start' };
     case 'pause': {
