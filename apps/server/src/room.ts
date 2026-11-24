@@ -68,6 +68,11 @@ export interface Conn {
    * (월드가 멈춰 같은 틱의 스냅샷을 여러 번 보낼 때 같은 영역을 거듭 보내지 않게, 건너뛴 스냅샷의 영역은 다음에 보내게).
    */
   zoneTick: number;
+  /**
+   * 지금 선택지를 보낸 뒤, 받지 않은 새로고침에 이미 한 번 답했다 (지금 선택지를 다시 보냈다).
+   * 같은 선택지에 대해 거듭 오는 것에는 답하지 않는다: 일시정지 중에도 요청과 답이 오가며 전송량이 늘지 않게
+   */
+  rerollAnswered: boolean;
   /** 지키던 자리가 풀릴 때(이어받음·시간 초과·방 닫힘) 한 번 부른다 */
   onFree?: () => void;
 }
@@ -187,6 +192,7 @@ export class Room {
       lastInput: now,
       // 들어오는 순간 남아 있는 영역도 한 번 받는다
       zoneTick: -1,
+      rerollAnswered: false,
     };
     this.conns.set(p.id, conn);
     if (this.started) this.peak = Math.max(this.peak, this.conns.size);
@@ -377,7 +383,8 @@ export class Room {
    * 레벨업 선택지 새로고침. level 은 화면이 새로고침하려는 선택지의 레벨이다.
    * 선택 중이 아니거나, 다른 레벨의 선택지를 보고 보낸 것이거나(시간이 끝나 서버가 대신 고르고 다음 레벨업으로 넘어간 뒤에 도착),
    * 횟수를 다 썼거나, 새로 나올 것이 없으면 아무것도 바꾸지 않는다 (위반이 아니다: 늦게 도착하거나 두 번 누른 것일 수 있다).
-   * 그때도 선택 중이면 지금 선택지를 다시 보내서 화면이 새 카드를 기다리며 멈춰 있지 않게 한다. 남은 횟수와 새 선택지는 모두 서버가 정한다
+   * 그때도 선택 중이면 지금 선택지를 다시 보내서 화면이 새 카드를 기다리며 멈춰 있지 않게 한다 (같은 선택지에는 한 번만).
+   * 남은 횟수와 새 선택지는 모두 서버가 정한다
    */
   onReroll(conn: Conn, level: number): void {
     const p = this.world.players.get(conn.pid);
@@ -386,7 +393,10 @@ export class Room {
     if (this.started) this.lastActivity = now;
     this.active(conn, now);
     if (level !== p.level || !canReroll(p) || !rerollOffers(this.world, conn.pid)) {
+      // 같은 선택지에는 한 번만 답한다 (공식 화면은 답을 받으면 버튼을 끄므로 두 번 보내지 않는다)
+      if (conn.rerollAnswered) return;
       this.sendOffers(conn, p);
+      conn.rerollAnswered = true;
       return;
     }
     // 새 선택지는 이벤트로 보낸다. 일시정지 중에는 틱이 돌지 않으므로 여기서 바로 보낸다
@@ -395,6 +405,7 @@ export class Room {
 
   /** 지금 떠 있는 레벨업 선택지를 보낸다 (남은 선택 시간, 새로고침 남은 수와 함께) */
   private sendOffers(conn: Conn, p: Player): void {
+    conn.rerollAnswered = false;
     this.send(conn, {
       t: 'levelup',
       offers: offersOf(p),

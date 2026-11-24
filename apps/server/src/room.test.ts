@@ -1132,6 +1132,11 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   room.onReroll(a.conn, me.level);
   assert.deepEqual(last(a.ws, 'levelup')!.offers, third.offers);
   assert.equal(me.rerolls, 0);
+  // 같은 선택지에는 한 번만 답한다: 멈춰 둔 채 거듭 보내도 답이 쌓이지 않는다 (전송량)
+  const sent = a.ws.msgs.length;
+  for (let i = 0; i < 50; i++) room.onReroll(a.conn, me.level);
+  room.onReroll(a.conn, me.level - 1);
+  assert.equal(a.ws.msgs.length, sent, '더는 답하지 않는다');
   room.onPause(a.conn, false);
   assert.equal(room.onPick(a.conn, 0), true);
   assert.equal(me.up[third.offers[0]!.id], third.offers[0]!.level, '고른 것은 마지막 새 선택지의 첫 카드');
