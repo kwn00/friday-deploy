@@ -72,6 +72,31 @@ test('sanitizeName: 태그/제어문자 제거 및 길이 제한', () => {
   assert.ok(sanitizeName('a'.repeat(100)).length <= 12);
 });
 
+test('sanitizeName: 글자로 분류되지만 보이지 않는 한글 채움 문자는 뺀다 (빈칸처럼 보이는 이름 막기)', () => {
+  // U+3164 (HANGUL FILLER) 두 개: 예전에는 그대로 통과해 화면에 빈 이름으로 보였다
+  assert.equal(sanitizeName('ㅤㅤ'), 'anonymous');
+  for (const ch of ['ᅟ', 'ᅠ', 'ㅤ', 'ﾠ']) {
+    assert.equal(sanitizeName(ch), 'anonymous', `U+${ch.codePointAt(0)!.toString(16).toUpperCase()}`);
+    assert.equal(sanitizeName(ch.repeat(5)), 'anonymous');
+  }
+  assert.equal(sanitizeName('ㅤx'), 'x');
+  assert.equal(sanitizeName('aㅤb'), 'ab');
+  assert.equal(sanitizeName('ﾠ김ᅠ'), '김');
+  // 너비 없는 공백(U+200B)·단어 잇기(U+2060) 등은 원래도 빠졌다
+  assert.equal(sanitizeName('a​b'), 'ab');
+  assert.equal(sanitizeName('​​'), 'anonymous');
+  assert.equal(sanitizeName('⁠dev​'), 'dev');
+  // 보이지 않는 글자를 먼저 빼고 길이를 자른다 (앞에 잔뜩 붙여도 이름이 잘려 나가지 않는다)
+  assert.equal(sanitizeName('ㅤ'.repeat(12) + 'abc'), 'abc');
+  // 보통 이름은 그대로
+  for (const name of ['김개발_dev', '홍길동', 'Alice', 'dev-01.x', 'José', '日本語', 'Ελληνικά', 'ㄱㄴㄷ'.normalize('NFKC')]) {
+    assert.equal(sanitizeName(name), name);
+  }
+  // 서버가 받는 hello 도 같은 정제를 거친다
+  const hello = parseClientMsg(JSON.stringify({ t: 'hello', v: 1, token: 'x'.repeat(20), name: 'ㅤㅤ', mode: 'solo' }));
+  assert.equal(hello?.t === 'hello' && hello.name, 'anonymous');
+});
+
 test('sim: 입력 벡터는 서버에서 정규화되어 속도 상한을 넘을 수 없다', () => {
   const w = createWorld(1);
   const p = addPlayer(w, 'a');

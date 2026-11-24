@@ -553,7 +553,9 @@ function takeItem(world: World, p: Player, it: FieldItem): void {
 }
 
 /**
- * 보물상자를 연다 (뱀서 Treasure Chest). 5개 → 3개 → 1개 순서로 각각 따로 굴려 처음 성공한 것, 셋 다 실패하면 보스에 정해진 기본 단계.
+ * 보물상자를 연다 (뱀서 Treasure Chest). 5개 → 3개 → 1개 순서로 각각 따로 굴려 처음 성공한 것과 보스에 정해진 기본 단계 중
+ * 큰 쪽 (셋 다 실패하면 기본 단계). 기본 단계보다 적게 나오지는 않는다: 기본이 3개인 상자에서 1개 굴림이 성공해도 3개다
+ * (예전에는 1개가 되어, 운이 그 확률을 올리는 바람에 운이 좋을수록 덜 받았다).
  * 확률에는 운을 곱한다. 들어 있는 것은 가진 무기·패시브 중 아직 최대가 아닌 것을 하나씩 무작위로 (같은 것이 또 나올 수 있다).
  * 다만 진화할 수 있는 것이 있으면 그 몫은 진화가 먼저 차지한다 (EVOLUTIONS 순서, 한 상자에서 여러 번도 된다).
  * 올릴 것이 하나도 없으면 그 몫만큼 회복한다. 모두 비밀 난수로 정한다 (진화는 난수를 쓰지 않는다).
@@ -562,7 +564,9 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
   const [base, p5, p3, p1] = odds;
   const luck = luckOf(p);
   const roll = (pct: number): boolean => world.secret() * 100 < pct * luck;
-  const tier = roll(p5) ? 3 : roll(p3) ? 2 : roll(p1) ? 1 : base;
+  // 굴리는 순서와 횟수는 예전과 같다 (처음 성공한 데서 멈춘다)
+  const rolled = roll(p5) ? 3 : roll(p3) ? 2 : roll(p1) ? 1 : 0;
+  const tier = Math.max(base, rolled);
   const n = tier === 3 ? 5 : tier === 2 ? 3 : 1;
   const items: UpgradeId[] = [];
   let healed = 0;
@@ -992,11 +996,13 @@ function advance(world: World, dt: number): void {
         e.y = target.y + Math.sin(a) * 320;
         continue;
       }
-      // 넉백: 남은 넉백 시간만큼 거꾸로 (배율만큼) 움직인다. 배율이 음수면 오히려 끌려온다
+      // 넉백: 남은 넉백 시간만큼 거꾸로 (배율만큼) 움직인다. 배율이 음수면(사신) 오히려 끌려온다.
+      // 끌려오는 것은 걷는 것보다 느려지지 않는다: 넉백이 작은 무기(0.1)로 자꾸 맞혀 사신을 늦추지 못하게
       let step = def.speed * e.spd * dt;
       if (e.kbTime > 0) {
         const kt = Math.min(dt, e.kbTime);
-        step = def.speed * e.spd * (dt - kt) - def.speed * e.spd * kt * e.kbMult;
+        const kb = def.speed * e.spd * (dt - kt) - def.speed * e.spd * kt * e.kbMult;
+        step = e.kbMult < 0 ? Math.max(step, kb) : kb;
         e.kbTime -= kt;
       }
       // 빠른 적(사신 등)이 한 틱에 플레이어를 지나쳐 버리지 않게, 닿는 거리 안쪽까지만 다가간다

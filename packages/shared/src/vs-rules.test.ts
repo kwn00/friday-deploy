@@ -16,11 +16,13 @@ import {
   addPlayer,
   buildSnapshot,
   createWorld,
+  maxHpOf,
   decodeSnapshot,
   encodeSnapshot,
   pickOffer,
   pickupOf,
   setInput,
+  sfc32,
   step,
   xpForLevel,
   type Enemy,
@@ -200,7 +202,80 @@ test('30분이 되면 화면의 적이 모두 경험치 없이 사라지고, 1�
   assert.equal(w.enemies.filter((e) => e.type === 'monday').length, 2, '1분 뒤 하나 더');
 });
 
-test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사신(-0.5)은 오히려 끌려온다', () => {
+test('월요일 아침(사신)은 버틸 수 없는 끝이다: 코드 프리즈·keep-alive 최대에 방화벽·디버거·2단계 인증을 가진 60레벨도 30분 뒤 10초 안에 쓰러진다', () => {
+  // 예전에는 사신이 코드 프리즈에 얼어서(빙결 저항 1) 이 장비로 30분 뒤 1~6분을 더 버텼다
+  for (const seed of [501, 502, 503]) {
+    const { w, p } = quiet(seed);
+    p.up = { debugger: 1, firewall: 8, code_freeze: 7, two_factor: 7, keep_alive: 5, mech_keyboard: 5, dark_mode: 5, test_coverage: 5 };
+    p.level = 60;
+    p.hp = maxHpOf(p);
+    w.tick = 20 * STAGE_TIME - 1;
+    w.time = w.tick * DT;
+    w.wave = STAGE.length - 1;
+    const start = w.time;
+    let frozen = 0;
+    let weakened = 0;
+    for (let i = 0; i < 20 * 60 && p.alive; i++) {
+      step(w, DT);
+      for (const e of w.enemies) {
+        if (e.type !== 'monday') continue;
+        if (e.frozen > 0) frozen++;
+        if (e.resFreeze <= 1) weakened++;
+      }
+    }
+    assert.equal(p.alive, false, `시드 ${seed}: 1분 안에 쓰러진다`);
+    assert.ok(w.time - start < 10, `시드 ${seed}: 10초 안에 쓰러진다 (${(w.time - start).toFixed(2)}초)`);
+    assert.equal(frozen, 0, '사신은 한 번도 얼지 않는다');
+    assert.equal(weakened, 0, '방화벽에 맞아도 빙결 저항이 줄지 않는다');
+  }
+});
+
+test('코드 프리즈: 빙결 저항이 1 이하인 적은 예전처럼 얼고, 1 보다 큰 보스는 얼지 않는다 (방화벽에 맞아 1 까지 내려가면 언다)', () => {
+  const { w, p } = quiet(504);
+  p.shield = 1e9;
+  p.up = { code_freeze: 1 };
+  p.cd.code_freeze = 0;
+  const types: EnemyId[] = ['bug', 'monolith', 'spaghetti', 'god_class', 'monday'];
+  const hitBy = (type: EnemyId, resFreeze?: number): number => {
+    // 다음 광선은 12시 방향 (위쪽). 광선 위에 하나만 둔다
+    p.freezeDir = 11;
+    p.cd.code_freeze = 0;
+    const e = enemy(9700 + types.indexOf(type), p.x, p.y - 60, type);
+    if (resFreeze !== undefined) e.resFreeze = resFreeze;
+    e.spd = 0;
+    w.enemies = [e];
+    still(w);
+    return e.frozen;
+  };
+  assert.ok(hitBy('bug') > 0, '버그(0)는 언다');
+  assert.ok(hitBy('monolith') > 0, '모놀리스(1)는 언다');
+  assert.equal(hitBy('spaghetti'), 0, '스파게티 코드(1.1)는 얼지 않는다');
+  assert.equal(hitBy('god_class'), 0, 'God Class(1.1)는 얼지 않는다');
+  assert.equal(hitBy('monday'), 0, '월요일 아침(1.1)은 얼지 않는다');
+  assert.ok(hitBy('spaghetti', 1.0) > 0, '방화벽에 맞아 1 까지 내려간 스파게티 코드는 언다');
+  assert.equal(ENEMIES.monday.debuffRes, true, '월요일 아침은 방화벽에 맞아도 저항이 줄지 않는다');
+});
+
+test('사신은 넉백이 작은 무기(0.1)에 맞아도 걷는 것보다 느리게 다가오지 않는다 (끌려오기만 한다)', () => {
+  const { w, p } = quiet(505);
+  p.shield = 1e9;
+  p.up = {};
+  const walk = ENEMIES.monday.speed * DT;
+  for (const kbMult of [0, -0.05, -0.5, -1, -1.5]) {
+    const e = enemy(9800, p.x + 300, p.y, 'monday');
+    // 넉백 0.1 인 무기(멀티캐스트·고양이·스프린트)에 막 맞은 사신: 배율 0.1 × -0.5 = -0.05
+    e.kbTime = kbMult === 0 ? 0 : 0.12;
+    e.kbMult = kbMult;
+    w.enemies = [e];
+    const x = e.x;
+    still(w);
+    const moved = x - e.x;
+    assert.ok(moved >= walk - 1e-9, `배율 ${kbMult}: 한 틱에 ${moved.toFixed(2)}px (걷기 ${walk.toFixed(2)}px)`);
+    if (kbMult < -1) assert.ok(moved > walk + 1, `배율 ${kbMult}: 넉백이 크면 걷는 것보다 빨리 끌려온다`);
+  }
+});
+
+test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사신(-0.5)은 밀려나지 않고 계속 다가온다', () => {
   for (const [type, away] of [['off_by_one', true], ['monday', false]] as const) {
     const { w, p } = quiet(9);
     p.up = { console_log: 1 };
@@ -218,7 +293,7 @@ test('넉백 (뱀서): 맞은 적은 0.12초 동안 거꾸로 움직인다. 사�
       }
       if (hitAt >= 0 && t === hitAt + 1) {
         if (away) assert.ok(e.x > before, `${type}: 밀려난다 (${before} → ${e.x})`);
-        else assert.ok(e.x < before, `${type}: 끌려온다`);
+        else assert.ok(e.x < before, `${type}: 밀려나지 않고 다가온다`);
         break;
       }
     }
@@ -268,6 +343,87 @@ test('보물상자 (뱀서 Treasure Chest): 닿아야 열리고, 5개 → 3개 �
   w.items.push({ id: 9400, kind: 'chest', x: p.x + pickupOf(p) - 2, y: p.y, ttl: Infinity, chest: [1, 0, 0, 0] });
   still(w);
   assert.ok(w.items.some((it) => it.id === 9400));
+});
+
+type Odds = readonly [1 | 2 | 3, number, number, number];
+const ITEMS = [1, 1, 3, 5] as const;
+
+test('보물상자는 기본 단계보다 적게 나오지 않는다: 굴리는 순서와 비밀 난수를 쓰는 횟수는 그대로, 기본 1 상자는 예전과 같다', () => {
+  // 비밀 난수를 정해 둔 값으로 바꿔, 5개·3개·1개 굴림이 어디서 성공하는지 경우마다 본다
+  const queue: number[] = [];
+  let calls = 0;
+  const w = createWorld({ rng: sfc32(31), secret: () => (calls++, queue.length > 0 ? queue.shift()! : 0.5) });
+  const p = addPlayer(w, 'a');
+  p.xpNext = 1e9;
+  p.cd.console_log = 1e9;
+  w.itemCd = 1e9;
+  // 굴림 값 (× 100 이 확률(%)보다 작으면 성공). 0.0001 은 언제나 성공, 0.9999 는 100% 가 아니면 실패
+  const values = [0.0001, 0.02, 0.04, 0.08, 0.3, 0.6, 0.9999];
+  const odds: Odds[] = [[2, 3, 10, 50], ...STAGE.flatMap((wv) => (wv.boss ? [wv.boss.chest] : []))];
+  for (const o of odds) {
+    for (const a of values) {
+      for (const b of values) {
+        for (const c of values) {
+          const draws = [a, b, c];
+          // 예전 규칙: 처음 성공한 것, 셋 다 실패하면 기본 단계. 몇 번 굴렸는지도 센다
+          let rolledTier = 0;
+          let rolls = 0;
+          for (const [k, pct] of [o[1], o[2], o[3]].entries()) {
+            rolls++;
+            if (draws[k]! * 100 < pct) {
+              rolledTier = 3 - k;
+              break;
+            }
+          }
+          const oldTier = rolledTier || o[0];
+          const want = ITEMS[Math.max(o[0], rolledTier)];
+          p.up = { console_log: 1, regex: 1, ai_agent: 1 };
+          queue.length = 0;
+          queue.push(...draws.slice(0, rolls));
+          calls = 0;
+          w.items.push({ id: w.nextId++, kind: 'chest', x: p.x + 3, y: p.y, ttl: Infinity, chest: o });
+          w.events.length = 0;
+          still(w);
+          const ev = w.events.find((e) => e.type === 'chest');
+          assert.ok(ev && ev.type === 'chest', '열렸다');
+          const label = `${JSON.stringify(o)} 굴림 ${draws.slice(0, rolls).join(', ')}`;
+          assert.equal(ev.items.length, want, `${label}: ${want}개`);
+          assert.ok(ev.items.length >= ITEMS[o[0]], `${label}: 기본 단계(${ITEMS[o[0]]}개)보다 적지 않다`);
+          if (o[0] === 1) assert.equal(ev.items.length, ITEMS[oldTier], `${label}: 기본 1 상자는 예전과 같다`);
+          // 굴림 횟수 + 올린 것마다 한 번 (예전과 같은 흐름)
+          assert.equal(calls, rolls + ev.items.length, `${label}: 비밀 난수를 쓰는 횟수`);
+        }
+      }
+    }
+  }
+});
+
+test('운이 좋을수록 8분 보스 상자(기본 3개)에서 받는 것이 줄지 않는다', () => {
+  const open = (seed: number, prayer: number, odds: Odds): number[] => {
+    const { w, p } = quiet(seed);
+    const counts: number[] = [];
+    for (let i = 0; i < 2000; i++) {
+      p.up = { console_log: 1, regex: 1, ai_agent: 1, coffee: 1, ...(prayer ? { deploy_prayer: prayer } : {}) };
+      w.items.push({ id: w.nextId++, kind: 'chest', x: p.x + 3, y: p.y, ttl: Infinity, chest: odds });
+      w.events.length = 0;
+      still(w);
+      const ev = w.events.find((e) => e.type === 'chest');
+      if (ev && ev.type === 'chest') counts.push(ev.items.length);
+    }
+    assert.equal(counts.length, 2000);
+    return counts;
+  };
+  const avg = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const boss8 = STAGE[8]!.boss!.chest;
+  assert.deepEqual(boss8, [2, 3, 10, 50], '8분 왕버그 상자');
+  const luck1 = [61, 62, 63].flatMap((s) => open(s, 0, boss8));
+  const luck15 = [61, 62, 63].flatMap((s) => open(s, 5, boss8));
+  assert.ok(luck1.every((n) => n >= 3) && luck15.every((n) => n >= 3), '언제나 3개 이상');
+  // 기대값: 운 1 은 3.06개 (5개 3%), 운 1.5 는 3.09개 (5개 4.5%). 예전에는 2.18 → 1.88 로 줄었다
+  assert.ok(avg(luck15) >= avg(luck1), `운 1.5 평균 ${avg(luck15).toFixed(3)} ≥ 운 1 평균 ${avg(luck1).toFixed(3)}`);
+  // 기본 1 상자는 운이 좋을수록 많아진다 (예전과 같다)
+  const base1 = STAGE[13]!.boss!.chest;
+  assert.ok(avg([61, 62].flatMap((s) => open(s, 5, base1))) > avg([61, 62].flatMap((s) => open(s, 0, base1))), '기본 1 상자');
 });
 
 test('상자는 LGTM 처럼 레벨을 올리지 않고, 저절로 놓이는 아이템의 자리(3개)를 차지하지 않는다', () => {

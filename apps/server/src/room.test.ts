@@ -115,6 +115,121 @@ test('솔로 일시정지: 한 번에 10분, 한 판에 합쳐서 30분까지만
   assert.ok(room.world.tick > tick, '월드는 계속 돈다');
 });
 
+/** 혼자 하는 방 하나: 죽지 않게 해 두고(시간만 본다) 일시정지 예산을 24분 써서 6분(360초)만 남긴다 */
+function soloWithBudgetLeft360(): { room: Room; a: { conn: Conn; ws: FakeSocket }; keepAlive: () => void; leftNow: () => number } {
+  const rooms = new RoomManager();
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  let seq = 1;
+  const keepAlive = (): void => {
+    me.hp = 1e9;
+    room.onInput(a.conn, seq++, 0, 0);
+  };
+  keepAlive();
+  advance(1000);
+  for (let i = 0; i < 3; i++) {
+    keepAlive();
+    room.onPause(a.conn, true);
+    advance(8 * MIN);
+    room.onPause(a.conn, false);
+  }
+  keepAlive();
+  /** 지금 멈추면 서버가 주는 시간(초). 확인한 뒤 바로 풀지 않는다 (푸는 것도 예산을 쓴다) */
+  const leftNow = (): number => {
+    room.onPause(a.conn, true);
+    const m = last(a.ws, 'pause')!;
+    assert.equal(m.on, true, `멈출 수 있어야 한다: ${JSON.stringify(m)}`);
+    return m.max;
+  };
+  return { room, a, keepAlive, leftNow };
+}
+
+test('솔로 일시정지: 한 번 멈추면 적어도 3초를 쓴다. 3초보다 길게 멈추면 멈춘 만큼만 쓴다', () => {
+  {
+    const { leftNow } = soloWithBudgetLeft360();
+    assert.equal(leftNow(), 360, '24분을 썼으면 6분이 남는다');
+  }
+  {
+    // 5초 멈추면 5초만 쓴다
+    const { room, a, leftNow } = soloWithBudgetLeft360();
+    room.onPause(a.conn, true);
+    advance(5000);
+    room.onPause(a.conn, false);
+    assert.equal(leftNow(), 355);
+  }
+  {
+    // 2초만 멈췄어도 3초를 쓴다
+    const { room, a, leftNow } = soloWithBudgetLeft360();
+    room.onPause(a.conn, true);
+    advance(2000);
+    room.onPause(a.conn, false);
+    assert.equal(leftNow(), 357);
+  }
+  {
+    // 1초 동안 20번 껐다 켜면 예산이 60초 넘게 준다 (실제로 멈춘 시간은 0.5초)
+    const { room, a, leftNow } = soloWithBudgetLeft360();
+    for (let i = 0; i < 20; i++) {
+      room.onPause(a.conn, true);
+      mock.timers.tick(25);
+      room.onPause(a.conn, false);
+      mock.timers.tick(25);
+    }
+    const left = leftNow();
+    assert.ok(left <= 300, `360초에서 60초 넘게 줄어야 한다: ${left}초 남음`);
+  }
+});
+
+test('솔로 일시정지: 50ms 마다 껐다 켜서 느린 화면으로 버틸 수 없다 (30분 예산이 600번 만에 바닥나고, 그 뒤로는 거절)', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), null));
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  const me = room.world.players.get(a.conn.pid)!;
+  let seq = 1;
+  /** 죽지 않게, 레벨업 선택지는 바로 고르고(선택을 기다리는 동안은 월드가 멈춘다), 입력은 계속 보낸다 */
+  const tend = (): void => {
+    me.hp = 1e9;
+    if (me.offers) room.onPick(a.conn, 0);
+    room.onInput(a.conn, seq++, 0, 0);
+  };
+  let toggles = 0;
+  let rejected = false;
+  for (; toggles < 1000; toggles++) {
+    tend();
+    room.onPause(a.conn, true);
+    if (last(a.ws, 'pause')!.on === false) {
+      rejected = true;
+      break;
+    }
+    mock.timers.tick(25);
+    room.onPause(a.conn, false);
+    mock.timers.tick(25);
+  }
+  assert.ok(rejected, '예산이 바닥나 거절돼야 한다');
+  assert.ok(toggles <= 600, `껐다 켜기 ${toggles}번 만에 바닥난다 (실제로 멈춘 시간은 ${(toggles * 25) / 1000}초)`);
+  assert.deepEqual(last(a.ws, 'pause'), { t: 'pause', on: false, max: 0 }, '거절은 지금과 같은 모양');
+
+  // 그 뒤로는 멈출 수 없다: 월드는 제 속도로 돈다 (1초에 20틱)
+  const tick = room.world.tick;
+  for (let i = 0; i < 20; i++) {
+    tend();
+    room.onPause(a.conn, true);
+    mock.timers.tick(25);
+    room.onPause(a.conn, false);
+    mock.timers.tick(25);
+  }
+  assert.ok(room.world.tick - tick >= 19, `${room.world.tick - tick}틱`);
+
+  // 기록에는 실제로 멈춰 있던 시간이 남는다 (예산에서 뺀 최소 몫이 아니라)
+  survive(room, [a.conn], 31);
+  down(room, a.conn);
+  advance(100);
+  assert.equal(reports.length, 1);
+  const real = Math.round((toggles * 25) / 1000);
+  assert.ok(Math.abs(reports[0]!.pausedSeconds - real) <= 1, `pausedSeconds ${reports[0]!.pausedSeconds} (실제 약 ${real}초)`);
+});
+
 test('페어: 누군가 쓰러진 뒤에 들어온 사람은 관전하고, 결과에는 함께 한 시간만 적힌다', () => {
   const rooms = new RoomManager();
   const room = rooms.create('coop')!;

@@ -1163,12 +1163,30 @@ body {
     min-height: 0;
     margin-top: 4px;
   }
+  /* 방 코드 칸·참가 버튼 아래(안내 한 줄 + 상태줄 + 여백)가 구석 버튼의 누르는 높이(44px)보다 낮으면,
+   * 구석 버튼이 그 모서리를 덮어 눌리지 않는다. 아래 여백을 늘려 그만큼 자리를 둔다 (6 + 16.5 + 4 + 20 ≥ 44) */
+  .panel--title {
+    padding-bottom: 20px;
+  }
   .panel--title .btn small {
     display: block;
   }
   /* 타이틀: 세 버튼을 한 줄에 놓아 세로 공간을 아낀다 */
   .panel--title .buttons {
     grid-template-columns: repeat(3, 1fr);
+  }
+  /* 결과 화면: 보이는 버튼(2개, 순위에 오르면 '순위표 보기'까지 3개)을 모두 한 줄에. 두 줄이면 셋째('처음으로')가 화면 밖으로 밀린다 */
+  .panel--over .buttons {
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+  }
+  /* 칸이 좁아 글자가 두 줄이 되므로, 작은 글씨('리더보드')는 낱말 중간에서 끊기지 않게 아랫줄에 (타이틀 버튼과 같다) */
+  .panel--over .btn {
+    word-break: keep-all;
+  }
+  .panel--over .btn small {
+    display: block;
   }
   .place {
     margin-bottom: 8px;

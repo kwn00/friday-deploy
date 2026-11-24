@@ -2,7 +2,7 @@
 
 /**
  * 적 종류. 순서가 곧 통신에서 쓰는 번호다 (6비트, 64종까지). 새 것은 맨 뒤에 추가할 것.
- * 수치는 뱀서 위키의 같은 역할 적의 값을 그대로 옮겼다 (체력·공격력·넉백·빙결 저항·경험치).
+ * 수치는 뱀서 위키의 같은 역할 적의 값을 그대로 옮겼다 (체력·공격력·넉백·빙결 저항·경험치). 예외: 월요일 아침의 빙결 저항 (아래 보스 주석).
  * 속도: 위키에 단위가 없어서, 뱀서 플레이어의 기본 속도를 적 속도 단위 200 으로 보고 우리 플레이어 기본 속도(70 px/s)에 맞췄다
  * (뱀서 값 × 70/200). 해골·좀비(100)는 플레이어의 절반, 박쥐(140)는 0.7배, 유령(200)은 플레이어와 같다.
  */
@@ -39,7 +39,10 @@ export interface EnemyDef {
   /** 넉백을 받는 배율과 그 상한 (방화벽에 맞으면 상한까지 오른다). 음수면 맞을 때 오히려 끌려온다 */
   kb: number;
   kbMax: number;
-  /** 빙결 저항: 코드 프리즈의 빙결 확률(1)보다 크면 얼지 않는다 */
+  /**
+   * 빙결 저항: 코드 프리즈의 빙결 확률(1)보다 크면 얼지 않는다 (디버거의 중단점도 같다. 디버거는 보스를 아예 멈추지 않는다).
+   * 방화벽에 맞을 때마다 0.1 씩 줄어서 1.1 인 보스도 한 번 맞으면 언다. 월요일 아침은 방화벽의 약화를 받지 않아(debuffRes) 끝까지 얼지 않는다
+   */
   resFreeze: number;
   xp: number;
   /** 크기(px) */
@@ -68,14 +71,18 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
   tech_debt: { name: '기술 부채', hp: 500, power: 20, speed: 80 * V, kb: 0, kbMax: 3, resFreeze: 0, xp: 3, r: 10 },
   flaky_test: { name: '깨지는 테스트', hp: 30, lvHp: true, power: 1, speed: 20 * V, kb: 1, kbMax: 3, resFreeze: 0, xp: 2, r: 6 },
   bug_swarm: { name: '버그 떼', hp: 1, power: 1, speed: 700 * V, kb: 1, kbMax: 3, resFreeze: 0, xp: 1, r: 4, fixed: true },
-  // 보스 (뱀서의 Glowing Bat, Giant Werewolf, Giant Mummy, Mantichana 보스, Giant Bat 보스, The Reaper 와 같은 수치)
+  // 보스 (뱀서의 Glowing Bat, Giant Werewolf, Giant Mummy, Mantichana 보스, Giant Bat 보스, The Reaper 와 같은 수치).
+  // 다만 월요일 아침(사신)의 빙결 저항은 위키에서 옮긴 1 이 아니라 1.1 이다: 30분 뒤에는 판 길이에 상한이 없고
+  // 순위는 버틴 시간이 먼저라, 사신을 얼려 몇 분씩 더 버티지 못하게 한다. 사신은 멈추거나 밀어낼 수 없는 끝이다
+  // (넉백은 음수라 밀려나지 않고 걷는 것보다 느려지지도 않으며(sim.ts 의 적 이동), 방화벽의 약화를 받지 않고,
+  // 디버거는 보스를 멈추지 않는다)
   boss_bug: { name: '왕버그', hp: 50, lvHp: true, power: 10, speed: 140 * V, kb: 1, kbMax: 3, resFreeze: 0, xp: 30, r: 8, boss: true },
   legacy_code: { name: '레거시 코드', hp: 200, lvHp: true, power: 20, speed: 130 * V, kb: 0.1, kbMax: 1, resFreeze: 0, xp: 2, r: 12, boss: true },
   spaghetti: { name: '스파게티 코드', hp: 250, lvHp: true, power: 20, speed: 80 * V, kb: 0, kbMax: 1, resFreeze: 1.1, xp: 25, r: 13, boss: true },
   god_class: { name: 'God Class', hp: 150, lvHp: true, power: 20, speed: 160 * V, kb: 0, kbMax: 1, resFreeze: 1.1, xp: 50, r: 12, boss: true },
   monolith: { name: '모놀리스', hp: 500, lvHp: true, power: 20, speed: 140 * V, kb: 0, kbMax: 1, resFreeze: 1, xp: 25, r: 14, boss: true },
   monday: {
-    name: '월요일 아침', hp: 655350, lvHp: true, power: 65535, speed: 1200 * V, kb: -0.5, kbMax: 0, resFreeze: 1, xp: 0, r: 10,
+    name: '월요일 아침', hp: 655350, lvHp: true, power: 65535, speed: 1200 * V, kb: -0.5, kbMax: 0, resFreeze: 1.1, xp: 0, r: 10,
     boss: true, killRes: true, debuffRes: true,
   },
 };

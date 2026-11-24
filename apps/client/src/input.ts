@@ -1,3 +1,5 @@
+import { MoveKeys } from './move-keys';
+
 /** 키보드(WASD/방향키) + 터치 가상 조이스틱(화면 아무 곳이나 드래그) */
 export class Input {
   dx = 0;
@@ -5,21 +7,24 @@ export class Input {
   /** 조이스틱 UI 표시용 (CSS 픽셀 좌표) */
   stick: { ox: number; oy: number; x: number; y: number } | null = null;
 
-  private keys = new Set<string>();
+  private keys = new MoveKeys();
   private pointerId: number | null = null;
   private static readonly RADIUS = 48;
 
-  constructor(target: HTMLElement) {
+  /**
+   * active: 지금 키보드 이동을 받을 때인지 (판이 진행 중이고 겹친 화면이 없을 때. main.ts 가 알려준다).
+   * 아닐 때는 방향키·WASD 를 그냥 두어 브라우저가 스크롤 등에 쓴다
+   */
+  constructor(target: HTMLElement, active: () => boolean = () => true) {
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement) return;
-      if (Input.KEYMAP[e.code]) {
-        this.keys.add(e.code);
+      if (this.keys.down(e.code, active())) {
         e.preventDefault();
         this.fromKeys();
       }
     });
     window.addEventListener('keyup', (e) => {
-      this.keys.delete(e.code);
+      this.keys.up(e.code);
       this.fromKeys();
     });
     window.addEventListener('blur', () => this.reset());
@@ -65,31 +70,9 @@ export class Input {
     this.dy = 0;
   }
 
-  private static readonly KEYMAP: Record<string, [number, number]> = {
-    KeyW: [0, -1],
-    ArrowUp: [0, -1],
-    KeyS: [0, 1],
-    ArrowDown: [0, 1],
-    KeyA: [-1, 0],
-    ArrowLeft: [-1, 0],
-    KeyD: [1, 0],
-    ArrowRight: [1, 0],
-  };
-
   private fromKeys(): void {
-    let x = 0;
-    let y = 0;
-    for (const k of this.keys) {
-      const v = Input.KEYMAP[k];
-      if (v) {
-        x += v[0];
-        y += v[1];
-      }
-    }
-    x = Math.sign(x);
-    y = Math.sign(y);
-    const len = Math.hypot(x, y) || 1;
-    this.dx = x / len;
-    this.dy = y / len;
+    const { dx, dy } = this.keys.dir();
+    this.dx = dx;
+    this.dy = dy;
   }
 }

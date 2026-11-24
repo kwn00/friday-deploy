@@ -2,7 +2,7 @@
  * 테마를 화면에 입힌다: CSS 변수, 타이틀 문구, 브라우저 테마 색, 캔버스(렌더러).
  * 게임 중에도 다시 부를 수 있다 (나중에 서버가 테마를 바꿔 내려주면 받은 값으로 부르기만 하면 된다).
  */
-import { ACTIVE_THEME, type ThemeId } from '@friday-deploy/shared';
+import type { ThemeId } from '@friday-deploy/shared';
 import { THEMES, type Theme, type UiToken } from './themes';
 
 /** 테마가 바뀔 때 함께 바꿔야 하는 것 (렌더러 등) */
@@ -10,7 +10,8 @@ export interface ThemeTarget {
   setTheme(theme: Theme): void;
 }
 
-let current: Theme = THEMES[ACTIVE_THEME];
+/** applyTheme 을 부르기 전에는 기본 테마다 (style.css 의 첫 화면과 같다) */
+let current: Theme = THEMES.default;
 
 export function currentTheme(): Theme {
   return current;

@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ACTIVE_THEME, GAME_TAGLINE, THEME_IDS, isThemeId } from '@friday-deploy/shared';
+import { GAME_TAGLINE, THEME_IDS, THEME_SCHEDULE, isThemeId, themeAt } from '@friday-deploy/shared';
 import { DEV_A, DEV_B, PAL } from './art';
 import { ALL_THEMES, THEMES, type UiToken } from './themes';
 
 const COLOR = /^#[0-9a-f]{6}$/i;
 const RGB = /^\d{1,3}, \d{1,3}, \d{1,3}$/;
 
-test('theme: 쓰고 있는 테마가 목록에 있다', () => {
-  assert.ok(isThemeId(ACTIVE_THEME));
-  assert.ok(THEMES[ACTIVE_THEME]);
+test('theme: 지금 쓰는 테마와 일정에 적힌 테마가 모두 목록에 있다', () => {
+  for (const id of [themeAt(Date.now()), ...THEME_SCHEDULE.map((p) => p.id)]) {
+    assert.ok(isThemeId(id), id);
+    assert.ok(THEMES[id], id);
+  }
   assert.equal(isThemeId('nope'), false);
   assert.equal(isThemeId(1), false);
 });

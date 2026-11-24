@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { LEADERBOARD_SEASON, type LeaderboardResponse, type UpgradeStatsResponse
 import { Leaderboard, MemoryStore, type LeaderboardStore } from './leaderboard';
 import { UpgradeStats, type StatsKind } from './stats';
 import { IpLimiter, SECURITY_HEADERS, TokenBucket, clientIp, issueSession, originAllowed, pathnameOf, queryOf, verifySession } from './security';
+import { sendFile } from './static';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
@@ -154,13 +155,17 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string
   if (!existsSync(file) || statSync(file).isDirectory()) file = path.join(CLIENT_DIST, 'index.html');
   if (!existsSync(file)) return json(res, 404, { error: 'client_not_built' });
   const ext = path.extname(file);
-  res.writeHead(200, {
+  const headers = {
     ...SECURITY_HEADERS,
     'Content-Type': MIME[ext] ?? 'application/octet-stream',
     'Cache-Control': file.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
-  });
-  if (req.method === 'HEAD') return void res.end();
-  createReadStream(file).pipe(res);
+  };
+  if (req.method === 'HEAD') {
+    res.writeHead(200, headers);
+    return void res.end();
+  }
+  // 받는 도중에 끊겨도 읽던 파일을 닫고, 파일을 열지 못해도(열린 파일이 너무 많음 등) 프로세스가 죽지 않게 한다 (static.ts)
+  sendFile(res, file, headers, (status) => json(res, status, { error: status === 404 ? 'not_found' : 'internal' }));
 }
 
 function handleRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -443,12 +448,18 @@ function onConnection(ws: WebSocket, ip: string): void {
 }
 
 // 배포·재시작 때 아직 저장하지 못한 기록을 마저 쓰고 끝낸다 (최대 3초)
+// (이 신호가 서버까지 오려면 node 가 직접 떠 있어야 한다: render.yaml 의 startCommand 참고)
 process.once('SIGTERM', () => {
+  const at = Date.now();
+  console.log('[server] SIGTERM: 남은 기록을 저장하고 끝냅니다');
   setTimeout(() => process.exit(0), 3000).unref();
   // 리더보드 기록과 통계를 함께 마저 쓰고(기록이 통계를 기다리지 않게), 그다음에 같은 저장소를 한 번 닫는다
   void Promise.allSettled([leaderboard.flushAll(2400), stats.close(2400)])
     .then(() => leaderboard.close(0))
-    .finally(() => process.exit(0));
+    .finally(() => {
+      console.log(`[server] 종료 (${Date.now() - at}ms)`);
+      process.exit(0);
+    });
 });
 
 server.listen(PORT, () => {

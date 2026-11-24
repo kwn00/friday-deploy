@@ -1,5 +1,4 @@
 import {
-  ACTIVE_THEME,
   APP_VERSION,
   FIELD_ITEMS,
   FIELD_ITEM_KINDS,
@@ -18,6 +17,7 @@ import {
   evolutionOf,
   normalizeRoomCode,
   sanitizeName,
+  themeAt,
   unseenReleases,
   upgradeText,
   type BoardId,
@@ -36,6 +36,7 @@ import { Sound } from './audio';
 import { chestText } from './chest';
 import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
+import { sendInvite, takeInvite } from './invite';
 import { Leaderboard } from './leaderboard';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
@@ -104,13 +105,19 @@ const el = {
 document.title = GAME_TITLE;
 $('title-text').textContent = GAME_TITLE;
 
-const input = new Input(el.canvas);
+// 방향키·WASD 는 판이 진행 중이고 겹친 화면(메뉴, 선택창, 다시 연결 중, 순위표, 새 소식)이 없을 때만 이동으로 받는다.
+// 그 밖에는 브라우저에 맡긴다 (순위표·새 소식 목록을 방향키로 스크롤하는 등)
+const input = new Input(
+  el.canvas,
+  () => phase === 'playing' && !menuOpen && el.levelup.classList.contains('hidden') && !reconnecting && !board.isOpen && !notes.isOpen,
+);
 const renderer = new Renderer(el.canvas, input);
 const minimap = new Minimap(el.minimap);
-// 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 바꾸려면 packages/shared/src/theme.ts 의 ACTIVE_THEME
+// 계절·행사 테마 (색, 바닥, 눈, 캐릭터 장식, 타이틀 문구). 날짜로 고른다: packages/shared/src/theme.ts 의 THEME_SCHEDULE
+// (보이는 것만 바꾸므로 브라우저 시계를 쓴다. 기간이 끝나면 다음에 불러올 때 기본 화면)
 // 효과음과 배경음악 (소리 파일 없이 브라우저가 만든다. audio.ts). 테마가 음악을 바꿀 수 있다
 const sound = new Sound();
-applyTheme(ACTIVE_THEME, [renderer, sound]);
+applyTheme(themeAt(Date.now()), [renderer, sound]);
 renderer.onCue = (cue) => sound.cue(cue);
 sound.playMusic('title');
 // 순위표가 열려 있는 동안 뒤 화면은 포커스를 받지 않는다
@@ -563,18 +570,17 @@ function renderLobby(): void {
 }
 
 async function invite(): Promise<void> {
-  const url = inviteUrl();
-  try {
-    if (navigator.share && window.matchMedia('(pointer: coarse)').matches) {
-      await navigator.share({ title: GAME_TITLE, text: `${GAME_TITLE} 같이 하자! 방 코드 ${roomCode}`, url });
-      return;
-    }
-    await navigator.clipboard.writeText(url);
-    el.lobbyStatus.textContent = '초대 링크를 복사했어요.';
-  } catch {
-    // 공유를 취소했거나 클립보드를 쓸 수 없는 환경: 코드를 직접 알려주면 된다
-    el.lobbyStatus.textContent = `링크를 복사하지 못했어요. 코드 ${roomCode} 를 직접 알려주세요.`;
-  }
+  const code = roomCode;
+  // 휴대폰은 공유 창, 그 밖에는 클립보드 복사. 공유 창을 닫기만 했으면 아무 말도 하지 않는다 (invite.ts)
+  const useShare = typeof navigator.share === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const outcome = await sendInvite(
+    { title: GAME_TITLE, text: `${GAME_TITLE} 같이 하자! 방 코드 ${code}`, url: inviteUrl() },
+    useShare ? (data) => navigator.share(data) : null,
+    (text) => navigator.clipboard.writeText(text),
+  );
+  if (outcome === 'copied') el.lobbyStatus.textContent = '초대 링크를 복사했어요.';
+  // 클립보드를 쓸 수 없는 환경: 코드를 직접 알려주면 된다
+  else if (outcome === 'failed') el.lobbyStatus.textContent = `링크를 복사하지 못했어요. 코드 ${code} 를 직접 알려주세요.`;
 }
 
 /* ───────────── 결과 ───────────── */
@@ -648,6 +654,8 @@ function onMessage(msg: ServerMsg): void {
         pausedSince = 0;
       }
       rememberSeat(msg.key, msg.mode, msg.code);
+      // 방에 들어왔다 (초대받은 방이든 다른 판이든): 새로고침해도 초대 코드를 다시 채우지 않는다
+      tab.remove(INVITE_STORE);
       break;
     }
     case 'roster': {
@@ -698,13 +706,14 @@ function onMessage(msg: ServerMsg): void {
         // 내가 멈춘 것이 아니라 서버가 멈춰 둔 것이면(연결이 끊겼다 돌아왔거나, 한동안 입력이 없었다) 메뉴를 열어 알려준다
         const byServer = !menuOpen && mode === 'solo' && phase === 'playing';
         if (byServer) showMenu();
-        const minutes = Math.max(1, Math.ceil(msg.max / 60));
+        // 남은 시간: 1분 넘게 남았으면 분으로, 아니면 초로 (예산 끝무렵에 '1분'이라고 하지 않게)
+        const left = msg.max >= 60 ? `${Math.ceil(msg.max / 60)}분이` : `${Math.max(1, msg.max)}초가`;
         // 방금 화면으로 돌아온 것이면 화면을 떠난 사이에 멈춘 것이다. 아니면 화면을 보는 중에 연결이 끊겼던 것이다
         const away = document.hidden || performance.now() - backAt < 20_000;
         const why = away ? '화면을 떠난 사이에 게임을 멈춰 뒀어요.' : '연결이 잠깐 끊겨서 게임을 멈춰 뒀어요.';
         el.pauseSub.textContent = byServer
-          ? `${why} ${minutes}분이 지나면 자동으로 다시 시작돼요.`
-          : `게임을 멈췄어요. ${minutes}분이 지나면 자동으로 다시 시작돼요.`;
+          ? `${why} ${left} 지나면 자동으로 다시 시작돼요.`
+          : `게임을 멈췄어요. ${left} 지나면 자동으로 다시 시작돼요.`;
       } else {
         const wasPaused = pausedSince > 0;
         // 멈춰 있던 시간만큼 선택 제한 시간 표시도 미룬다
@@ -789,6 +798,8 @@ interface Seat {
   at: number;
 }
 const SEAT_STORE = 'seat';
+/** 초대 링크로 받았지만 아직 참가하지 않은 방 코드 (주소에서는 지운다) */
+const INVITE_STORE = 'invite';
 /** 이보다 오래 연결이 없었던 자리는 서버에도 남아 있지 않다 (가장 오래 지켜 주는 것이 일시정지 한 번의 길이다) */
 const SEAT_STALE_MS = (MAX_PAUSE_SECONDS + 300) * 1000;
 /** 화면이 보이는 채로 이만큼 애써도 서버에 닿지 않으면 그만둔다 */
@@ -1115,11 +1126,24 @@ el.version.addEventListener('click', () => notes.open(RELEASES.slice(0, 3)));
 const unseen = unseenReleases(store.get('seenVersion'));
 if (unseen.length > 0 && store.set('seenVersion', APP_VERSION)) notes.open(unseen);
 
-// 초대 링크(?room=CODE)로 들어온 경우: 코드를 채워 두고 닉네임만 넣으면 되게 한다
-const invited = normalizeRoomCode(new URLSearchParams(location.search).get('room'));
-if (invited) {
-  el.code.value = invited;
-  setStatus(`초대받은 방 ${invited} — 닉네임을 넣고 참가를 누르세요.`, true);
+// 초대 링크(?room=CODE)로 들어온 경우: 코드를 채워 두고 닉네임만 넣으면 되게 한다.
+// 읽은 뒤에는 주소에서 room 만 지운다. 남겨 두면 새로고침할 때마다 "초대 링크로 새로 들어왔다"고 보고, 이 탭에서 하던 다른 판을 버린다.
+const link = takeInvite(location.href);
+if (link) {
+  try {
+    history.replaceState(history.state, '', link.rest);
+  } catch {
+    /* 주소를 바꿀 수 없는 환경: 새로고침하면 다시 초대 링크로 본다 (예전과 같다) */
+  }
+}
+const invited = normalizeRoomCode(link?.room);
+// 아직 참가하지 않은 초대 코드는 이 탭에 남겨 둔다: 주소에서 지웠으니, 참가하기 전에 새로고침하거나
+// 휴대폰이 탭을 다시 불러와도(다른 앱에 다녀오는 사이 등) 코드가 남게. 방에 들어가면 지운다 (welcome)
+if (invited) tab.set(INVITE_STORE, invited);
+const pendingInvite = invited ?? normalizeRoomCode(tab.get(INVITE_STORE));
+if (pendingInvite) {
+  el.code.value = pendingInvite;
+  setStatus(`초대받은 방 ${pendingInvite} — 닉네임을 넣고 참가를 누르세요.`, true);
 }
 
 // 새로고침했거나 휴대폰 브라우저가 탭을 다시 불러온 경우: 하던 자리가 남아 있으면 이어서 한다.
