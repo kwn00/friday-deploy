@@ -44,6 +44,8 @@ import { loadoutOf, type LoadoutItem } from './loadout';
 import { ReleaseNotes } from './notes';
 import { Minimap } from './minimap';
 import { CLOSE_TIMEOUT, ConnectError, Net } from './net';
+import { STARTER_STORE, readStarter, rosterStarter, starterLine, starterOptions, starterTip } from './starter';
+import { starterIndex, type StarterId } from '@friday-deploy/shared';
 import type { Box } from './edge';
 import { Renderer } from './render';
 
@@ -670,6 +672,71 @@ function dropSeat(): void {
   forgetSeat();
 }
 
+/* ───────────── 시작 무기 ─────────────
+ * 타이틀(닉네임 아래)과 대기실에서 고른다. 타일은 네이티브 radio 라 방향키로 옮기고 화면 낭독기가 읽는다.
+ * 서버에는 번호만 보낸다 (hello, 대기실의 starter). 실제로 무엇으로 시작하는지는 서버가 정한다. 문자열은 textContent 로만 넣는다 */
+
+/** 내가 고른 시작 무기 (브라우저가 기억한다. 모르는 값이면 기본 무기) */
+let myStarter: StarterId = readStarter(store.get(STARTER_STORE));
+
+interface StarterPicker {
+  radios: Map<StarterId, HTMLInputElement>;
+  /** 고른 무기의 이름과 짧은 설명 한 줄 (대기실은 자리를 아끼려고 두지 않는다: 타일의 title 과 화면 낭독기의 이름으로) */
+  desc: HTMLElement | null;
+}
+
+/** 무기 타일을 만든다. 타이틀과 대기실의 타일은 서로 다른 radio 묶음이다 (name 이 다르다) */
+function buildPicker(rootId: string, onPick: (id: StarterId) => void): StarterPicker {
+  const root = $(rootId);
+  const tiles = root.querySelector<HTMLElement>('.starter__tiles')!;
+  const desc = root.querySelector<HTMLElement>('.starter__desc');
+  const radios = new Map<StarterId, HTMLInputElement>();
+  for (const o of starterOptions()) {
+    const tile = node('label', 'starter__tile');
+    // 마우스를 올리면 자세한 설명과 진화 안내도 (화면에는 고른 무기의 짧은 설명 한 줄만)
+    tile.title = starterTip(o);
+    const radio = node('input', 'starter__radio');
+    radio.type = 'radio';
+    radio.name = rootId;
+    radio.value = o.id;
+    radio.addEventListener('change', () => {
+      if (radio.checked) onPick(o.id);
+    });
+    const icon = node('span', 'starter__icon chip__icon', o.icon);
+    icon.setAttribute('aria-hidden', 'true');
+    tile.append(radio, icon, node('span', 'starter__name', o.name));
+    tiles.append(tile);
+    radios.set(o.id, radio);
+  }
+  return { radios, desc };
+}
+
+/** 타일에 고른 무기를 표시하고, 그 무기의 이름과 설명을 아래 한 줄에 쓴다 */
+function showPicker(p: StarterPicker, id: StarterId): void {
+  for (const [rid, radio] of p.radios) {
+    const on = rid === id;
+    if (on && !radio.checked) radio.checked = true;
+    radio.parentElement?.classList.toggle('starter__tile--on', on);
+  }
+  if (p.desc) p.desc.textContent = starterLine(id);
+}
+
+/** 고른 무기를 기억한다 (다음에 와도 같은 무기). 저장할 수 없는 브라우저에서는 이 탭에서만 */
+function chooseStarter(id: StarterId): void {
+  myStarter = id;
+  store.set(STARTER_STORE, id);
+  showPicker(titlePicker, id);
+}
+
+const titlePicker = buildPicker('starter-title', chooseStarter);
+// 대기실: 바꾸면 서버에 알린다. 사람 목록이 돌아오면 서버가 정한 값으로 다시 그린다 (renderLobby)
+const lobbyPicker = buildPicker('starter-lobby', (id) => {
+  chooseStarter(id);
+  showPicker(lobbyPicker, id);
+  net.sendStarter(starterIndex(id));
+});
+showPicker(titlePicker, myStarter);
+
 /* ───────────── 대기실 ───────────── */
 
 function inviteUrl(): string {
@@ -681,12 +748,23 @@ function renderLobby(): void {
   el.lobbyPlayers.replaceChildren(
     ...roster.map((p) => {
       const li = node('li', p.away ? 'players__item players__item--away' : 'players__item', p.name);
+      // 각자의 시작 무기 (서버가 보낸 값을 지금의 후보로 확인한 뒤에만. 아이콘과 이름은 우리 목록의 것)
+      const start = rosterStarter(p.start);
+      if (start) {
+        const icon = node('span', 'players__start chip__icon', start.icon);
+        icon.title = `시작 무기: ${start.name}`;
+        icon.setAttribute('role', 'img');
+        icon.setAttribute('aria-label', `시작 무기 ${start.name}`);
+        li.prepend(icon);
+      }
       if (p.id === hostId) li.append(node('em', '', '방장'));
       if (p.id === myId) li.append(node('em', 'me', '나'));
       if (p.away) li.append(node('em', 'away', '연결 끊김'));
       return li;
     }),
   );
+  // 내 시작 무기는 서버가 아는 값으로 (판이 시작되면 이것으로 시작한다). 아직 모르면 내가 고른 것
+  showPicker(lobbyPicker, rosterStarter(roster.find((p) => p.id === myId)?.start)?.id ?? myStarter);
   const host = myId === hostId;
   const anyAway = roster.some((p) => p.away);
   el.start.classList.toggle('hidden', !host);
@@ -1137,7 +1215,8 @@ async function start(m: GameMode, room?: string): Promise<void> {
   // 무료 서버는 한동안 접속이 없으면 잠든다. 깨어나는 동안 아무 반응이 없어 보이지 않게 알려준다.
   setStatus('연결 중… 서버가 잠들어 있었다면 1분쯤 걸릴 수 있어요.', true);
   try {
-    await net.connect(name, m, room);
+    // 시작 무기는 hello 를 보내는 순간의 것 (잠든 서버가 깨어나는 동안 바꿔도 들어간다)
+    await net.connect(name, m, room, () => starterIndex(myStarter));
     // 여기까지 오면 연결됐다. 방을 못 찾는 등의 거절은 이 뒤에 서버 메시지로 오고, 그때 다시 안내한다.
     setStatus('', true);
   } catch (err) {

@@ -109,3 +109,47 @@ test('화면: 메뉴의 계속하기는 가진 아이템 목록보다 앞에 있
     assert.ok(px(r.get('.pause__tools .btn')?.['min-height'], `${where} .pause__tools .btn`) >= 44, where);
   }
 });
+
+test('화면: 시작 무기는 타이틀의 닉네임 아래와 대기실에 네이티브 radio 묶음(fieldset·legend)으로 있다', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const title = html.slice(html.indexOf('id="screen-title"'), html.indexOf('id="screen-lobby"'));
+  const at = (id: string): number => {
+    const i = title.indexOf(`id="${id}"`);
+    assert.ok(i >= 0, id);
+    return i;
+  };
+  // 닉네임 칸 아래, 시작 버튼 위
+  assert.ok(at('name-input') < at('starter-title') && at('starter-title') < at('btn-solo'));
+  assert.match(title, /<fieldset id="starter-title" class="starter">\s*<legend class="starter__legend">/);
+  const lobby = html.slice(html.indexOf('id="screen-lobby"'), html.indexOf('id="screen-levelup"'));
+  assert.match(lobby, /<fieldset id="starter-lobby" class="starter starter--lobby">\s*<legend class="starter__legend">/);
+  assert.ok(lobby.indexOf('id="starter-lobby"') < lobby.indexOf('id="btn-start"'), '시작 버튼보다 위');
+});
+
+test('화면: 시작 무기 타일은 어느 배치에서도 손가락 크기(44px) 이상이고, 320px 에서 넘치지 않게 네 칸이 줄어든다', () => {
+  const top = rules();
+  // fieldset 은 기본으로 내용보다 좁아지지 않는다: min-width 0 이어야 320px 패널 안에 들어간다
+  assert.equal(top.get('.starter')?.['min-width'], '0');
+  assert.equal(top.get('.starter__tiles')?.['grid-template-columns'], 'repeat(4, minmax(0, 1fr))');
+  assert.equal(top.get('.starter__tile')?.['min-width'], '0');
+  assert.ok(px(top.get('.starter__tile')?.['min-height'], '.starter__tile min-height') >= 44);
+  for (const head of ['@media (min-width: 480px)', LOW_LANDSCAPE]) {
+    const mh = rules(head).get('.starter__tile')?.['min-height'];
+    if (mh) assert.ok(px(mh, `${head} .starter__tile`) >= 44, head);
+  }
+  // radio 는 숨기지 않고(display:none 이면 방향키·화면 낭독기가 못 쓴다) 투명하게 타일 전체를 덮는다
+  const radio = top.get('.starter__radio')!;
+  assert.deepEqual([radio.position, radio.inset, radio.opacity], ['absolute', '0', '0']);
+  assert.notEqual(radio.display, 'none');
+});
+
+test('화면: 낮은 가로 화면에서는 닉네임과 시작 무기, 초대 링크와 내 시작 무기를 나란히 둔다 (세로 공간을 늘리지 않게)', () => {
+  const low = rules(LOW_LANDSCAPE);
+  assert.equal(low.get('.setup')?.display, 'grid');
+  assert.equal(low.get('.setup')?.['grid-template-columns'], 'minmax(0, 2fr) minmax(0, 3fr)');
+  assert.equal(low.get('.setup .field')?.['margin-bottom'], '0');
+  assert.equal(low.get('.setup .starter')?.['margin-bottom'], '0');
+  assert.equal(low.get('.lobby__top')?.display, 'grid');
+  assert.equal(low.get('.lobby__top')?.['grid-template-columns'], 'minmax(0, 1fr) minmax(0, 1fr)');
+  assert.equal(low.get('.lobby__top .buttons')?.['grid-template-columns'], '1fr', '초대 버튼은 제 칸을 다 쓴다');
+});
