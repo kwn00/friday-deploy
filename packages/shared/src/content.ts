@@ -161,18 +161,19 @@ export const STAGE_TIME = 30 * 60;
 
 /**
  * 투사체·소환물 종류. 순서가 곧 통신에서 쓰는 번호다 (중간에 끼워 넣지 말고 뒤에 추가할 것).
- * 소환물(카나리아, 부엉이, 고양이)도 위치가 움직이는 것이라 투사체 목록으로 보낸다.
+ * 소환물(카나리아, 부엉이, 고양이, 24시간 모니터링의 감시 새 watch)도 위치가 움직이는 것이라 투사체 목록으로 보낸다.
  */
-export const SHOT_KINDS = ['log', 'regex', 'ai', 'book', 'rollback', 'ping', 'packet', 'bomb', 'canary', 'owl', 'cat', 'drill', 'breakpoint', 'socket'] as const;
+export const SHOT_KINDS = ['log', 'regex', 'ai', 'book', 'rollback', 'ping', 'packet', 'bomb', 'canary', 'owl', 'cat', 'drill', 'breakpoint', 'socket', 'watch'] as const;
 export type ShotKind = (typeof SHOT_KINDS)[number];
 
 /**
  * 바닥에 생기는 공격 영역 종류 (통신 번호 = 순서). 그리는 모양:
  * slash: 각도 a 방향으로 길이 r 인 베기 / pool: 반경 r 웅덩이 / bolt: 반경 r 번개 / wipe: 반경 r 전체 지우기 /
- * blast: 반경 r 폭발 / band: 폭 r 의 세로 띠 / trail: 반경 r 발자국 / beam: 각도 a 방향 길이 r 광선 / fire: 반경 r 불바다(금요일 배포).
- * wipe 의 aux 는 0 이면 git clean, 1 이면 rm -rf node_modules (색만 다르다)
+ * blast: 반경 r 폭발 / band: 폭 r 의 세로 띠 / trail: 반경 r 발자국 / beam: 각도 a 방향 길이 r 광선 / fire: 반경 r 불바다(금요일 배포) /
+ * wave: 생긴 자리에서 반경 r 까지 남는 시간 동안 고르게 퍼지는 고리(패킷 플러딩. aux 는 그려 줄 고리 수).
+ * wipe 의 aux 는 0 이면 git clean, 1 이면 rm -rf node_modules (색만 다르다). blast 의 aux 는 0 이면 주황, 1 이면 24시간 모니터링(청록)
  */
-export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'trail', 'beam', 'fire'] as const;
+export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'trail', 'beam', 'fire', 'wave'] as const;
 export type ZoneKind = (typeof ZONE_KINDS)[number];
 
 /* ───────────── 강화 (무기 · 패시브) ─────────────
@@ -470,12 +471,18 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   rm_rf: W('rm -rf node_modules', '♻️', '화면을 지우고 새로 받는다. 경험치는 모두 남아 내 쪽으로 끌려온다.',
     { dmg: 0, cd: 45, amount: 1, area: 0, speed: 0, dur: 1.0, pierce: 0, chance: 1 }, [],
     { rarity: 0, kb: 0, ignores: ['might', 'amount', 'area', 'speed', 'dur'] }),
-  monitoring: W('24시간 모니터링', '🕐', '카나리아와 부엉이가 쉬지 않고 함께 돌며 폭탄을 퍼붓는다.',
-    { dmg: 40, cd: 0.5, amount: 11, area: 40, speed: 1.4, dur: 0, pierce: 0 }, [],
+  // 24시간 모니터링 (0.4.0): 카나리아와 부엉이가 센 감시 새 한 마리가 됐다. 내 둘레(궤도 56)를 시계 방향으로 쉬지 않고 돌며
+  // 쿨다운마다 자기 자리에 큰 폭탄 하나(반경 72)를 떨군다. 궤도가 폭발 반경보다 작아 몸에 붙은 버그도 늘 맞는다.
+  // 개수(git fork)는 지나온 자리에 폭탄을 더 떨구고, 범위는 폭탄 크기, 속도(CDN)는 도는 빠르기다 (combat.ts 의 runMonitoring)
+  monitoring: W('24시간 모니터링', '🕐', '아주 센 감시 새 한 마리가 쉬지 않고 돌며 큰 폭탄을 떨군다.',
+    { dmg: 240, cd: 0.25, amount: 1, area: 72, speed: 2.0, dur: 0, pierce: 0 }, [],
     { rarity: 0, kb: 2, ignores: ['dur'] }),
-  flooding: W('패킷 플러딩', '🌊', '여덟 방향으로 패킷을 한꺼번에 쏟아낸다.',
-    { dmg: 20, cd: 1.0, amount: 3, area: 5, speed: 390, dur: 0.9, pierce: 8 }, [],
-    { rarity: 0, kb: 0.1, ignores: ['dur'] }),
+  // 패킷 플러딩 (0.4.0): 쿨다운마다 내 자리에서 물결이 반경 speed × dur (234) 까지 퍼지며, 닿는 버그를 모두 한 번씩 맞히고 밀어낸다.
+  // 반경은 CDN·keep-alive 로 늘지 않는다 (넓이가 제곱으로 커져 너무 세다). 개수(git fork)는 물결의 겹 수라 피해에 곱해지고
+  // (판정은 하나로 합친다), 범위(듀얼 모니터)는 고리 두께(반쪽 6px)다 (combat.ts 의 sweepWave)
+  flooding: W('패킷 플러딩', '🌊', '내 자리에서 패킷 물결이 퍼져, 닿는 버그를 모두 맞히고 밀어낸다.',
+    { dmg: 10, cd: 1.2, amount: 3, area: 6, speed: 260, dur: 0.9, pierce: 999 }, [],
+    { rarity: 0, kb: 1, ignores: ['dur', 'speed'] }),
 
   /* ── 패시브 (뱀서의 Wings, Empty Tome, Spinach, Attractorb, Hollow Heart, Candelabrador, Armor, Pummarola, Bracer,
    *    Spellbinder, Duplicator, Clover, Crown, Skull O'Maniac, Tiragisu 순서) ── */

@@ -406,6 +406,23 @@ export const SHOT_ART: Record<ShotKind, string[]> = {
   breakpoint: ['.kkkk.', 'krreek', 'krweek', 'keeeEk', 'keeEEk', '.kkkk.'],
   /** 웹소켓: 번개가 흐르는 하늘색 공 */
   socket: ['..kkk..', '.kcwck.', 'kcwcYck', 'kccYcck', 'kcYccck', '.kccck.', '..kkk..'],
+  /**
+   * 24시간 모니터링의 감시 새: 카나리아의 노란 날개를 크게 편 보라 부엉이, 머리에 빨간 녹화 불빛.
+   * 카나리아(11px)·부엉이(8px)보다 확실히 크게 (17px). 좌우 대칭이라 뒤집어 그리지 않는다
+   */
+  watch: [
+    'kk.....kek.....kk',
+    'kYk....kkk....kYk',
+    'kYYk..kPPPk..kYYk',
+    'kYyYkkPPPPPkkYyYk',
+    '.kYyYkwwPwwkYyYk.',
+    '..kYYkwkPkwkYYk..',
+    '...kkkPPoPPkkk...',
+    '.....kPyyyPk.....',
+    '.....kPyyyPk.....',
+    '......kPPPk......',
+    '.......kok.......',
+  ],
 };
 
 /* ───────────── 그 밖의 것 ───────────── */

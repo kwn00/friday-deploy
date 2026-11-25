@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DT,
+  ENEMIES,
   ENEMY_VIEW_RADIUS,
   EVOLUTIONS,
   MAX_GEMS,
@@ -35,7 +36,7 @@ import {
   type UpgradeId,
   type World,
 } from './index';
-import { BREAKPOINT_FREEZE } from './combat';
+import { BREAKPOINT_FREEZE, WATCH_ORBIT } from './combat';
 
 const enemy = (id: number, x: number, y: number, type: Enemy['type'] = 'merge_conflict', hp = 1e9): Enemy => ({ id, type, x, y, hp, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
 
@@ -351,43 +352,203 @@ test('rm -rf node_modules: 땅이 가득한데 모두 기다리는 중이어도,
   assert.ok(w.gems.length <= MAX_GEMS, '땅의 개수 상한은 그대로');
 });
 
-test('24시간 모니터링: 카나리아와 부엉이가 함께, 쉬지 않고 폭탄을 떨어뜨린다. 두 마리 모두 화면에 보낸다', () => {
+test('24시간 모니터링: 감시 새 한 마리가 쉬지 않고 돌며 0.25초마다 큰 폭탄 하나를 떨군다. 화면에는 그 한 마리만 보낸다', () => {
   const { w, p } = quietWorld(309);
   p.up = { canary: 8, night_owl: 8 };
   for (let i = 0; i < 5; i++) tick(w, []);
   const pets = { ...p.pets };
+  // 보물상자에서 진화한 것처럼 재료를 빼고 진화한 무기를 넣는다
   p.up.monitoring = 1;
   delete p.up.canary;
   delete p.up.night_owl;
+  const st = UPGRADES.monitoring.kind === 'weapon' ? UPGRADES.monitoring.base : null;
+  assert.ok(st);
   let blasts = 0;
   let quiet = 0;
   let longest = 0;
   for (let i = 0; i < 20 * 10; i++) {
     tick(w, []);
-    const now = w.zones.filter((z) => z.kind === 'blast' && z.born === w.tick).length;
-    blasts += now;
-    quiet = now > 0 ? 0 : quiet + 1;
+    const now = w.zones.filter((z) => z.kind === 'blast' && z.born === w.tick);
+    blasts += now.length;
+    quiet = now.length > 0 ? 0 : quiet + 1;
     longest = Math.max(longest, quiet);
+    for (const z of now) {
+      assert.equal(z.r, st.area, '큰 폭탄 (반경 72)');
+      assert.equal(z.aux, 1, '청록 폭발로 그린다');
+      assert.ok(Math.abs(Math.hypot(z.x - p.x, z.y - p.y) - WATCH_ORBIT) < 1e-6, '새의 자리 (궤도 56) 에 떨군다');
+    }
   }
-  assert.ok(blasts >= 2 * 11 * 19, `10초 동안 폭탄 ${blasts}개`);
-  assert.ok(longest <= 10, `쉬는 틈이 없다 (가장 길게 쉰 틱 ${longest})`);
-  assert.deepEqual(p.pets, pets, '같은 새를 이어서 돌린다');
-  const snap = buildSnapshot(w, p.id)!;
-  const kinds = snap.s.filter((s) => s[0] === pets.canary || s[0] === pets.night_owl).map((s) => SHOT_KINDS[s[1]!]);
-  assert.deepEqual(kinds.sort(), ['canary', 'owl']);
+  assert.equal(blasts, 40, `10초 동안 폭탄 ${blasts}개 (0.25초마다 하나)`);
+  assert.ok(longest <= 5, `쉬는 틈이 없다 (가장 길게 쉰 틱 ${longest})`);
+  assert.equal(p.pets.monitoring, pets.canary, '재료였던 카나리아의 id 를 이어 쓴다 (화면에서 끊기지 않게)');
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  const birds = snap.s.filter((s) => ['canary', 'owl', 'watch'].includes(SHOT_KINDS[s[1]!]!));
+  assert.equal(birds.length, 1, '새는 한 마리만 보낸다 (부엉이는 보내지 않는다)');
+  assert.equal(SHOT_KINDS[birds[0]![1]!], 'watch');
+  assert.equal(birds[0]![0], pets.canary);
+  assert.ok(Math.abs(Math.hypot(birds[0]![2]! - p.x, birds[0]![3]! - p.y) - WATCH_ORBIT) < 0.5, '궤도 56');
+  // 시계 방향으로 돈다 (화면 좌표는 y 가 아래로: 각도가 는다). 스냅샷 좌표는 0.1 단위라 각도에 0.002rad 쯤 오차가 있다
+  const angle = (): number => {
+    const row = buildSnapshot(w, p.id)!.s.find((s) => s[0] === pets.canary)!;
+    return Math.atan2(row[3]! - p.y, row[2]! - p.x);
+  };
+  const a0 = angle();
+  tick(w, []);
+  const turn = (((angle() - a0) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+  assert.ok(Math.abs(turn - st.speed * DT) < 5e-3, `한 틱에 ${turn}rad (2.0rad/s, 시계 방향)`);
 });
 
-test('패킷 플러딩: 여덟 방향으로 개수만큼 쏜다', () => {
+test('24시간 모니터링: 궤도(56)가 폭발 반경(72)보다 작아 몸에 붙은 버그는 폭탄마다 맞고, 닿는 거리(128) 밖은 맞지 않는다', () => {
+  const { w, p } = quietWorld(312);
+  p.up = { monitoring: 1 };
+  const st = weaponOf('monitoring');
+  const close = enemy(9740, p.x + 4, p.y);
+  const edge = enemy(9741, p.x, p.y + WATCH_ORBIT + st.area - 8);
+  const far = enemy(9742, p.x - (WATCH_ORBIT + st.area + ENEMIES.merge_conflict.r + 2), p.y);
+  const all = [close, edge, far];
+  const at: [number, number][] = all.map((e) => [e.x, e.y]);
+  let volleys = 0;
+  for (let i = 0; i < 20 * 10; i++) {
+    // 밀려나도 그 자리에 다시 둔다. 붙어 있는 버그에 맞아 쓰러지지 않게 체력을 채운다
+    for (const [k, e] of all.entries()) [e.x, e.y] = at[k]!;
+    p.hp = 1e9;
+    tick(w, all);
+    volleys += w.zones.filter((z) => z.kind === 'blast' && z.born === w.tick).length;
+  }
+  assert.equal(volleys, 40);
+  assert.equal(1e9 - close.hp, volleys * st.dmg, '몸에 붙은 버그는 폭탄마다 맞는다 (사각지대가 없다)');
+  assert.ok(1e9 - edge.hp > 0 && 1e9 - edge.hp < volleys * st.dmg, '궤도 바깥 끝 쪽은 새가 가까이 올 때만 맞는다');
+  assert.equal(far.hp, 1e9, '닿는 거리 밖');
+});
+
+test('24시간 모니터링: git fork 로 개수가 늘면 지나온 자리(0.5rad 뒤마다)에 폭탄을 더 떨군다', () => {
+  const { w, p } = quietWorld(313);
+  p.up = { monitoring: 1, git_fork: 2 };
+  tick(w, []);
+  const now = w.zones.filter((z) => z.kind === 'blast' && z.born === w.tick);
+  assert.equal(now.length, 3, '1 + git fork 2');
+  const ang = now.map((z) => Math.atan2(z.y - p.y, z.x - p.x));
+  for (let i = 1; i < ang.length; i++) {
+    const gap = (((ang[i - 1]! - ang[i]!) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+    assert.ok(Math.abs(gap - 0.5) < 1e-9, `${i}번째는 0.5rad 뒤 (${gap})`);
+  }
+  assert.deepEqual(Object.keys(p.pets), ['monitoring'], '처음부터 가졌으면 새 id 를 만든다');
+});
+
+/** 진화한 무기의 능력치 (패시브 없음) */
+const weaponOf = (id: 'monitoring' | 'flooding') => {
+  const def = UPGRADES[id];
+  assert.ok(def.kind === 'weapon');
+  return def.base;
+};
+
+/** 패킷 플러딩 둘레에 놓는 적: 여덟 방향 × 여러 거리. 반경(234) + 고리 두께의 반(6) + 몸 바깥은 맞지 않는다 */
+function floodRing(p: Player): { all: Enemy[]; inside: Enemy[]; outside: Enemy[]; place: () => void } {
+  const st = weaponOf('flooding');
+  const reach = st.speed * st.dur;
+  const r = ENEMIES.merge_conflict.r;
+  const dists = [0, 20, 60, 130, 200, reach + st.area + r - 1];
+  const spots: [number, number][] = [];
+  for (let k = 0; k < 8; k++) for (const d of dists) spots.push([Math.cos((k * Math.PI) / 4 + 0.2) * d, Math.sin((k * Math.PI) / 4 + 0.2) * d]);
+  const out: [number, number][] = [0, 2, 4, 6].map((k) => [Math.cos((k * Math.PI) / 4) * (reach + st.area + r + 2), Math.sin((k * Math.PI) / 4) * (reach + st.area + r + 2)]);
+  const x0 = p.x;
+  const y0 = p.y;
+  const inside = spots.map(([dx, dy], i) => enemy(9800 + i, x0 + dx, y0 + dy));
+  const outside = out.map(([dx, dy], i) => enemy(9900 + i, x0 + dx, y0 + dy));
+  const all = [...inside, ...outside];
+  const pos = all.map((e): [number, number] => [e.x, e.y]);
+  // 밀려나거나 다가와도 그 자리에 다시 둔다 (같은 자리에서 여러 틱 동안 띠 안에 있어도 한 번만 맞는지 보려고)
+  const place = (): void => {
+    for (const [k, e] of all.entries()) [e.x, e.y] = pos[k]!;
+  };
+  return { all, inside, outside, place };
+}
+
+test('패킷 플러딩: 내 자리에서 물결 하나가 퍼져, 모든 방향의 버그를 관통 제한 없이 물결마다 한 번씩 맞힌다', () => {
   const { w, p } = quietWorld(310);
   p.up = { flooding: 1 };
-  tick(w, []);
-  const packets = w.shots.filter((s) => s.kind === 'packet');
-  assert.equal(packets.length, 8 * 3);
-  const dirs = new Set(packets.map((s) => Math.round((Math.atan2(s.vy, s.vx) / (Math.PI / 4) + 8) % 8)));
-  assert.equal(dirs.size, 8);
+  const st = weaponOf('flooding');
+  const { all, inside, outside, place } = floodRing(p);
+  const lost = (e: Enemy): number => 1e9 - e.hp;
+  // 물결이 지나간 뒤에 안쪽으로 들어온 버그 (그 물결에는 맞지 않는다)
+  const late = enemy(9990, p.x - 20, p.y + 20);
+  const lateAt: [number, number] = [late.x, late.y];
+  const keep = (i: number): Enemy[] => (i >= 8 ? [...all, late] : all);
+  // 한 물결 (쿨다운 1.2초보다 짧게): 생긴 틱부터 끝까지 퍼지는 데 0.9초
+  for (let i = 0; i < 22; i++) {
+    place();
+    [late.x, late.y] = lateAt;
+    p.hp = 1e9;
+    tick(w, keep(i));
+    assert.equal(w.shots.length, 0, '투사체를 만들지 않는다');
+    if (i === 0) {
+      const waves = w.zones.filter((z) => z.kind === 'wave');
+      assert.equal(waves.length, 1, '물결 겹 수(3)만큼 따로 만들지 않고 하나로 판정한다');
+      assert.deepEqual([waves[0]!.r, waves[0]!.aux, waves[0]!.dmg], [st.speed * st.dur, st.amount, st.dmg * st.amount], '반경 234, 겹 3, 피해 10 × 3');
+    }
+  }
+  for (const e of inside) assert.equal(lost(e), st.dmg * st.amount, `거리 ${Math.round(Math.hypot(e.x - p.x, e.y - p.y))}: 한 번만 맞는다`);
+  for (const e of outside) assert.equal(lost(e), 0, '반경 밖은 맞지 않는다');
+  assert.equal(lost(late), 0, '물결이 지나간 뒤 안쪽으로 들어온 버그는 그 물결에 맞지 않는다');
+  assert.equal(w.zones.filter((z) => z.kind === 'wave').length, 0, '다 퍼지면 사라진다');
+  // 쿨다운(1.2초)마다 새 물결: 다시 한 번씩
+  for (let i = 22; i < 24 + 20; i++) {
+    place();
+    [late.x, late.y] = lateAt;
+    p.hp = 1e9;
+    tick(w, keep(i));
+  }
+  for (const e of inside) assert.equal(lost(e), 2 * st.dmg * st.amount, '두 번째 물결');
+  for (const e of outside) assert.equal(lost(e), 0);
+  assert.equal(lost(late), st.dmg * st.amount, '다음 물결에는 맞는다');
 });
 
-test('통신: 진화한 무기의 단계와 새 투사체(중단점, 웹소켓)가 이진 스냅샷을 오간다', () => {
+test('패킷 플러딩: git fork 는 겹 수(피해 배수), 듀얼 모니터는 고리 두께. CDN·keep-alive 로 반경이 늘지 않는다', () => {
+  const { w, p } = quietWorld(314);
+  p.up = { flooding: 1, git_fork: 2, dual_monitor: 5, cdn: 5, keep_alive: 5 };
+  const st = weaponOf('flooding');
+  tick(w, []);
+  const z = w.zones.find((z) => z.kind === 'wave')!;
+  assert.deepEqual([z.r, z.aux, z.dmg, z.band], [st.speed * st.dur, 5, st.dmg * 5, st.area * 1.5]);
+  assert.ok(Math.abs(z.ttl - st.dur) < 1e-9, '퍼지는 시간도 그대로');
+});
+
+test('패킷 플러딩: 고리 쪽으로 가장 빠른 적(월요일 아침, 틱마다 21px)만큼 빠르게 다가와도 건너뛰지 않고 한 번 맞는다', () => {
+  const { w, p } = quietWorld(315);
+  p.up = { flooding: 1 };
+  const st = weaponOf('flooding');
+  // 가장 빠른 적의 한 틱 이동 거리. 고리 앞도 틱마다 13px 나아가서, 마주 오면 한 틱에 34px 가까워진다
+  const step = Math.max(...Object.values(ENEMIES).map((d) => d.speed)) * DT;
+  assert.ok(step >= 20, `${step}px/틱`);
+  // 몸이 가장 작은 버그 떼로, 출발 거리를 1px 씩 바꿔 고리 앞과 만나는 자리가 저마다 다르게 (어느 하나도 건너뛰면 안 된다)
+  const runners = Array.from({ length: 40 }, (_, k) => enemy(9950 + k, p.x, p.y, 'bug_swarm'));
+  const x0 = p.x;
+  const y0 = p.y;
+  for (let i = 0; i < 12; i++) {
+    for (const [k, e] of runners.entries()) {
+      const a = (k * Math.PI * 2) / runners.length;
+      const d = 200 + k - step * i;
+      [e.x, e.y] = [x0 + Math.cos(a) * d, y0 + Math.sin(a) * d];
+    }
+    p.hp = 1e9;
+    tick(w, runners);
+  }
+  for (const e of runners) assert.equal(1e9 - e.hp, st.dmg * st.amount, `${e.id}: 한 번 맞는다`);
+});
+
+test('브로드캐스트·멀티캐스트: 재료 무기는 그대로 저마다 네 방향으로 패킷을 쏜다', () => {
+  for (const [id, turn] of [['broadcast', 0], ['multicast', 1]] as const) {
+    const { w, p } = quietWorld(316);
+    p.up = { [id]: 1 };
+    tick(w, []);
+    const packets = w.shots.filter((s) => s.kind === 'packet');
+    assert.equal(packets.length, 4, id);
+    const dirs = new Set(packets.map((s) => Math.round((Math.atan2(s.vy, s.vx) / (Math.PI / 4) + 8) % 8)));
+    assert.deepEqual([...dirs].sort(), [0, 2, 4, 6].map((d) => d + turn), id);
+  }
+});
+
+test('통신: 진화한 무기의 단계와 새 투사체(중단점, 웹소켓, 감시 새)·영역(물결)이 이진 스냅샷을 오간다', () => {
   const { w, p } = quietWorld(311);
   p.up = { debugger: 1, websocket: 1, flooding: 1, monitoring: 1, rm_rf: 1, friday_deploy: 1, keep_alive: 3 };
   const bug = enemy(9730, p.x + 30, p.y);
@@ -396,7 +557,18 @@ test('통신: 진화한 무기의 단계와 새 투사체(중단점, 웹소켓)�
   const back = decodeSnapshot(encodeSnapshot(snap));
   assert.deepEqual(back.me.up, snap.me.up);
   const kinds = new Set(back.s.map((s) => SHOT_KINDS[s[1]!]));
-  assert.ok(kinds.has('breakpoint') && kinds.has('socket'), [...kinds].join(','));
+  assert.ok(kinds.has('breakpoint') && kinds.has('socket') && kinds.has('watch'), [...kinds].join(','));
+  assert.ok(!kinds.has('canary') && !kinds.has('owl') && !kinds.has('packet'), '재료의 새와 패킷은 없다');
+  // 물결: 생긴 틱에 한 번, 다른 영역과 같은 일곱 칸만 (맞은 적의 기억·고리 두께는 서버에만 있다)
+  const wave = snap.z.filter((z) => ZONE_KINDS[z[1]!] === 'wave');
+  assert.equal(wave.length, 1);
+  assert.equal(wave[0]!.length, 7);
+  const got = back.z.find((z) => ZONE_KINDS[z[1]!] === 'wave')!;
+  assert.deepEqual([got[0], got[1], ...got.slice(4)], [wave[0]![0], wave[0]![1], ...wave[0]!.slice(4)]);
+  assert.ok(Math.abs(got[2]! - wave[0]![2]!) < 0.1 && Math.abs(got[3]! - wave[0]![3]!) < 0.1, '자리');
+  assert.deepEqual(wave[0]!.slice(4), [234, 3, 18], '반경, 겹 수, 남는 틱 (퍼지는 0.9초)');
+  tick(w, [bug]);
+  assert.ok(!buildSnapshot(w, p.id)!.z.some((z) => ZONE_KINDS[z[1]!] === 'wave'), '다음 스냅샷에는 다시 싣지 않는다');
 });
 
 test('순위표에 남기는 아이템: 진화한 무기도 1단계로 남고 다시 읽힌다', () => {

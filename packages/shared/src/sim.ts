@@ -153,8 +153,8 @@ export interface Player {
   /** 마지막으로 커밋 히스토리 발자국을 남긴 자리 */
   trailX: number;
   trailY: number;
-  /** 소환물(카나리아·부엉이)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
-  pets: Partial<Record<'canary' | 'night_owl', number>>;
+  /** 소환물(카나리아·부엉이·24시간 모니터링의 감시 새)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
+  pets: Partial<Record<'canary' | 'night_owl' | 'monitoring', number>>;
   /** 켜져 있는 남은 시간(초): 카나리아·부엉이가 폭탄을 퍼붓는 동안 */
   on: Partial<Record<UpgradeId, number>>;
   up: Partial<Record<UpgradeId, number>>;
@@ -230,7 +230,7 @@ export interface Zone {
   x: number;
   y: number;
   r: number;
-  /** 종류별 추가 값(0~255): 베기·광선은 각도, 세로 띠는 높이/4 */
+  /** 종류별 추가 값(0~255): 베기·광선은 각도, 세로 띠는 높이/4, 물결은 그려 줄 고리 수, 폭발은 색 */
   aux: number;
   ttl: number;
   dmg: number;
@@ -238,6 +238,12 @@ export interface Zone {
   every: number;
   /** 생긴 틱 (스냅샷에는 생긴 틱에만 싣는다) */
   born: number;
+  /**
+   * 물결(wave)만 쓰는 서버 전용 값 (스냅샷에는 싣지 않는다): 이 물결에 이미 맞은 적의 id 와 고리 두께의 반(px).
+   * 맞은 적은 적마다 두는 잠금 표(lock) 대신 물결마다 기억한다 (물결마다 새 키가 적의 잠금 표에 쌓이면 정리 비용이 커진다)
+   */
+  hit?: Set<number>;
+  band?: number;
 }
 
 export interface Gem {
@@ -1322,6 +1328,12 @@ function segmentDist(px: number, py: number, ax: number, ay: number, bx: number,
   const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2)) : 0;
   return Math.hypot(px - (ax + vx * t), py - (ay + vy * t));
 }
+
+/** 소환물의 통신 번호 (스냅샷마다 찾지 않게) */
+const CANARY = SHOT_KINDS.indexOf('canary');
+const OWL = SHOT_KINDS.indexOf('owl');
+const WATCH = SHOT_KINDS.indexOf('watch');
+
 /** 보물상자를 열 수 있는 거리 (몸이 닿을 때) */
 const CHEST_REACH = 14;
 /** 경험치 색 단계 (뱀서): 2 이하 파랑, 9 이하 초록, 그 위는 빨강 */
@@ -1403,16 +1415,20 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
     if (EN[e.type].boss && !EN[e.type].killRes) snap.b.push([e.id, Math.max(1, Math.min(100, Math.ceil((e.hp / (e.maxHp ?? e.hp)) * 100)))]);
   }
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
-  // 카나리아·부엉이: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
-  // (24시간 모니터링은 두 마리를 함께 돌린다)
+  // 카나리아·부엉이·감시 새: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
+  // (24시간 모니터링은 감시 새 한 마리만 보낸다. 재료였던 두 새는 진화하면 없어진다)
   for (const p of world.players.values()) {
     if (!p.alive) continue;
-    const both = lv(p, 'monitoring') > 0;
+    const watch = p.pets.monitoring;
+    if (watch !== undefined && lv(p, 'monitoring') > 0) {
+      const [x, y] = petPosition(world, p, 'monitoring');
+      if (near(x, y)) snap.s.push([watch, WATCH, r1(x), r1(y)]);
+    }
     for (const w of ['canary', 'night_owl'] as const) {
       const id = p.pets[w];
-      if (id === undefined || (lv(p, w) === 0 && !both)) continue;
+      if (id === undefined || lv(p, w) === 0) continue;
       const [x, y] = petPosition(world, p, w);
-      if (near(x, y)) snap.s.push([id, SHOT_KINDS.indexOf(w === 'canary' ? 'canary' : 'owl'), r1(x), r1(y)]);
+      if (near(x, y)) snap.s.push([id, w === 'canary' ? CANARY : OWL, r1(x), r1(y)]);
     }
   }
   // 바닥 영역: 아직 보내지 않은 것 중 조금이라도 보이는 것 (크기만큼 넓게 본다). 한 번만, 남는 시간과 함께 보낸다

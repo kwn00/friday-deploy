@@ -4,7 +4,7 @@
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
  */
-import { ENEMY_VIEW_RADIUS, FREEZE_BEAM_WIDTH, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED, SPRINT_BONUS_PER_LEVEL } from './constants';
+import { DT, ENEMY_VIEW_RADIUS, FREEZE_BEAM_WIDTH, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED, SPRINT_BONUS_PER_LEVEL } from './constants';
 import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, type WeaponDef, type WeaponId, type WeaponStats, type ZoneKind } from './content';
 import type { Enemy, Gem, Player, Shot, World, Zone } from './sim';
 import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf, speedMultOf } from './stats';
@@ -267,9 +267,10 @@ function flash(world: World, p: Player, kind: ZoneKind, x: number, y: number, r:
 /** 각도(라디안)를 영역의 aux 바이트(0~255)로 */
 const angleByte = (a: number): number => Math.round((((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 256) & 255;
 
-function blast(world: World, grid: Grid, p: Player, w: WeaponId, x: number, y: number, r: number, dmg: number): void {
+/** 폭발: 반경 r 안의 적을 한 번에 때린다. aux 는 화면의 색 (0 주황, 1 청록: 24시간 모니터링) */
+function blast(world: World, grid: Grid, p: Player, w: WeaponId, x: number, y: number, r: number, dmg: number, aux = 0): void {
   grid.near(x, y, r, (e) => hit(world, e, dmg, p, w));
-  flash(world, p, 'blast', x, y, r, 0, 0.2);
+  flash(world, p, 'blast', x, y, r, aux, 0.2);
 }
 
 /** 방향 (ax, ay) 로 길이 len, 폭 width 인 직사각형 안의 적에게 */
@@ -394,6 +395,10 @@ export function updateZones(world: World, grid: Grid, dt: number): void {
     z.ttl -= dt;
     if (z.ttl <= 0 || z.dmg <= 0) continue;
     const owner = world.players.get(z.owner);
+    if (z.kind === 'wave') {
+      sweepWave(world, grid, z, owner, dt);
+      continue;
+    }
     const fn = (e: Enemy): void => {
       if (lock(e, z.id, world.time, z.every)) hit(world, e, z.dmg, owner, z.w);
     };
@@ -402,6 +407,42 @@ export function updateZones(world: World, grid: Grid, dt: number): void {
     else grid.near(z.x, z.y, z.r, fn);
   }
   world.zones = world.zones.filter((z) => z.ttl > 0);
+}
+
+/**
+ * 물결의 앞이 한 틱 동안 지나간 거리의 안쪽에서 더 보는 여유(px): 고리 쪽으로 다가오는 빠른 버그가 두 틱 사이에 고리를 건너뛰지 않게.
+ * 이웃한 두 틱의 띠는 여유 + 고리 두께 + 몸 지름만큼 겹쳐서, 한 틱에 그보다 적게 움직이는 적은 꼭 한 번 띠 안에 든다
+ * (가장 작은 버그 떼 34px. 가장 빠른 적은 월요일 아침 21px, 버그 떼 12px)
+ */
+const WAVE_SLACK = 14;
+
+/**
+ * 패킷 플러딩의 물결 한 틱 (0.4.0). 생긴 자리에서 앞이 반경 r 까지 고르게 퍼진다.
+ * 생긴 틱부터 k 번째 틱의 앞은 v × (k + 1) × dt 이고, v = r ÷ (퍼지는 시간). 퍼지는 시간 = 지난 시간 + 남은 시간 - 한 틱
+ * (만들 때 남는 시간을 퍼지는 시간 + 한 틱으로 둔다: 마지막 틱에도 판정하도록). 화면(render.ts)도 같은 식으로 그린다.
+ * 이번 틱에 지나간 띠 [앞 - 이동 거리 - 여유, 앞] 에 몸이 걸친 적을 물결마다 한 번만 맞힌다 (z.hit). 관통 제한이 없고 모든 방향이다.
+ * 격자로 바깥 반경 안의 적만 본다 (함께 하기에서 다른 사람 둘레의 적은 보지 않는다)
+ */
+function sweepWave(world: World, grid: Grid, z: Zone, owner: Player | undefined, dt: number): void {
+  const k = world.tick - z.born;
+  const grow = (k + 1) * dt + z.ttl - DT;
+  if (grow <= EPS) return;
+  const v = z.r / grow;
+  const passed = v * k * dt;
+  // 이미 끝까지 퍼졌다 (남은 시간이 소수 오차로 0 을 조금 넘은 틱)
+  if (passed >= z.r - EPS) return;
+  const outer = Math.min(z.r, v * (k + 1) * dt);
+  const inner = passed - WAVE_SLACK;
+  const half = z.band ?? 0;
+  const done = (z.hit ??= new Set<number>());
+  grid.near(z.x, z.y, outer + half, (e) => {
+    if (done.has(e.id)) return;
+    // 안쪽: 몸의 바깥쪽 끝이 이번 틱의 띠보다 안이면 이미 지나간 것이다 (그때 맞았거나, 물결이 생긴 뒤에 안으로 들어온 적)
+    const lo = inner - half - EN[e.type].r;
+    if (lo > 0 && (e.x - z.x) ** 2 + (e.y - z.y) ** 2 < lo * lo) return;
+    done.add(e.id);
+    hit(world, e, z.dmg, owner, z.w);
+  });
 }
 
 /* ───────────── 러버덕 · 소환물 ───────────── */
@@ -442,10 +483,24 @@ export function auraRadius(p: Player): number {
 
 /** 카나리아·부엉이가 도는 반경 (뱀서: 공격 범위는 폭탄 크기만 키우고 원의 크기는 그대로) */
 const PET_ORBIT = 64;
+/**
+ * 24시간 모니터링의 감시 새가 도는 반경. 폭발 반경(72)보다 작아서 폭발이 늘 내 자리를 덮는다 (몸에 붙은 버그도 맞는다).
+ * 닿는 거리는 56 + 72 = 128 이다. 듀얼 모니터는 폭탄만 키운다
+ */
+export const WATCH_ORBIT = 56;
+/** 감시 새가 git fork 로 더 떨구는 폭탄의 간격: 지나온 자리를 따라 이만큼(rad)씩 뒤에 */
+const WATCH_TRAIL = 0.5;
 
-/** 카나리아·부엉이의 자리. 24시간 모니터링이면 그 무기의 빠르기로 두 마리가 함께 돈다 */
-export function petPosition(world: World, p: Player, w: 'canary' | 'night_owl'): [number, number] {
-  const st = effectiveStats(p, lv(p, 'monitoring') > 0 ? 'monitoring' : w);
+/**
+ * 소환물의 자리: 카나리아는 시계 방향, 부엉이는 그 반대편에서 반대 방향으로 돈다.
+ * 24시간 모니터링의 감시 새는 시계 방향으로 WATCH_ORBIT 를 돈다. 빠르기는 저마다의 무기 속도(CDN 으로 빨라진다)
+ */
+export function petPosition(world: World, p: Player, w: 'canary' | 'night_owl' | 'monitoring'): [number, number] {
+  const st = effectiveStats(p, w);
+  if (w === 'monitoring') {
+    const a = world.time * st.speed;
+    return [p.x + Math.cos(a) * WATCH_ORBIT, p.y + Math.sin(a) * WATCH_ORBIT];
+  }
   const dir = w === 'canary' ? 1 : -1;
   const a = dir * world.time * st.speed + (w === 'night_owl' ? Math.PI : 0);
   return [p.x + Math.cos(a) * PET_ORBIT, p.y + Math.sin(a) * PET_ORBIT];
@@ -600,11 +655,12 @@ function runBirds(world: World, grid: Grid, p: Player, w: 'canary' | 'night_owl'
 }
 
 /**
- * 24시간 모니터링 (카나리아 + 부엉이): 두 마리가 쉬지 않고 돌며 쿨다운마다 저마다 폭탄 한 묶음(개수만큼)을 떨어뜨린다.
- * 재료였던 새의 id 를 그대로 쓴다 (테스트처럼 처음부터 가진 경우에는 새로 만든다)
+ * 24시간 모니터링 (카나리아 + 부엉이, 0.4.0): 감시 새 한 마리가 쉬지 않고 돌며 쿨다운마다 자기 자리에 큰 폭탄 하나를 떨군다.
+ * 개수가 늘면(git fork) 지나온 자리에도 WATCH_TRAIL 간격으로 하나씩 더 떨궈 꼬리처럼 넓어진다.
+ * 재료였던 카나리아의 id 를 이어 쓴다 (화면에서 같은 자리의 새가 바뀌어 보이게. 처음부터 가진 경우에는 새로 만든다)
  */
 function runMonitoring(world: World, grid: Grid, p: Player, st: WeaponStats, dt: number): void {
-  for (const b of ['canary', 'night_owl'] as const) if (p.pets[b] === undefined) p.pets[b] = world.nextId++;
+  if (p.pets.monitoring === undefined) p.pets.monitoring = p.pets.canary ?? world.nextId++;
   const prev = p.cd.monitoring ?? 0;
   const cd = prev - dt;
   if (cd > EPS) {
@@ -612,10 +668,15 @@ function runMonitoring(world: World, grid: Grid, p: Player, st: WeaponStats, dt:
     return;
   }
   p.cd.monitoring = st.cd + spill(prev, dt);
-  for (const b of ['canary', 'night_owl'] as const) dropBombs(world, grid, p, 'monitoring', petPosition(world, p, b), st);
+  const n = Math.max(1, Math.round(st.amount));
+  const a = world.time * st.speed;
+  for (let i = 0; i < n; i++) {
+    const b = a - i * WATCH_TRAIL;
+    blast(world, grid, p, 'monitoring', p.x + Math.cos(b) * WATCH_ORBIT, p.y + Math.sin(b) * WATCH_ORBIT, st.area, st.dmg, 1);
+  }
 }
 
-/** 새 한 마리가 자기 자리 둘레에 폭탄을 개수만큼 떨어뜨린다 (첫 발은 바로 아래) */
+/** 카나리아·부엉이 한 마리가 자기 자리 둘레에 폭탄을 개수만큼 떨어뜨린다 (첫 발은 바로 아래) */
 function dropBombs(world: World, grid: Grid, p: Player, w: WeaponId, [bx, by]: [number, number], st: WeaponStats): void {
   const n = Math.max(1, Math.round(st.amount));
   for (let i = 0; i < n; i++) {
@@ -846,10 +907,9 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'broadcast':
-    case 'multicast':
-    case 'flooding': {
-      // 브로드캐스트는 위아래·좌우, 멀티캐스트는 대각선, 패킷 플러딩은 여덟 방향 모두
-      const dirs = w === 'flooding' ? 8 : 4;
+    case 'multicast': {
+      // 브로드캐스트는 위아래·좌우, 멀티캐스트는 대각선
+      const dirs = 4;
       const turn = w === 'multicast' ? Math.PI / 4 : 0;
       for (let k = 0; k < dirs; k++) {
         const ang = turn + (k * Math.PI * 2) / dirs;
@@ -858,6 +918,14 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
           fire(world, p, { kind: 'packet', w, x: p.x - Math.sin(ang) * off, y: p.y + Math.cos(ang) * off, ang, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
         }
       }
+      return true;
+    }
+    case 'flooding': {
+      // 패킷 플러딩 (0.4.0): 내 자리에서 물결이 퍼진다 (updateZones 의 sweepWave). 물결 n 겹을 따로 판정하면 같은 적을 0.1초 안에
+      // n 번 때려 결과는 같고 일만 n 배라, 판정은 하나로 합치고 피해에 겹 수를 곱한다. 겹 수는 aux 로 보내 화면만 여러 겹으로 그린다.
+      // 남는 시간 = 퍼지는 시간 + 한 틱 (생긴 틱부터 끝까지 퍼지는 틱까지 판정한다)
+      const reach = st.speed * st.dur;
+      addZone(world, { kind: 'wave', w, owner: p.id, x: p.x, y: p.y, r: reach, aux: Math.min(255, n), ttl: st.dur + DT, dmg: st.dmg * n, every: 0, band: st.area });
       return true;
     }
     case 'keyboard_cat': {

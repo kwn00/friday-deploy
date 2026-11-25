@@ -44,14 +44,14 @@ const blasted = (w: World, p: Player) => (): boolean => w.zones.some((z) => z.ki
 /** 첫 번째와 마지막 사이의 평균 간격(초) */
 const meanGap = (ticks: number[]): number => ((ticks.at(-1)! - ticks[0]!) / (ticks.length - 1)) * DT;
 
-test('24시간 모니터링(쿨다운 0.5초): 기계식 키보드 1단계(0.46초)면 10초에 더 많이 터뜨린다', () => {
+test('24시간 모니터링(쿨다운 0.25초): 기계식 키보드 1단계(0.23초)면 10초에 더 많이 터뜨린다', () => {
   const count = (kb: number): number => {
     const { w, p } = setup(201, { monitoring: 1, ...(kb ? { mech_keyboard: kb } : {}) });
     return fireTicks(w, 200, () => [], blasted(w, p)).length;
   };
   const counts = [0, 1, 2, 3, 4, 5].map(count);
-  // 0.5초 → 20번, 0.46초 → 22번 (예전에는 둘 다 0.5초 간격이라 20번)
-  assert.equal(counts[0], 20, `키보드 0단계 ${counts[0]}번`);
+  // 0.25초 → 40번, 0.23초 → 43번 (넘친 몫을 넘기지 않으면 둘 다 0.25초 간격이라 40번). 0.4.0 에 0.5초 → 0.25초
+  assert.equal(counts[0], 40, `키보드 0단계 ${counts[0]}번`);
   assert.ok(counts[1]! > counts[0]!, `키보드 1단계 ${counts[1]}번 > 0단계 ${counts[0]}번`);
   for (let kb = 1; kb <= 5; kb++) assert.ok(counts[kb]! > counts[kb - 1]!, `단계마다 늘어난다: ${counts.join(', ')}`);
 });
