@@ -368,3 +368,28 @@ test('강화가 남아 있으면 레벨업해도 체력은 그대로다 (선택�
   assert.equal(p.hp, 20);
   assert.ok(!w.events.some((e) => e.type === 'refill'));
 });
+
+test('강화를 모두 마친 뒤 연 보물상자: 남는 몫으로 체력을 가득 채운다 (몇 개짜리 상자든 한 번, 비밀 난수는 굴림에만)', () => {
+  for (const odds of [[1, 0, 0, 0], [3, 0, 0, 0]] as const) {
+    let calls = 0;
+    const base = sfc32(62);
+    const w = createWorld({ rng: sfc32(63), secret: () => (calls++, base()) });
+    const p = addPlayer(w, 'a');
+    p.xpNext = 1e9;
+    p.cd.console_log = 1e9;
+    w.itemCd = 1e9;
+    w.magnetCd = 1e9;
+    maxOut(p);
+    p.hp = 9.2;
+    w.items.push({ id: w.nextId++, kind: 'chest', x: p.x + 2, y: p.y, ttl: Infinity, chest: odds });
+    w.events.length = 0;
+    calls = 0;
+    quietStep(w);
+    const ev = w.events.find((e) => e.type === 'chest');
+    assert.ok(ev && ev.type === 'chest', '열렸다');
+    assert.deepEqual(ev.items, [], '오른 것은 없다');
+    assert.equal(p.hp, maxHpOf(p), `${odds[0]}: 체력이 가득`);
+    assert.equal(ev.heal, Math.ceil(maxHpOf(p)) - 10, '찬 양은 화면에 보이는 체력(올림) 기준, 몇 몫이든 한 번');
+    assert.equal(calls, 3, '비밀 난수는 5·3·1개 굴림에만 (예전과 같은 횟수)');
+  }
+});

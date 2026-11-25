@@ -661,7 +661,8 @@ function pullAllGems(world: World, p: Player): void {
  * (예전에는 1개가 되어, 운이 그 확률을 올리는 바람에 운이 좋을수록 덜 받았다).
  * 확률에는 운을 곱한다. 들어 있는 것은 가진 무기·패시브 중 아직 최대가 아닌 것을 하나씩 무작위로 (같은 것이 또 나올 수 있다).
  * 다만 진화할 수 있는 것이 있으면 그 몫은 진화가 먼저 차지한다 (EVOLUTIONS 순서, 한 상자에서 여러 번도 된다).
- * 올릴 것이 하나도 없으면 그 몫만큼 회복한다. 모두 비밀 난수로 정한다 (진화는 난수를 쓰지 않는다).
+ * 올릴 것이 하나도 없으면(강화를 모두 마쳤다) 체력을 가득 채운다 (레벨업과 같은 규칙. 0.3.5 전에는 한 몫에 피자 하나만큼).
+ * 모두 비밀 난수로 정한다 (진화와 체력 채우기는 난수를 쓰지 않는다).
  */
 function openChest(world: World, p: Player, odds: ChestOdds): void {
   const [base, p5, p3, p1] = odds;
@@ -683,9 +684,10 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
     }
     const owned = UPGRADE_IDS.filter((u) => lv(p, u) > 0 && lv(p, u) < UPGRADES[u].max);
     if (owned.length === 0) {
-      const before = p.hp;
-      heal(p);
-      healed += p.hp - before;
+      // 찬 양은 화면에 보이는 체력(올림)으로 센다 (레벨업의 refill 과 같다). 남은 몫은 이미 가득이라 더할 것이 없다
+      const max = maxHpOf(p);
+      healed += Math.max(0, Math.ceil(max) - Math.ceil(p.hp));
+      p.hp = Math.max(p.hp, max);
       continue;
     }
     const up = owned[Math.floor(world.secret() * owned.length)]!;

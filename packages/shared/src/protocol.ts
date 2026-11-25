@@ -257,7 +257,7 @@ export type ServerMsg =
    * (false 면 올릴 수 있는 것이 이미 다 나와 있다: 새로고침해도 횟수만 줄어서 서버가 받지 않는다)
    */
   | { t: 'levelup'; offers: Offer[]; timeout: number; level: number; rerolls: number; rerollable: boolean }
-  /** 보물상자를 열었다: 한 단계씩 오른 것들 (같은 것이 여러 번 있을 수 있다)과, 올릴 것이 없어 대신 찬 체력 */
+  /** 보물상자를 열었다: 한 단계씩 오른 것들 (같은 것이 여러 번 있을 수 있다)과, 올릴 것이 없어 대신 찬 체력 (가득 채운 양) */
   | { t: 'chest'; items: UpgradeId[]; heal: number }
   /**
    * 누군가 자석을 주웠다 (방의 모두에게 간다). by: 주운 사람의 플레이어 id, gems: 그때 끌어당기기 시작한 경험치의 수.
