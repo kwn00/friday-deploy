@@ -215,8 +215,10 @@ export interface Shot {
   vx: number;
   vy: number;
   ttl: number;
-  /** 처음 수명 (롤백이 돌아오는 때를 계산한다) */
+  /** 롤백이 되돌아서는 때를 정하는 기준 시간 (그 절반에 되돌아서고, 기준 시간에 던진 자리를 지난다). 다른 무기는 처음 수명 */
   life: number;
+  /** 쏜 뒤 지난 시간(초). 롤백의 움직임을 이것으로 계산한다 (ttl 은 기준 시간보다 길게 줄 수 있어서 ttl 로 셀 수 없다) */
+  age: number;
   dmg: number;
   pierce: number;
   r: number;

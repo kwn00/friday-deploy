@@ -320,6 +320,7 @@ function fire(world: World, p: Player, s: ShotSpec): Shot | null {
     vy: Math.sin(s.ang) * s.speed,
     ttl: s.ttl,
     life: s.life ?? s.ttl,
+    age: 0,
     dmg: s.dmg,
     pierce: s.pierce,
     r: s.r,
@@ -343,7 +344,11 @@ export function updateShots(world: World, grid: Grid, dt: number): void {
   for (const s of world.shots) {
     const owner = world.players.get(s.owner);
     s.ttl -= dt;
-    const age = s.life - s.ttl;
+    s.age += dt;
+    // 롤백은 ttl 을 기준 시간(life)의 1.5배로 쏘므로, 나이는 ttl 이 아니라 쏜 뒤 지난 시간으로 센다.
+    // (0.4.0 전에는 life - ttl 로 세어 처음부터 지속의 절반만큼 늦은 나이가 되었다: 처음 속도가 두 배이고,
+    //  기준 시간이 다 지나서야 되돌아서서 화면 밖까지 날아갔다가 던진 자리로 돌아오지 못했다)
+    const age = s.age;
     if (s.kind === 'book') s.vy += GRAVITY * dt;
     if (s.kind === 'rollback') {
       // 처음 방향 그대로, 속도가 줄다가 뒤집혀 돌아오고, 던진 자리를 지나 계속 날아간다 (뱀서 Cross)

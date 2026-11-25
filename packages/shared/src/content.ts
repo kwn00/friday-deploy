@@ -493,7 +493,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   // 짝은 무기를 세게 하지 않아 잘 고르지 않던 패시브다 (배포 기도·CDN·사이드 프로젝트에 고를 까닭을 준다)
   // git reset --hard (롤백 + 배포 기도): 롤백처럼 던지는 부메랑이 넷이고 더 크고 세다 (움직임은 롤백 갈래 그대로). 관통 제한이 없고,
   // 같은 적을 0.5초에 한 번 (롤백과 같다). 치명타 확률에는 운(배포 기도)이 곱해진다 (hit)
-  git_reset: W('git reset --hard', '⏪', '전부 되돌린다. 부메랑 여럿이 크게 오가고, 운이 좋으면 두 배로 벤다.',
+  git_reset: W('git reset --hard', '⏪', '전부 되돌린다. 롤백 여럿이 부채꼴로 날아가 다 꿰뚫고, 운이 좋으면 두 배로 벤다.',
     { dmg: 45, cd: 2.0, amount: 4, area: 14, speed: 450, dur: 1.8, pierce: 999 }, [],
     { rarity: 0, kb: 1, rehit: 0.5, crit: { chance: 0.25, mult: 2 }, ignores: ['dur'] }),
   // grep -r (정규표현식 + CDN): 정규표현식처럼 가장 가까운 버그 쪽으로(없으면 바라보는 쪽으로) 나란히 쏘되, 더 자주·더 많이·더 멀리

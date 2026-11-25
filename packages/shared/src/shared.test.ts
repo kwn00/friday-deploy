@@ -203,7 +203,7 @@ test('sim: 보스는 보물상자를 떨어뜨리고, 회복 아이템은 체력
   const w = createWorld(7);
   const p = addPlayer(w, 'a');
   w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false, chest: [1, 0, 0, 100] });
-  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, turn: 0, w: 'console_log' });
+  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, age: 0, rehit: 0, turn: 0, w: 'console_log' });
   step(w, DT);
   assert.equal(w.items.filter((it) => it.kind === 'chest').length, 1, '보스 처치 → 보물상자');
   assert.equal(w.heals.length, 0, '보스는 회복 아이템을 떨어뜨리지 않는다 (뱀서)');
@@ -448,7 +448,7 @@ test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시�
   assert.equal(row(5001)!.length, 6, '[id, 종류, x, y, 피격, 얼음] 뿐: 체력은 없다');
 
   const tank = w.enemies.find((e) => e.id === 5001)!;
-  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, turn: 0, w: 'console_log' });
+  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, age: 0, rehit: 0, turn: 0, w: 'console_log' });
   step(w, DT);
   assert.equal(row(5001)![4], 1, '맞은 틱');
   assert.equal(row(5002)![4], 0, '안 맞은 적');

@@ -194,6 +194,42 @@ test('정규표현식: 가장 가까운 버그 쪽으로 쏜다 (바라보는 �
   assert.ok(down && down.vy > 0 && Math.abs(down.vx) < 1e-9, '바라보는 아래쪽으로');
 });
 
+test('롤백: 부메랑처럼 속도×지속/4 만큼 날아갔다 되돌아와 던진 자리를 지나 뒤로 날아간다. 화면 밖으로 나가지 않고, 오가며 같은 버그를 두 번 벤다', () => {
+  const { w, p } = quietWorld(406);
+  p.up = { rollback: 1 };
+  p.fx = 1;
+  p.fy = 0;
+  const st = effectiveStats(p, 'rollback');
+  const reach = (st.speed * st.dur) / 4; // 1단계 300 × 1.8 / 4 = 135
+  // 던진 자리에서 100 떨어진 버그 (겨누는 거리 안이라 그쪽으로 던진다)
+  const target = enemy(9650, p.x + 100, p.y, 'bug');
+  tick(w, [target]);
+  const shot = w.shots.find((s) => s.kind === 'rollback');
+  assert.ok(shot, '던졌다');
+  const x0 = p.x;
+  let far = 0;
+  let farAt = 0;
+  let back = -1;
+  let hits = 0;
+  let hp = target.hp;
+  for (let t = 1; w.shots.includes(shot); t++) {
+    const d = shot.x - x0;
+    if (d > far) {
+      far = d;
+      farAt = t * DT;
+    }
+    if (back < 0 && far > 0 && d <= 0) back = t * DT;
+    assert.ok(Math.abs(d) < 300, `화면 밖(약 300)으로 나가지 않는다: ${d.toFixed(0)}`);
+    if (target.hp < hp) hits++;
+    hp = target.hp;
+    tick(w, [target]);
+  }
+  assert.ok(Math.abs(far - reach) < reach * 0.1, `가장 멀리 간 거리 ${far.toFixed(0)} ≈ ${reach}`);
+  assert.ok(Math.abs(farAt - st.dur / 2) < 0.1, `지속의 절반(${st.dur / 2}초)에 되돌아선다: ${farAt.toFixed(2)}`);
+  assert.ok(back > 0 && Math.abs(back - st.dur) < 0.1, `지속(${st.dur}초)쯤 던진 자리를 지난다: ${back.toFixed(2)}`);
+  assert.ok(hits >= 2, `오가며 두 번 벤다: ${hits}`);
+});
+
 test('스프린트: 홀수 번째 베기는 반대쪽을 벤다 (바라보는 쪽만 베지 않는다)', () => {
   const { w, p } = quietWorld(406);
   p.up = { sprint: 1 };
