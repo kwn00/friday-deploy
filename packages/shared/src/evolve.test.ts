@@ -30,13 +30,15 @@ import {
   step,
   xpForLevel,
   upgradesOf,
+  effectiveStats,
+  weaponStats,
   type ChestOdds,
   type Enemy,
   type Player,
   type UpgradeId,
   type World,
 } from './index';
-import { BREAKPOINT_FREEZE, WATCH_ORBIT } from './combat';
+import { BREAKPOINT_FREEZE, WATCH_ORBIT, hit } from './combat';
 
 const enemy = (id: number, x: number, y: number, type: Enemy['type'] = 'merge_conflict', hp = 1e9): Enemy => ({ id, type, x, y, hp, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false });
 
@@ -74,7 +76,7 @@ function openChestHere(w: World, p: Player, odds: ChestOdds = [1, 0, 0, 0]): Upg
 const maxOf = (id: UpgradeId): number => UPGRADES[id].max;
 
 test('진화 목록: 재료는 진화하지 않은 무기(최대 단계가 있는 것), 짝은 패시브, 재료가 겹치지 않는다', () => {
-  assert.equal(EVOLUTIONS.length, 6);
+  assert.equal(EVOLUTIONS.length, 9);
   const used = new Set<UpgradeId>();
   for (const e of EVOLUTIONS) {
     assert.ok(isWeapon(e.id) && evolutionOf(e.id) === e, e.id);
@@ -91,7 +93,16 @@ test('진화 목록: 재료는 진화하지 않은 무기(최대 단계가 있�
   }
   assert.deepEqual(evolutionsUsing('keep_alive').map((e) => e.id), ['websocket']);
   assert.deepEqual(evolutionsUsing('night_owl').map((e) => e.id), ['monitoring']);
-  assert.deepEqual(evolutionsUsing('regex'), []);
+  // 0.4.0 에 더한 진화: 짝은 다른 진화에 쓰이지 않던 패시브다 (짝을 함께 쓰지 않는다)
+  assert.deepEqual(evolutionsUsing('rollback').map((e) => e.id), ['git_reset']);
+  assert.deepEqual(evolutionsUsing('deploy_prayer').map((e) => e.id), ['git_reset']);
+  assert.deepEqual(evolutionsUsing('regex').map((e) => e.id), ['grep_r']);
+  assert.deepEqual(evolutionsUsing('cdn').map((e) => e.id), ['grep_r']);
+  assert.deepEqual(evolutionsUsing('ai_agent').map((e) => e.id), ['agi']);
+  assert.deepEqual(evolutionsUsing('side_project').map((e) => e.id), ['agi']);
+  const pairs = EVOLUTIONS.flatMap((e) => (e.with ? [e.with] : []));
+  assert.equal(new Set(pairs).size, pairs.length, '짝 패시브는 진화 하나에만 쓰인다');
+  assert.deepEqual(evolutionsUsing('ctrl_x'), [], '아직 진화가 없는 무기');
 });
 
 test('진화 조건: 재료 무기가 모두 최대 단계이고 짝 패시브가 있어야 하며, 한 번만 진화한다', () => {
@@ -104,6 +115,15 @@ test('진화 조건: 재료 무기가 모두 최대 단계이고 짝 패시브�
   assert.deepEqual(ready({ canary: 8, night_owl: 8 }), ['monitoring']);
   // 여럿이면 목록 순서대로
   assert.deepEqual(ready({ broadcast: 8, multicast: 8, ping_pong: 8, keep_alive: 1 }), ['websocket', 'flooding']);
+  // 0.4.0 에 더한 진화: 재료 무기 최대 단계(8) + 짝 패시브 (단계는 상관없다)
+  assert.deepEqual(ready({ rollback: 8, deploy_prayer: 1 }), ['git_reset']);
+  assert.deepEqual(ready({ regex: 8, cdn: 3 }), ['grep_r']);
+  assert.deepEqual(ready({ ai_agent: 8, side_project: 5 }), ['agi']);
+  assert.deepEqual(ready({ rollback: 7, deploy_prayer: 5, regex: 7, cdn: 5, ai_agent: 7, side_project: 5 }), [], '최대 단계 전');
+  assert.deepEqual(ready({ rollback: 8, regex: 8, ai_agent: 8, stack_overflow: 5, keep_alive: 5 }), [], '짝이 아닌 패시브');
+  assert.deepEqual(ready({ git_reset: 1, rollback: 8, deploy_prayer: 1 }), [], '이미 진화했다');
+  assert.ok(evolvedAway({ grep_r: 1 }, 'regex') && evolvedAway({ agi: 1 }, 'ai_agent') && evolvedAway({ git_reset: 1 }, 'rollback'));
+  assert.ok(!evolvedAway({ grep_r: 1 }, 'cdn'), '짝 패시브는 남는다');
   assert.ok(evolvedAway({ debugger: 1 }, 'console_log'));
   assert.ok(!evolvedAway({ debugger: 1 }, 'test_coverage'), '짝 패시브는 그대로 남는 것');
   assert.ok(!evolvedAway({ console_log: 8 }, 'console_log'));
@@ -141,26 +161,42 @@ test('보물상자: 5개짜리 상자에서 진화와 강화가 함께, 진화�
   assert.equal(WEAPON_IDS.filter((id) => (p.up[id] ?? 0) > 0).length, 3);
 });
 
+test('보물상자: 0.4.0 의 진화 셋 (git reset --hard, grep -r, AGI) 도 재료가 빠지고 짝 패시브는 남으며, 목록 순서대로 바뀐다', () => {
+  const { w, p } = quietWorld(317);
+  p.up = { rollback: 8, deploy_prayer: 1, regex: 8, cdn: 2, ai_agent: 8, side_project: 3, console_log: 2 };
+  const items = openChestHere(w, p, [3, 100, 0, 0]);
+  assert.equal(items.length, 5);
+  assert.deepEqual(items.slice(0, 3), ['git_reset', 'grep_r', 'agi'], '진화가 먼저, EVOLUTIONS 순서대로');
+  assert.ok(items.slice(3).every((id) => !evolutionOf(id)), '나머지는 평소처럼 오른다');
+  for (const gone of ['rollback', 'regex', 'ai_agent'] as const) assert.equal(p.up[gone], undefined, `재료 ${gone} 는 빠진다`);
+  assert.deepEqual([p.up.git_reset, p.up.grep_r, p.up.agi], [1, 1, 1]);
+  for (const kept of ['deploy_prayer', 'cdn', 'side_project'] as const) assert.ok((p.up[kept] ?? 0) >= 1, `짝 ${kept} 는 남는다`);
+  // 진화는 칸을 그대로 쓴다: 무기 4개(롤백·정규표현식·AI 에이전트·console.log) → 4개
+  assert.equal(WEAPON_IDS.filter((id) => (p.up[id] ?? 0) > 0).length, 4);
+  assert.deepEqual([p.tally.chest.git_reset, p.tally.chest.grep_r, p.tally.chest.agi], [1, 1, 1], '통계: 진화한 횟수 (선택지에는 나오지 않는다)');
+  assert.deepEqual([p.tally.offered.git_reset, p.tally.offered.grep_r, p.tally.offered.agi], [undefined, undefined, undefined]);
+});
+
 test('레벨업 선택지: 진화한 무기와 진화해서 없어진 재료 무기는 나오지 않는다 (빈 칸이 있어도)', () => {
   const { w, p } = quietWorld(303);
   const seen = new Set<UpgradeId>();
   for (let round = 0; round < 300; round++) {
-    p.up = { monitoring: 1, debugger: 1 };
+    p.up = { monitoring: 1, debugger: 1, git_reset: 1 };
     p.offers = null;
     p.xp = p.xpNext = 5;
     w.gems.push({ id: w.nextId++, x: p.x, y: p.y, v: 1 });
     tick(w, []);
     for (const id of p.offers ?? []) seen.add(id);
   }
-  for (const id of [...EVOLUTIONS.map((e) => e.id), 'canary', 'night_owl', 'console_log'] as const) assert.ok(!seen.has(id), `${id} 가 선택지에 나왔다`);
-  assert.ok(seen.has('broadcast') && seen.has('test_coverage'), '다른 것은 그대로 나온다');
+  for (const id of [...EVOLUTIONS.map((e) => e.id), 'canary', 'night_owl', 'console_log', 'rollback'] as const) assert.ok(!seen.has(id), `${id} 가 선택지에 나왔다`);
+  assert.ok(seen.has('broadcast') && seen.has('test_coverage') && seen.has('deploy_prayer'), '다른 것(짝 패시브도)은 그대로 나온다');
 });
 
 test('레벨업 선택지: 진화 뒤에 남는 것을 다 올리면 선택지 대신 체력을 가득 채운다 (진화한 무기를 기다리며 멈추지 않는다)', () => {
   const { w, p } = quietWorld(304);
   p.up = {};
-  // 진화한 무기 6개로 무기 칸이 가득, 패시브도 모두 최대
-  for (const e of EVOLUTIONS) p.up[e.id] = 1;
+  // 진화한 무기 6개로 무기 칸이 가득, 패시브도 모두 최대 (진화는 9개라 칸 수만큼만)
+  for (const e of EVOLUTIONS.slice(0, WEAPON_SLOTS)) p.up[e.id] = 1;
   for (const id of PASSIVE_IDS.slice(0, 6)) p.up[id] = maxOf(id);
   assert.equal(WEAPON_IDS.filter((id) => (p.up[id] ?? 0) > 0).length, WEAPON_SLOTS);
   p.hp = 10;
@@ -436,7 +472,7 @@ test('24시간 모니터링: git fork 로 개수가 늘면 지나온 자리(0.5r
 });
 
 /** 진화한 무기의 능력치 (패시브 없음) */
-const weaponOf = (id: 'monitoring' | 'flooding') => {
+const weaponOf = (id: 'monitoring' | 'flooding' | 'git_reset' | 'grep_r' | 'agi') => {
   const def = UPGRADES[id];
   assert.ok(def.kind === 'weapon');
   return def.base;
@@ -548,16 +584,142 @@ test('브로드캐스트·멀티캐스트: 재료 무기는 그대로 저마다 
   }
 });
 
+/** 놓아 둔 자리에 다시 둔 채(밀려나도, 다가와도) 한 틱 */
+function tickAt(w: World, p: Player, all: Enemy[], at: [number, number][]): void {
+  for (const [k, e] of all.entries()) [e.x, e.y] = at[k]!;
+  p.hp = 1e9;
+  tick(w, all);
+}
+
+test('git reset --hard: 롤백 갈래·그림 그대로 부메랑 넷을 가장 가까운 버그 쪽으로 부채꼴로 던지고, 관통 제한 없이 벤다', () => {
+  const { w, p } = quietWorld(330);
+  p.up = { git_reset: 1 };
+  const st = weaponOf('git_reset');
+  const rollback8 = weaponStats('rollback', UPGRADES.rollback.max);
+  // 오른쪽에 버그 하나: 가장 가까운 버그 쪽으로 던진다
+  const bug = enemy(9600, p.x + 60, p.y);
+  const at: [number, number][] = [[bug.x, bug.y]];
+  tickAt(w, p, [bug], at);
+  const shots = w.shots.filter((s) => s.w === 'git_reset');
+  assert.equal(shots.length, st.amount, '부메랑 넷');
+  for (const s of shots) {
+    assert.equal(s.kind, 'rollback', '롤백의 그림을 그대로 쓴다 (새 투사체 종류가 없다)');
+    // 움직임은 롤백과 같다: life 를 기준으로 오가고 그 1.5배 동안 남는다. 같은 적을 다시 맞히는 간격은 롤백과 같은 0.5초
+    assert.deepEqual([s.r, s.rehit, s.life], [st.area, 0.5, st.dur]);
+    assert.ok(Math.abs(s.ttl - (st.dur * 1.5 - DT)) < 1e-9);
+    assert.ok(s.pierce >= 998, `관통 제한 없음 (${s.pierce})`);
+  }
+  const angles = shots.map((s) => Math.atan2(s.vy, s.vx)).sort((a, b) => a - b);
+  assert.ok(Math.abs(angles.reduce((a, b) => a + b, 0) / angles.length) < 1e-9, '버그 쪽(오른쪽)을 가운데로 부채꼴');
+  for (let i = 1; i < angles.length; i++) assert.ok(Math.abs(angles[i]! - angles[i - 1]! - 0.35) < 1e-9, '롤백과 같은 간격(0.35rad)');
+  // 가운데 두 개가 같은 버그를 지나간다: 맞혀도 사라지지 않고 계속 날아간다
+  for (let i = 0; i < 10; i++) tickAt(w, p, [bug], at);
+  assert.ok(1e9 - bug.hp >= 2 * st.dmg, `두 개 이상에 맞았다 (${1e9 - bug.hp})`);
+  assert.equal(w.shots.filter((s) => s.w === 'git_reset').length, st.amount, '맞힌 뒤에도 넷 다 남는다');
+  // 롤백 최대 단계보다 많이, 세게, 크게, 빠르게
+  assert.ok(st.amount > rollback8.amount && st.dmg > rollback8.dmg && st.area > rollback8.area && st.speed >= rollback8.speed);
+});
+
+test('git reset --hard: 치명타는 25% × 2배이고, 확률에 운(배포 기도)이 곱해진다 (서버의 보이는 난수로 판정)', () => {
+  const { w, p } = quietWorld(331);
+  const st = weaponOf('git_reset');
+  const dmgWith = (prayer: number, roll: number): number => {
+    p.up = { git_reset: 1, ...(prayer > 0 ? { deploy_prayer: prayer } : {}) };
+    w.rng = () => roll;
+    const e = enemy(9610, p.x + 50, p.y);
+    hit(w, e, st.dmg, p, 'git_reset');
+    return 1e9 - e.hp;
+  };
+  assert.equal(dmgWith(0, 0.24), st.dmg * 2, '25% 안: 두 배');
+  assert.equal(dmgWith(0, 0.3), st.dmg, '25% 밖: 그대로');
+  // 배포 기도 5단계: 운 ×1.5 → 37.5%
+  assert.equal(dmgWith(5, 0.3), st.dmg * 2, '배포 기도로 치명타가 잦아진다');
+  assert.equal(dmgWith(5, 0.38), st.dmg);
+  // 재료인 롤백에는 치명타가 없다
+  const e = enemy(9611, p.x + 50, p.y);
+  w.rng = () => 0;
+  hit(w, e, 5, p, 'rollback');
+  assert.equal(1e9 - e.hp, 5);
+});
+
+test('grep -r: 정규표현식 갈래·그림 그대로 가장 가까운 버그 쪽으로 넷을 나란히, 0.4초마다 쏜다. 하나가 넷까지 꿰뚫는다 (관통 3)', () => {
+  const { w, p } = quietWorld(332);
+  p.up = { grep_r: 1, cdn: 1 };
+  const st = weaponOf('grep_r');
+  // 바라보는 쪽(오른쪽)과 반대인 왼쪽에 버그 다섯을 한 줄로: 그래도 가장 가까운 버그 쪽으로 쏜다
+  // 몸이 큰 기술 부채로 30px 간격: 바깥 줄(9px 비켜남)도 한 틱(21px)에 건너뛰지 않고, 한 틱에 둘을 함께 맞히지 않는다
+  const row = Array.from({ length: 5 }, (_, k) => enemy(9620 + k, p.x - 30 - k * 30, p.y, 'tech_debt'));
+  const at = row.map((e): [number, number] => [e.x, e.y]);
+  tickAt(w, p, row, at);
+  const shots = w.shots.filter((s) => s.w === 'grep_r');
+  assert.equal(shots.length, st.amount, '넷을 한꺼번에');
+  for (const s of shots) {
+    assert.equal(s.kind, 'regex', '정규표현식의 그림을 그대로 쓴다');
+    assert.ok(s.vx < 0 && Math.abs(s.vy) < 1e-9, '왼쪽(가장 가까운 버그 쪽)으로');
+    assert.ok(Math.abs(Math.hypot(s.vx, s.vy) - st.speed * 1.1) < 1e-6, '짝인 CDN 으로 빨라진다');
+    assert.equal(s.r, st.area);
+  }
+  // 나란히: 쏘는 쪽에 수직으로 6px 간격
+  const ys = shots.map((s) => s.y - p.y).sort((a, b) => a - b);
+  assert.deepEqual(ys.map((y) => Math.round(y)), [-9, -3, 3, 9]);
+  // 4초 동안 0.4초마다 (첫 틱 포함 10번), 다섯째 버그는 앞의 넷에 막혀 맞지 않는다 (관통 3 = 넷까지)
+  let volleys = 1;
+  for (let i = 1; i < 20 * 4; i++) {
+    const before = new Set(w.shots.map((s) => s.id));
+    tickAt(w, p, row, at);
+    if (w.shots.some((s) => s.w === 'grep_r' && !before.has(s.id))) volleys++;
+  }
+  assert.equal(volleys, 10, `${volleys}번 쐈다`);
+  for (const e of row.slice(0, 4)) assert.ok(e.hp < 1e9, `${e.id} 는 맞는다`);
+  assert.equal(row[4]!.hp, 1e9, '다섯째는 맞지 않는다');
+  // 버그가 없으면 바라보는 쪽으로 (정규표현식과 같다)
+  const q = quietWorld(333);
+  q.p.up = { grep_r: 1 };
+  tick(q.w, []);
+  assert.ok(q.w.shots.length === st.amount && q.w.shots.every((s) => s.vx > 0), '바라보는 쪽(오른쪽)으로');
+});
+
+test('AGI: AI 에이전트 갈래·그림 그대로 크고 느린 답 셋을 부채꼴로 쏜다. 하나가 다섯까지 꿰뚫는다 (관통 4)', () => {
+  const { w, p } = quietWorld(334);
+  p.up = { agi: 1, side_project: 1 };
+  const st = weaponOf('agi');
+  const row = Array.from({ length: 7 }, (_, k) => enemy(9640 + k, p.x + 30 + k * 20, p.y));
+  const at = row.map((e): [number, number] => [e.x, e.y]);
+  tickAt(w, p, row, at);
+  const shots = w.shots.filter((s) => s.w === 'agi');
+  assert.equal(shots.length, st.amount, '셋');
+  for (const s of shots) {
+    assert.equal(s.kind, 'ai', 'AI 에이전트의 그림을 그대로 쓴다 (새 투사체 종류가 없다)');
+    assert.deepEqual([s.r, s.pierce], [8, 4], '판정 반경 8, 관통 4');
+    assert.ok(Math.abs(Math.hypot(s.vx, s.vy) - st.speed) < 1e-6, '느리다 (160px/s)');
+  }
+  const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(w, p.id)!));
+  assert.equal(snap.s.filter((r) => SHOT_KINDS[r[1]!] === 'ai').length, st.amount, '화면에는 AI 에이전트의 그림으로');
+  // 쿨다운(2초)보다 짧게: 첫 셋만 날아간다. 피해는 짝인 사이드 프로젝트의 피해량(+5%)까지
+  for (let i = 0; i < 20 * 1.9; i++) tickAt(w, p, row, at);
+  const dmg = effectiveStats(p, 'agi').dmg;
+  assert.ok(Math.abs(dmg - st.dmg * 1.05) < 1e-9);
+  for (const e of row.slice(0, 5)) assert.ok(Math.abs(1e9 - e.hp - dmg * st.amount) < 1e-6, `${e.id}: 셋에 모두 맞는다 (${1e9 - e.hp})`);
+  for (const e of row.slice(5)) assert.equal(e.hp, 1e9, `${e.id}: 앞의 다섯에 막힌다`);
+  // AI 에이전트 최대 단계보다 한 발이 세고(150 > 90), 느리다
+  const ai8 = weaponStats('ai_agent', UPGRADES.ai_agent.max);
+  assert.ok(st.dmg > ai8.dmg && st.speed < ai8.speed && st.pierce > ai8.pierce);
+});
+
 test('통신: 진화한 무기의 단계와 새 투사체(중단점, 웹소켓, 감시 새)·영역(물결)이 이진 스냅샷을 오간다', () => {
   const { w, p } = quietWorld(311);
-  p.up = { debugger: 1, websocket: 1, flooding: 1, monitoring: 1, rm_rf: 1, friday_deploy: 1, keep_alive: 3 };
+  p.up = { debugger: 1, websocket: 1, flooding: 1, monitoring: 1, rm_rf: 1, friday_deploy: 1, git_reset: 1, grep_r: 1, agi: 1, keep_alive: 3, snapshot: 2 };
   const bug = enemy(9730, p.x + 30, p.y);
   tick(w, [bug]);
   const snap = buildSnapshot(w, p.id)!;
   const back = decodeSnapshot(encodeSnapshot(snap));
   assert.deepEqual(back.me.up, snap.me.up);
+  // 0.4.0 의 진화 셋을 무기 뒤에 붙여 패시브의 자리가 밀렸다 (스냅샷 형식 9): 맨 뒤 패시브까지 그대로 읽힌다
+  assert.deepEqual([back.me.up.git_reset, back.me.up.grep_r, back.me.up.agi, back.me.up.keep_alive, back.me.up.snapshot], [1, 1, 1, 3, 2]);
   const kinds = new Set(back.s.map((s) => SHOT_KINDS[s[1]!]));
   assert.ok(kinds.has('breakpoint') && kinds.has('socket') && kinds.has('watch'), [...kinds].join(','));
+  // (AGI 는 겨눌 버그가 있어야 쏘는데 rm -rf 가 먼저 지웠다: AGI 의 그림은 AGI 테스트에서 본다)
+  assert.ok(kinds.has('rollback') && kinds.has('regex'), `git reset --hard·grep -r 는 재료의 그림으로 (${[...kinds].join(',')})`);
   assert.ok(!kinds.has('canary') && !kinds.has('owl') && !kinds.has('packet'), '재료의 새와 패킷은 없다');
   // 물결: 생긴 틱에 한 번, 다른 영역과 같은 일곱 칸만 (맞은 적의 기억·고리 두께는 서버에만 있다)
   const wave = snap.z.filter((z) => ZONE_KINDS[z[1]!] === 'wave');

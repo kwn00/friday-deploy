@@ -98,6 +98,11 @@ test('통계: 진화한 무기는 재료를 함께 싣고, 보물상자 횟수�
   assert.deepEqual(dbg.evolve, { from: ['console_log'], with: 'test_coverage' });
   assert.deepEqual([dbg.chest, dbg.pickRate, dbg.finalOwnedRate, dbg.avgFinalLevel], [1, 0, 0.5, 1]);
   assert.deepEqual(all.find((u) => u.id === 'monitoring')!.evolve, { from: ['canary', 'night_owl'], with: null }, '합치기는 짝 패시브 없음');
+  // 0.4.0 에 더한 진화도 같은 모양 (선택지에는 나오지 않아 offered 0, 보물상자로만 센다)
+  assert.deepEqual(all.find((u) => u.id === 'git_reset')!.evolve, { from: ['rollback'], with: 'deploy_prayer' });
+  assert.deepEqual(all.find((u) => u.id === 'grep_r')!.evolve, { from: ['regex'], with: 'cdn' });
+  assert.deepEqual(all.find((u) => u.id === 'agi')!.evolve, { from: ['ai_agent'], with: 'side_project' });
+  assert.equal(all.find((u) => u.id === 'agi')!.offered, 0);
   assert.equal(all.find((u) => u.id === 'console_log')!.evolve, undefined, '진화하지 않은 것에는 없다');
   assert.ok(!('evolve' in all.find((u) => u.id === 'regex')!), 'JSON 에도 키가 없다');
   // 판의 몫: 진화한 횟수(상자)와 끝날 때 가진 것

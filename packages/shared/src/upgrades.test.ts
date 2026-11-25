@@ -63,14 +63,17 @@ function tick(w: World, keep: Enemy[]): void {
 }
 
 test('강화 정의: 개수, 최대 단계, 단계별 증가분이 맞고, 통신 번호가 1바이트 안에 든다', () => {
-  // 무기 23종 + 진화한 무기 6종 (진화한 무기는 뒤에 붙였다)
-  assert.equal(WEAPON_IDS.length, 29);
+  // 무기 23종 + 진화한 무기 9종 (진화한 무기는 뒤에 붙였다. 0.4.0 에 셋을 더 붙였다)
+  assert.equal(WEAPON_IDS.length, 32);
+  // combat.ts 의 ownKey(플레이어 × 64 + 무기 번호)가 겹치지 않게 64 개 미만이어야 한다
+  assert.ok(WEAPON_IDS.length < 64);
   assert.equal(WEAPON_IDS.filter((id) => !evolutionOf(id)).length, 23);
   assert.equal(PASSIVE_IDS.length, 15);
   assert.equal(new Set(UPGRADE_IDS).size, UPGRADE_IDS.length, 'id 가 겹치지 않는다');
   // 통신 순서: 예전 것들이 같은 자리에 있다 (뒤에만 붙였다)
   assert.deepEqual(WEAPON_IDS.slice(0, 4), ['console_log', 'rubber_duck', 'regex', 'ai_agent']);
   assert.equal(WEAPON_IDS.indexOf('debugger'), 23, '진화한 무기는 원래 무기 23종 뒤에');
+  assert.deepEqual(WEAPON_IDS.slice(23), ['debugger', 'websocket', 'friday_deploy', 'rm_rf', 'monitoring', 'flooding', 'git_reset', 'grep_r', 'agi'], '0.4.0 의 진화는 예전 진화 뒤에');
   assert.deepEqual(PASSIVE_IDS.slice(0, 6), ['coffee', 'mech_keyboard', 'stack_overflow', 'npm_install', 'dark_mode', 'dual_monitor']);
   assert.ok(ENEMY_IDS.length < 64 && SHOT_KINDS.length < 256 && ZONE_KINDS.length < 256);
   for (const id of UPGRADE_IDS) {

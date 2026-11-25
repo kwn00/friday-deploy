@@ -12,7 +12,8 @@ import { DT } from './constants';
 import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 8;
+/** 형식이 바뀌면 올린다. 9 (0.4.0): 진화한 무기 셋을 더해 내 강화 단계(UPGRADE_IDS 순서)에서 패시브의 자리가 밀렸다 */
+const VERSION = 9;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 /**

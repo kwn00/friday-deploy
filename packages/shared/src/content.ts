@@ -210,6 +210,10 @@ export const WEAPON_IDS = [
   'rm_rf',
   'monitoring',
   'flooding',
+  // 0.4.0 에 더한 진화 (뒤에만 붙인다: 스냅샷의 내 강화 단계가 이 순서다)
+  'git_reset',
+  'grep_r',
+  'agi',
 ] as const;
 export type WeaponId = (typeof WEAPON_IDS)[number];
 
@@ -483,6 +487,23 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   flooding: W('패킷 플러딩', '🌊', '내 자리에서 패킷 물결이 퍼져, 닿는 버그를 모두 맞히고 밀어낸다.',
     { dmg: 10, cd: 1.2, amount: 3, area: 6, speed: 260, dur: 0.9, pierce: 999 }, [],
     { rarity: 0, kb: 1, ignores: ['dur', 'speed'] }),
+  // 0.4.0 에 더한 진화 셋: 재료 무기의 동작 갈래와 그림을 그대로 쓴다 (새 투사체 종류도, 새 판정 규칙도 없다).
+  // 짝은 무기를 세게 하지 않아 잘 고르지 않던 패시브다 (배포 기도·CDN·사이드 프로젝트에 고를 까닭을 준다)
+  // git reset --hard (롤백 + 배포 기도): 롤백처럼 던지는 부메랑이 넷이고 더 크고 세다 (움직임은 롤백 갈래 그대로). 관통 제한이 없고,
+  // 같은 적을 0.5초에 한 번 (롤백과 같다). 치명타 확률에는 운(배포 기도)이 곱해진다 (hit)
+  git_reset: W('git reset --hard', '⏪', '전부 되돌린다. 부메랑 여럿이 크게 오가고, 운이 좋으면 두 배로 벤다.',
+    { dmg: 45, cd: 2.0, amount: 4, area: 14, speed: 450, dur: 1.8, pierce: 999 }, [],
+    { rarity: 0, kb: 1, rehit: 0.5, crit: { chance: 0.25, mult: 2 }, ignores: ['dur'] }),
+  // grep -r (정규표현식 + CDN): 정규표현식처럼 가장 가까운 버그 쪽으로(없으면 바라보는 쪽으로) 나란히 쏘되, 더 자주·더 많이·더 멀리
+  grep_r: W('grep -r', '🔎', '찾을 때까지 멈추지 않는다. 가장 가까운 버그 쪽으로 쉴 새 없이 쏟아낸다.',
+    { dmg: 18, cd: 0.4, amount: 4, area: 5, speed: 380, dur: 0.65, pierce: 3 }, [],
+    { rarity: 0, kb: 0.5, ignores: ['dur'] }),
+  // AGI (AI 에이전트 + 사이드 프로젝트): AI 에이전트처럼 아무 버그 하나에게 부채꼴로 쏘되, 크고 느린 답이 넷까지 더 꿰뚫는다.
+  // 판정 반경 8 은 AI 에이전트의 그림('ai')에 맞춘 크기다. 관통 무한은 너무 세서(22분에 금요일 배포 가까이) 4 로 했다.
+  // 재료가 한 번에 한 버그만 맞혀서 후반에는 재료보다 훨씬 세다 (22분 5~6배. 그래도 디버거의 2배쯤으로 진화 무기 가운데 약한 편)
+  agi: W('AGI', '🧠', '스스로 생각하기 시작했다. 크고 느린 답이 버그를 여럿 꿰뚫는다.',
+    { dmg: 150, cd: 2.0, amount: 3, area: 8, speed: 160, dur: 2.0, pierce: 4 }, [],
+    { rarity: 0, kb: 1, ignores: ['dur'] }),
 
   /* ── 패시브 (뱀서의 Wings, Empty Tome, Spinach, Attractorb, Hollow Heart, Candelabrador, Armor, Pummarola, Bracer,
    *    Spellbinder, Duplicator, Clover, Crown, Skull O'Maniac, Tiragisu 순서) ── */
@@ -527,6 +548,10 @@ export const EVOLUTIONS: readonly Evolution[] = [
   { id: 'rm_rf', from: ['git_clean'], with: 'npm_install' },
   { id: 'monitoring', from: ['canary', 'night_owl'], with: null },
   { id: 'flooding', from: ['broadcast', 'multicast'], with: null },
+  // 0.4.0
+  { id: 'git_reset', from: ['rollback'], with: 'deploy_prayer' },
+  { id: 'grep_r', from: ['regex'], with: 'cdn' },
+  { id: 'agi', from: ['ai_agent'], with: 'side_project' },
 ];
 
 const EVOLVED = new Map<UpgradeId, Evolution>(EVOLUTIONS.map((e) => [e.id, e]));

@@ -1,5 +1,5 @@
 /**
- * 전투: 무기 23종과 진화한 무기 6종의 동작, 투사체·소환물, 바닥 영역, 피해와 처치.
+ * 전투: 무기 23종과 진화한 무기 9종의 동작, 투사체·소환물, 바닥 영역, 피해와 처치.
  * 서버에서만 "진짜"로 돈다. 클라이언트에는 결과(위치, 영역, 피격 표시)만 스냅샷으로 간다.
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
@@ -755,8 +755,10 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       }
       return true;
     }
-    case 'regex': {
-      // 가장 가까운 버그 쪽으로 나란히 (0.4.0. 겨눌 것이 없으면 바라보는 쪽으로: 예전처럼 쿨다운마다 쏜다)
+    case 'regex':
+    case 'grep_r': {
+      // 가장 가까운 버그 쪽으로 나란히 (0.4.0. 겨눌 것이 없으면 바라보는 쪽으로: 예전처럼 쿨다운마다 쏜다).
+      // grep -r 도 같은 갈래와 그림이다 (더 자주, 더 많이, 더 멀리)
       const t = grid.nearest(p.x, p.y, aimOf(p));
       const ang = t ? Math.atan2(t.y - p.y, t.x - p.x) : Math.atan2(p.fy, p.fx);
       const ux = Math.cos(ang);
@@ -767,8 +769,9 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       }
       return true;
     }
-    case 'ai_agent': {
-      // 무작위 적 하나에게 여러 발을 부채꼴로 (뱀서 Fire Wand)
+    case 'ai_agent':
+    case 'agi': {
+      // 무작위 적 하나에게 여러 발을 부채꼴로 (뱀서 Fire Wand). AGI 도 같은 갈래와 그림이다 (크고 느린 답이 여럿 꿰뚫는다)
       const t = randomTarget(world, grid, p, aimOf(p, AIM * 1.1));
       if (!t) return false;
       const base = Math.atan2(t.y - p.y, t.x - p.x);
@@ -796,12 +799,14 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       }
       return true;
     }
-    case 'rollback': {
-      // 실제로 날아가는 거리(속도 × 지속 / 4) 안의 적만 겨눈다. 돌아온 뒤에도 지속의 절반만큼 더 날아간다
+    case 'rollback':
+    case 'git_reset': {
+      // 실제로 날아가는 거리(속도 × 지속 / 4) 안의 적만 겨눈다. 돌아온 뒤에도 지속의 절반만큼 더 날아간다.
+      // git reset --hard 도 같은 갈래와 그림이다 (치명타는 hit 이 무기 정의로 굴린다)
       const t = grid.nearest(p.x, p.y, (st.speed * st.dur) / 4 + 10);
       const base = t ? Math.atan2(t.y - p.y, t.x - p.x) : Math.atan2(p.fy, p.fx);
       for (let i = 0; i < n; i++) {
-        fire(world, p, { kind: 'rollback', w, x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.35, speed: st.speed, ttl: st.dur * 1.5, life: st.dur, dmg: st.dmg, pierce: 999, r: st.area, rehit: 0.5 });
+        fire(world, p, { kind: 'rollback', w, x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.35, speed: st.speed, ttl: st.dur * 1.5, life: st.dur, dmg: st.dmg, pierce: 999, r: st.area, rehit: rehitOf(w) });
       }
       return true;
     }

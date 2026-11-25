@@ -180,6 +180,12 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
   // 치명타: 확률에 운이 곱해진다
   assert.equal(value({ sprint: 1 }, 'sprint', '치명타'), '5% ×2');
   assert.equal(value({ sprint: 1, deploy_prayer: 3 }, 'sprint', '치명타'), '6.5% ×2');
+  // git reset --hard: 짝인 배포 기도가 늘 있다 (1단계면 25% × 1.1 = 27.5%, 5단계면 37.5%)
+  assert.equal(value({ git_reset: 1, deploy_prayer: 1 }, 'git_reset', '치명타'), '28% ×2');
+  assert.equal(value({ git_reset: 1, deploy_prayer: 5 }, 'git_reset', '치명타'), '38% ×2');
+  assert.equal(value({ git_reset: 1 }, 'git_reset', '관통'), '무한');
+  assert.equal(value({ agi: 1 }, 'agi', '관통'), '4');
+  assert.equal(value({ grep_r: 1 }, 'grep_r', '관통'), '3');
 
   // 스프린트: 걸으면 더해지는 피해의 상한 (단계 × 5). 지속은 베는 모습에만 쓰여 줄이 없다
   assert.equal(value({ sprint: 1 }, 'sprint', '걸으면 피해'), `최대 +${SPRINT_BONUS_PER_LEVEL}`);
@@ -376,7 +382,7 @@ test('가진 아이템: 단계 표시, 다음 단계, 최대 단계, 진화', ()
   // 합치기: 둘 다 최대면 둘 다 표시
   const merge = loadoutOf({ canary: 8, night_owl: 8 }, 0).groups[0].items;
   assert.deepEqual(merge.map((x) => x.ready), [true, true]);
-  assert.equal(itemOf({ regex: 3 }, 'regex').evo.length, 0, '진화가 없는 무기');
+  assert.equal(itemOf({ ctrl_x: 3 }, 'ctrl_x').evo.length, 0, '진화가 없는 무기');
 
   // 진화한 무기: 단계 대신 ★, 재료, 다음 단계 없음
   const evolved = itemOf({ debugger: 1, test_coverage: 2 }, 'debugger');
