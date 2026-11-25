@@ -2,6 +2,7 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
+/** 14 (0.4.0 에서 한 번): 새 영역·투사체 종류(물결 wave, 감시 새 watch), 시작 무기(hello.starter, 대기실의 starter 메시지, roster 의 start) */
 export const PROTOCOL_VERSION = 14;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz

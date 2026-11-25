@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { APP_VERSION, PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
+import { DEFAULT_STARTER, starterAt } from '@friday-deploy/shared';
 import { RoomManager, type Conn, type Room } from './room';
 import { LEADERBOARD_SEASON, type LeaderboardResponse, type UpgradeStatsResponse } from '@friday-deploy/shared';
 import { Leaderboard, MemoryStore, type LeaderboardStore } from './leaderboard';
@@ -382,7 +383,8 @@ function onConnection(ws: WebSocket, ip: string): void {
       }
       clearTimeout(helloTimer);
       room = found;
-      conn = room.join(ws, sid, msg.name);
+      // 시작 무기: 허용 목록의 번호만 받는다 (범위 밖이면 parseClientMsg 가 이미 위반으로 걸렀다). 없으면 기본 무기
+      conn = room.join(ws, sid, msg.name, starterAt(msg.starter ?? 0) ?? DEFAULT_STARTER);
       return;
     }
 
@@ -402,6 +404,10 @@ function onConnection(ws: WebSocket, ip: string): void {
         break;
       case 'start':
         room.onStart(conn);
+        break;
+      case 'starter':
+        // 대기실에서 시작 무기 바꾸기. 판이 시작된 뒤에 온 것은 Room 이 조용히 무시한다
+        room.onStarter(conn, msg.choice);
         break;
       case 'pause':
         room.onPause(conn, msg.on);

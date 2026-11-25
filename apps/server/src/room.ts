@@ -31,6 +31,7 @@ import {
   type Player,
   type World,
 } from '@friday-deploy/shared';
+import { DEFAULT_STARTER, isStarter, setStarter, starterAt, type StarterId } from '@friday-deploy/shared';
 import { safeEqual, sign } from './security';
 
 type OverMsg = Extract<ServerMsg, { t: 'over' }>;
@@ -75,6 +76,8 @@ export interface Conn {
   rerollAnswered: boolean;
   /** 지키던 자리가 풀릴 때(이어받음·시간 초과·방 닫힘) 한 번 부른다 */
   onFree?: () => void;
+  /** 이 사람이 고른 시작 무기 (허용 목록 안). 같은 방의 다음 판(대기실로 돌아간 뒤)에도 이것으로 시작한다 */
+  start: StarterId;
 }
 
 const MAX_ROOMS = 200;
@@ -140,6 +143,11 @@ export class Room {
    * 대기실에만 있다가 나간 사람은 세지 않는다 (판이 시작될 때부터 센다).
    */
   private peak = 0;
+  /**
+   * 대기실에서 누군가 시작 무기를 바꿔 사람 목록을 다시 보내야 한다. 다음 틱에 한 번에 보낸다:
+   * 바꾸기를 퍼부어도 사람 목록은 틱마다 한 번(초당 20번)까지만 나간다 (판이 진행될 때의 스냅샷보다 적다)
+   */
+  private rosterDue = false;
   closed = false;
 
   constructor(
@@ -172,9 +180,14 @@ export class Room {
     return !this.closed && !this.world.over && this.mode === 'coop' && this.conns.size < MAX_PLAYERS_PER_ROOM;
   }
 
-  join(ws: WebSocket, sid: string, name: string): Conn {
+  /**
+   * start: 시작 무기. index.ts 가 hello 의 번호를 허용 목록에서 찾아 넘긴다. 여기서도 한 번 더 확인하고, 목록 밖이면 기본 무기로 한다.
+   * 진행 중인 판에 도중에 들어오면 고른 무기 1단계로 들어온다 (막힌 판이면 관전)
+   */
+  join(ws: WebSocket, sid: string, name: string, start: StarterId = DEFAULT_STARTER): Conn {
+    if (!isStarter(start)) start = DEFAULT_STARTER;
     // 누군가 쓰러졌거나 나간 뒤에 들어오면 이번 판은 관전만 한다 (캐릭터 없이 시점만 움직인다).
-    const p = addPlayer(this.world, name, this.started && this.sealed);
+    const p = addPlayer(this.world, name, this.started && this.sealed, start);
     const now = Date.now();
     const conn: Conn = {
       ws,
@@ -193,6 +206,7 @@ export class Room {
       // 들어오는 순간 남아 있는 영역도 한 번 받는다
       zoneTick: -1,
       rerollAnswered: false,
+      start,
     };
     this.conns.set(p.id, conn);
     if (this.started) this.peak = Math.max(this.peak, this.conns.size);
@@ -446,6 +460,21 @@ export class Room {
   }
 
   /**
+   * 대기실에서 시작 무기를 바꾼다 (choice: 허용 목록의 번호. 형식은 index.ts 가 이미 확인했다).
+   * 판이 시작된 뒤에 온 것은 조용히 무시한다 (판 도중에는 바꿀 수 없다. 시작 직전에 누른 것이 늦게 도착할 수 있어 위반으로 보지 않는다).
+   * 바꾸기는 "활동"이 아니다: 바꾸기만 보내며 대기실을 끝없이 붙잡아 두지 못하게 (대기실의 입력과 같은 규칙).
+   * 값이 바뀔 때만, 다음 틱에 사람 목록을 한 번 보낸다
+   */
+  onStarter(conn: Conn, choice: number): void {
+    if (this.started || this.closed || this.conns.get(conn.pid) !== conn) return;
+    const start = starterAt(choice);
+    if (!start || start === conn.start) return;
+    if (!setStarter(this.world, conn.pid, start)) return;
+    conn.start = start;
+    this.rosterDue = true;
+  }
+
+  /**
    * 일시정지. 혼자 하는 방에서만 월드를 멈춘다.
    * 페어 방에서는 한 사람이 다른 사람의 게임을 멈출 수 없어야 하므로 항상 거부하고, 그 사실을 알려준다.
    */
@@ -499,6 +528,7 @@ export class Room {
     this.sweep(now);
     // 마지막 자리가 비워져 방이 닫혔을 수 있다
     if (this.closed) return;
+    if (this.rosterDue) this.broadcastRoster();
     if (!this.started) {
       if (now - this.lastActivity > LOBBY_IDLE_MS) this.kick('lobby_idle');
       return;
@@ -584,6 +614,8 @@ export class Room {
         // 판이 끝날 때 가진 무기·패시브. 쓰러진 뒤에는 경험치를 얻지 못하므로 쓰러질 때의 것이다
         // (쓰러지기 전에 뜬 선택지를 쓰러진 뒤에 고르면 그 하나는 들어간다)
         itemsBy: players.map((p) => upgradesOf(p.up)),
+        // 사람별 시작 무기 (이름과 같은 순서. 리더보드가 처치 수로 정렬할 때 함께 움직인다)
+        startsBy: players.map((p) => p.start),
         // 사람별 아이템 통계용 횟수 (선택지에 나온 것·고른 것·자동 선택·보물상자). 리더보드에는 남지 않는다
         tallies: players.map((p) => p.tally),
         time: Math.floor(this.world.time),
@@ -654,7 +686,8 @@ export class Room {
     this.lastActivity = now;
     this.conns.clear();
     for (const conn of members) {
-      conn.pid = addPlayer(this.world, conn.name).id;
+      // 고른 시작 무기는 다음 판에도 그대로 (대기실에서 다시 바꿀 수 있다)
+      conn.pid = addPlayer(this.world, conn.name, false, conn.start).id;
       conn.joinedAt = 0;
       conn.stalled = false;
       conn.lastInput = now;
@@ -670,9 +703,10 @@ export class Room {
   }
 
   private broadcastRoster(): void {
+    this.rosterDue = false;
     const players: RosterPlayer[] = [...this.world.players.values()].map((p) => {
       const c = this.conns.get(p.id);
-      return { id: p.id, name: p.name, ...(c?.away ? { away: true } : c?.stalled ? { idle: true } : {}) };
+      return { id: p.id, name: p.name, start: p.start, ...(c?.away ? { away: true } : c?.stalled ? { idle: true } : {}) };
     });
     const host = this.starter;
     for (const c of this.conns.values()) this.send(c, { t: 'roster', players, host, started: this.started });

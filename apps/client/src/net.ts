@@ -3,6 +3,7 @@ import {
   PING_INTERVAL_MS,
   PROTOCOL_VERSION,
   decodeSnapshot,
+  isBaseWeapon,
   ownedUpgrades,
   type BoardId,
   type ClientMsg,
@@ -95,9 +96,16 @@ export class Net {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  /** room: 페어 모드에서 참가할 방 코드. 없으면 새 방을 만든다. */
-  connect(name: string, mode: GameMode, room?: string): Promise<void> {
-    return this.open((token) => (room ? { t: 'hello', v: PROTOCOL_VERSION, token, name, mode, room } : { t: 'hello', v: PROTOCOL_VERSION, token, name, mode }), 0);
+  /**
+   * room: 페어 모드에서 참가할 방 코드. 없으면 새 방을 만든다.
+   * starter: 시작 무기의 번호를 돌려주는 함수. hello 를 보내는 순간에 읽는다 (잠든 서버가 깨어나는 동안 바꾼 것도 들어가게)
+   */
+  connect(name: string, mode: GameMode, room: string | undefined, starter: () => number): Promise<void> {
+    return this.open((token) => {
+      const hello: ClientMsg = { t: 'hello', v: PROTOCOL_VERSION, token, name, mode, starter: starter() };
+      if (room) hello.room = room;
+      return hello;
+    }, 0);
   }
 
   /**
@@ -209,6 +217,11 @@ export class Net {
 
   sendStart(): void {
     this.send({ t: 'start' });
+  }
+
+  /** 대기실에서 시작 무기를 바꾼다 (choice: 목록의 번호). 판이 시작된 뒤에는 서버가 무시한다 */
+  sendStarter(choice: number): void {
+    this.send({ t: 'starter', choice });
   }
 
   sendPause(on: boolean): void {
@@ -368,7 +381,21 @@ function parseEntries(raw: unknown): LeaderboardEntry[] | null {
     // 개인별 아이템: 이름과 개수가 맞을 때만 쓰고, 각 목록은 아는 아이템·단계만 남긴다 (예전 기록에는 없다)
     const items = o.itemsBy;
     const itemsBy = Array.isArray(items) && items.length === names.length ? items.map((list) => ownedUpgrades(list) ?? []) : undefined;
-    out.push({ rank: o.rank, names, ...(killsBy ? { killsBy } : {}), ...(itemsBy ? { itemsBy } : {}), time: o.time, kills: o.kills, level: o.level, at: o.at });
+    // 개인별 시작 무기: 이름과 개수가 맞고 모두 진화하지 않은 무기일 때만 쓴다 (0.4.0 전의 기록에는 없다).
+    // 지금의 후보로 거르지 않는다: 나중에 후보에서 빠진 무기로 세운 기록도 아이콘이 보이게
+    const starts = o.startsBy;
+    const startsBy = Array.isArray(starts) && starts.length === names.length && starts.every(isBaseWeapon) ? starts : undefined;
+    out.push({
+      rank: o.rank,
+      names,
+      ...(killsBy ? { killsBy } : {}),
+      ...(itemsBy ? { itemsBy } : {}),
+      ...(startsBy ? { startsBy } : {}),
+      time: o.time,
+      kills: o.kills,
+      level: o.level,
+      at: o.at,
+    });
   }
   return out;
 }

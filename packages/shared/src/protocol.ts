@@ -1,5 +1,5 @@
 import { NAME_MAX_LEN, ROOM_CODE_ALPHABET, ROOM_CODE_LEN } from './constants';
-import type { OwnedUpgrade, UpgradeId } from './content';
+import { STARTER_WEAPONS, type OwnedUpgrade, type UpgradeId, type WeaponId } from './content';
 
 /* ───────────── Client → Server ─────────────
  * 클라이언트는 "의도(intent)"만 보낸다. 좌표·체력·경험치·점수 같은 상태는 절대 받지 않는다. */
@@ -7,8 +7,12 @@ import type { OwnedUpgrade, UpgradeId } from './content';
 export type GameMode = 'solo' | 'coop';
 
 export type ClientMsg =
-  /** mode 가 coop 일 때: room 이 없으면 새 방을 만들고, 있으면 그 코드의 방에 참가한다. */
-  | { t: 'hello'; v: number; token: string; name: string; mode: GameMode; room?: string }
+  /**
+   * mode 가 coop 일 때: room 이 없으면 새 방을 만들고, 있으면 그 코드의 방에 참가한다.
+   * starter: 시작 무기의 번호 (STARTER_WEAPONS 의 순서). 없으면 0번(기본 무기). 무기 이름이나 단계를 보내는 것이 아니다:
+   * 서버가 허용 목록에서 번호로 찾고, 단계는 늘 1이다
+   */
+  | { t: 'hello'; v: number; token: string; name: string; mode: GameMode; room?: string; starter?: number }
   /**
    * 끊긴 연결을 이어받는다 (hello 대신 보내는 첫 메시지). key 는 서버가 welcome 에 실어 준 값 그대로다.
    * 서버가 그 자리를 아직 지키고 있으면 같은 캐릭터로 돌아간다. 상태를 실어 보내는 것이 아니다: 자리를 가리킬 뿐이다.
@@ -24,6 +28,11 @@ export type ClientMsg =
   | { t: 'reroll'; level: number }
   /** 페어 방의 호스트가 대기실에서 게임을 시작한다. */
   | { t: 'start' }
+  /**
+   * 대기실에서 내 시작 무기를 바꾼다 (choice: STARTER_WEAPONS 의 번호). 판이 시작된 뒤에는 서버가 무시한다.
+   * 게임 시작 메시지(start)와 다른 것이다
+   */
+  | { t: 'starter'; choice: number }
   /** 일시정지 요청. 서버는 솔로 방에서만 받아들인다 (페어에서는 다른 사람의 게임을 멈출 수 없다). */
   | { t: 'pause'; on: boolean }
   /** 방을 나간다: 자리를 바로 비운다. 이 메시지 없이 연결만 끊기면 서버는 자리를 잠시 지켜 둔다. */
@@ -64,6 +73,8 @@ export interface LeaderboardEntry {
   killsBy?: number[];
   /** names 와 같은 순서의 개인별 아이템(무기·패시브와 그 단계). 판이 끝났을 때(쓰러졌으면 쓰러질 때) 가지고 있던 것. 이 값을 남기기 전의 기록에는 없다 */
   itemsBy?: LeaderboardItem[][];
+  /** names 와 같은 순서의 개인별 시작 무기 (진화하지 않은 무기). 이 값을 남기기 전(0.4.0 전)의 기록에는 없다 */
+  startsBy?: WeaponId[];
   /** 생존 시간(초) */
   time: number;
   kills: number;
@@ -106,6 +117,11 @@ export interface UpgradeStat {
   pickRate: number;
   /** 보물상자로 오른 횟수 (진화한 무기는 진화한 횟수: 보물상자로만 얻는다) */
   chest: number;
+  /**
+   * 시작 무기로 고른 판 수 (offered·picked 에는 들어가지 않는다). 시작 무기를 고르기 전(0.4.0 전)의 판은 모두 console.log() 로
+   * 시작했지만 여기에는 세지 않았다 (0)
+   */
+  started: number;
   /** 판이 끝날 때 가지고 있던 판의 비율 (0~1) */
   finalOwnedRate: number;
   /** 가지고 있던 판에서의 평균 단계 (없으면 0) */
@@ -234,6 +250,8 @@ export interface RosterPlayer {
   away?: boolean;
   /** 연결은 있지만 한동안 입력이 없다 (화면을 떠났거나 통신이 막혔다) */
   idle?: boolean;
+  /** 이 사람의 시작 무기 (대기실에서 각자 고른다) */
+  start?: WeaponId;
 }
 
 export type ServerMsg =
@@ -334,6 +352,11 @@ export function parseClientMsg(raw: string): ClientMsg | null {
         if (o.mode !== 'coop' || typeof o.room !== 'string' || !ROOM_CODE_RE.test(o.room)) return null;
         hello.room = o.room;
       }
+      if (o.starter !== undefined) {
+        // 시작 무기는 허용 목록의 번호만 (무기 이름·단계·진화한 무기는 보낼 방법이 없다). 범위 밖이면 위반
+        if (!isInt(o.starter, 0, STARTER_WEAPONS.length - 1)) return null;
+        hello.starter = o.starter;
+      }
       return hello;
     }
     case 'resume': {
@@ -360,6 +383,10 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     }
     case 'start':
       return { t: 'start' };
+    case 'starter': {
+      if (!isInt(o.choice, 0, STARTER_WEAPONS.length - 1)) return null;
+      return { t: 'starter', choice: o.choice };
+    }
     case 'pause': {
       if (typeof o.on !== 'boolean') return null;
       return { t: 'pause', on: o.on };
