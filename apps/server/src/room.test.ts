@@ -1146,8 +1146,13 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   room.onReroll(a.conn, me.level - 1);
   assert.equal(a.ws.msgs.length, sent, '더는 답하지 않는다');
   room.onPause(a.conn, false);
-  assert.equal(room.onPick(a.conn, 0), true);
-  assert.equal(me.up[third.offers[0]!.id], third.offers[0]!.level, '고른 것은 마지막 새 선택지의 첫 카드');
+  // 선택지는 서버의 난수로 정해지므로 아래를 바꾸는 카드는 고르지 않는다 (첫 카드를 고르면 가끔 걸려 실패했다):
+  // - 배포 기도: 고를 때마다 새로고침이 하나 생긴다 (그 규칙은 reroll.test.ts 에서 본다)
+  // - git clean: 고르자마자 터져 다음 레벨업을 일으킬 경험치를 지울 수 있다
+  const pick = third.offers.findIndex((o) => o.id !== 'deploy_prayer' && o.id !== 'git_clean');
+  assert.ok(pick >= 0);
+  assert.equal(room.onPick(a.conn, pick), true);
+  assert.equal(me.up[third.offers[pick]!.id], third.offers[pick]!.level, '고른 것은 마지막 새 선택지의 카드');
 
   // 새 선택지가 뜨면 다시 한 번 답한다 (한 번만 답하는 것은 선택지마다다)
   me.xp = me.xpNext;
@@ -1198,18 +1203,22 @@ test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레�
   }
   const second = last(a.ws, 'levelup')!;
   assert.equal(second.level, first.level + 1, '서버가 대신 골랐고 다음 선택지가 떴다');
+  // 서버가 대신 고른 것이 배포 기도면 새로고침이 하나 늘어 있다 (단계마다 +1). 그 밖에는 처음 그대로다
+  const had = me.rerolls;
+  assert.equal(had, OFFER_REROLLS + (me.up.deploy_prayer ?? 0));
+  assert.equal(second.rerolls, had);
   // 화면은 아직 첫 선택지를 보고 새로고침을 눌렀다
   const before = a.ws.msgs.length;
   room.onReroll(a.conn, first.level);
   advance(50);
   assert.equal(a.ws.msgs.slice(before).filter((m) => m.t === 'levelup').length, 1, '지금 선택지를 한 번 다시 보낸다');
-  assert.equal(me.rerolls, OFFER_REROLLS, '횟수가 줄지 않는다');
+  assert.equal(me.rerolls, had, '횟수가 줄지 않는다');
   assert.deepEqual(me.offers, second.offers.map((o) => o.id), '다음 선택지는 그대로');
   assert.deepEqual(last(a.ws, 'levelup')!.offers, second.offers);
   // 지금 선택지의 레벨로 보내면 받는다
   room.onReroll(a.conn, second.level);
   advance(50);
-  assert.equal(me.rerolls, OFFER_REROLLS - 1);
+  assert.equal(me.rerolls, had - 1);
 });
 
 test('자석은 방의 모두에게 누가 주웠는지, 체력 채우기는 채워진 사람에게만 알린다. 끌어당기기와 체력은 서버가 한다', () => {
