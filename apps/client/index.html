@@ -42,9 +42,11 @@
             <span>git config user.name</span>
             <input id="name-input" type="text" maxlength="12" autocomplete="off" spellcheck="false" placeholder="닉네임" />
           </label>
-          <!-- 시작 무기: 타일(네이티브 radio)은 main.ts 가 목록(STARTER_WEAPONS)으로 만든다. 고른 무기의 이름과 짧은 설명이 아래 한 줄에 -->
+          <!-- 시작 무기: 타일(네이티브 radio)은 main.ts 가 목록(STARTER_WEAPONS)으로 만든다. 고른 무기의 이름과 짧은 설명이 아래 한 줄에 (낮은 가로 화면은 위).
+               세로가 모자란 화면은 legend 대신 타일 왼쪽의 짧은 이름표를 보인다 (style.css) -->
           <fieldset id="starter-title" class="starter">
             <legend class="starter__legend">시작 무기</legend>
+            <span class="starter__label" aria-hidden="true">시작 무기</span>
             <div class="starter__tiles"></div>
             <p class="starter__desc" aria-live="polite"></p>
           </fieldset>

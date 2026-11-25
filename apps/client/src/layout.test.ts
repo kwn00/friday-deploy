@@ -52,6 +52,9 @@ const px = (v: string | undefined, what: string): number => {
 };
 
 const LOW_LANDSCAPE = '@media (orientation: landscape) and (max-height: 480px)';
+/** 닉네임과 시작 무기를 나란히 두는 가로 화면: 가로 폰과 높이 720 이하의 태블릿·노트북 창 (1024×552, 1280×600, 1366×657 등) */
+const SIDE_BY_SIDE = '@media (orientation: landscape) and (max-height: 720px)';
+const SHORT_PORTRAIT = '@media (orientation: portrait) and (max-height: 540px)';
 
 test('화면: 낮은 가로 화면 타이틀에서 구석 버튼(버전·소리)의 누르는 높이가 방 코드 칸·참가 버튼에 닿지 않는다', () => {
   const top = rules();
@@ -143,8 +146,8 @@ test('화면: 시작 무기 타일은 어느 배치에서도 손가락 크기(44
   assert.notEqual(radio.display, 'none');
 });
 
-test('화면: 낮은 가로 화면에서는 닉네임과 시작 무기, 초대 링크와 내 시작 무기를 나란히 둔다 (세로 공간을 늘리지 않게)', () => {
-  const low = rules(LOW_LANDSCAPE);
+test('화면: 낮은 가로 화면(높이 720 이하)에서는 닉네임과 시작 무기, 초대 링크와 내 시작 무기를 나란히 둔다 (세로 공간을 늘리지 않게)', () => {
+  const low = rules(SIDE_BY_SIDE);
   assert.equal(low.get('.setup')?.display, 'grid');
   assert.equal(low.get('.setup')?.['grid-template-columns'], 'minmax(0, 2fr) minmax(0, 3fr)');
   assert.equal(low.get('.setup .field')?.['margin-bottom'], '0');
@@ -152,4 +155,33 @@ test('화면: 낮은 가로 화면에서는 닉네임과 시작 무기, 초대 �
   assert.equal(low.get('.lobby__top')?.display, 'grid');
   assert.equal(low.get('.lobby__top')?.['grid-template-columns'], 'minmax(0, 1fr) minmax(0, 1fr)');
   assert.equal(low.get('.lobby__top .buttons')?.['grid-template-columns'], '1fr', '초대 버튼은 제 칸을 다 쓴다');
+  // 나란히 둔 줄의 높이가 닉네임 칸과 같다: 설명은 타일 위(닉네임 이름표와 같은 줄), "시작 무기" 이름표는 타일 왼쪽, 타일 높이 = 입력칸
+  const desc = low.get('.setup .starter__desc')!;
+  assert.equal(desc.order, '-1', '설명은 타일 위');
+  // 설명은 늘 한 줄: 무기에 따라 두 줄로 꺾여 아래 버튼이 오르내리지 않게
+  assert.deepEqual([desc['white-space'], desc.overflow, desc['text-overflow']], ['nowrap', 'hidden', 'ellipsis']);
+  assert.equal(low.get('.setup .starter__tile')?.['min-height'], 'calc(40px + var(--px) * 2)', '입력칸(글자 24 + 여백 16 + 테두리)과 같은 높이');
+  assert.ok(px(rules().get(':root')?.['--px'], '--px') >= 2, '타일이 44px 이상');
+  const shared = rules('@media (orientation: portrait) and (max-height: 600px), (orientation: landscape) and (max-height: 720px)');
+  assert.equal(shared.get('.panel--title .starter')?.display, 'grid');
+  assert.equal(shared.get('.panel--title .starter__label')?.display, 'block');
+  assert.equal(shared.get('.panel--title .starter__legend')?.position, 'absolute', 'legend 는 화면 낭독기만 읽는다');
+  // 폭 560 아래(480×320 등)는 시작 무기 쪽을 더 넓혀 가장 긴 설명도 한 줄에 다 보이게
+  assert.equal(rules('@media (orientation: landscape) and (max-width: 559px)').get('.setup')?.['grid-template-columns'], 'minmax(0, 1fr) minmax(0, 2fr)');
+  // 폭 768 아래의 높이 481~720 창은 패널을 가로 폰처럼 넓힌다 (420 이면 설명이 들어가지 않는다)
+  const narrow = rules('@media (orientation: landscape) and (max-height: 720px) and (max-width: 767px)');
+  assert.equal(narrow.get('.panel--title')?.['max-width'], '620px');
+  assert.equal(narrow.get('.panel--lobby')?.['max-width'], '620px');
+});
+
+test('화면: 짧은 세로 화면(높이 540 이하)에서 빈 상태줄이 접혀도 구석 버튼(버전·소리)의 누르는 높이가 안내 줄에 닿지 않는다', () => {
+  const top = rules();
+  const short = rules(SHORT_PORTRAIT);
+  const corner = px(top.get('.version')?.['min-height'], '.version min-height');
+  assert.equal(short.get('.panel--title .status')?.['min-height'], '0', '빈 상태줄은 높이를 차지하지 않는다');
+  const below = px(top.get('.status')?.margin?.split(' ')[0], '.status margin-top') + px(short.get('.panel--title')?.['padding-bottom'], '.panel--title padding-bottom');
+  assert.ok(below >= corner, `안내 줄 아래 ${below}px < 구석 버튼 ${corner}px`);
+  // 큰 버튼은 줄여도 손가락 크기(44px) 이상
+  const portrait = rules('@media (orientation: portrait) and (max-height: 600px)');
+  for (const sel of ['.panel--title .btn', '.panel--title .join input', '.panel--lobby .btn']) assert.ok(px(portrait.get(sel)?.['min-height'], sel) >= 44, sel);
 });
