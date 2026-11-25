@@ -295,7 +295,7 @@ test('sim: 러버덕은 정해진 시간 돌고 쉬기를 되풀이하고, 화�
     counts.push(buildSnapshot(w, p.id)!.p[0]![6]);
   }
   const on = counts.filter((n) => n === 2).length / counts.length;
-  // 3.5초 돌고 3초 쉰다 → 약 54%
+  // 3.5초 돌고 2.5초 쉰다 → 약 58% (0.4.0 에 쿨다운 3 → 2.5)
   assert.ok(on > 0.45 && on < 0.62, `도는 시간의 비율 ${on.toFixed(2)}`);
   assert.ok(counts.includes(0), '쉬는 동안은 0');
   // 도는 중인 순간을 골라 서버 판정 위치와 화면 위치를 비교한다

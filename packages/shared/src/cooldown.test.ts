@@ -130,9 +130,10 @@ test('러버덕: 다시 켜지는 주기((쿨다운 + 지속) × 쿨다운 배�
     });
     return meanGap(on);
   };
-  // 키보드 0단계 6초 (예전에는 소수 오차로 121틱 = 6.05초), 1단계 5.52초 (예전 5.55초)
-  assert.ok(Math.abs(period(0) - 6) < 0.002, `0단계 ${period(0)}`);
-  assert.ok(Math.abs(period(1) - 5.52) < 0.002, `1단계 ${period(1)}`);
+  // 쿨다운 2.5 + 지속 3: 키보드 0단계 5.5초, 1단계 5.06초 = 101.2틱 (올림하면 5.1초).
+  // 쿨다운 3 이던 0.3.x 에는 6초였고, 그 전에는 소수 오차로 121틱 = 6.05초였다
+  assert.ok(Math.abs(period(0) - 5.5) < 0.002, `0단계 ${period(0)}`);
+  assert.ok(Math.abs(period(1) - 5.06) < 0.002, `1단계 ${period(1)}`);
 });
 
 test('커밋 히스토리: 움직이는 동안 남기는 간격(0.3초 ÷ 이동 속도 배율)이 틱 단위로 올림되지 않는다', () => {
@@ -148,10 +149,10 @@ test('커밋 히스토리: 움직이는 동안 남기는 간격(0.3초 ÷ 이동
 });
 
 test('2단계 인증은 넘기지 않는다: 다시 채운 뒤의 쿨다운은 방패를 다 쓸 때까지 멈춰 있다가 온전하게 시작한다', () => {
-  // 9.5 × 0.92 = 8.74초 = 174.8틱: 넘기면 채운 뒤 쿨다운이 8.73초가 된다
-  const { w, p } = setup(207, { two_factor: 2, mech_keyboard: 1 });
+  // 8 × 0.92 = 7.36초 = 147.2틱: 넘기면 채운 뒤 쿨다운이 7.35초가 된다
+  const { w, p } = setup(207, { two_factor: 1, mech_keyboard: 1 });
   const st = effectiveStats(p, 'two_factor');
-  assert.ok(Math.abs(st.cd - 8.74) < 1e-9);
+  assert.ok(Math.abs(st.cd - 7.36) < 1e-9);
   tick(w, []);
   assert.equal(p.charges, 1, '얻자마자 채운다');
   // 방패를 다 쓴 것으로 치고 다시 찰 때까지
@@ -161,7 +162,7 @@ test('2단계 인증은 넘기지 않는다: 다시 채운 뒤의 쿨다운은 �
     tick(w, []);
     n++;
   }
-  assert.equal(n, 175, '방패를 다 쓰고 175틱 뒤에 다시 찬다');
+  assert.equal(n, 148, '방패를 다 쓰고 148틱 뒤에 다시 찬다');
   assert.equal(p.cd.two_factor, st.cd, '다시 채운 뒤 쿨다운은 온전한 쿨다운');
   for (let i = 0; i < 100; i++) tick(w, []);
   assert.equal(p.cd.two_factor, st.cd, '방패가 남아 있는 동안은 멈춰 있다');

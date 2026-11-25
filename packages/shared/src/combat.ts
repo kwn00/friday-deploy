@@ -4,10 +4,10 @@
  *
  * 0.1 CPU 서버를 위해: 적은 틱마다 공간 격자에 넣고, 투사체·영역·오라는 주변 칸의 적만 본다.
  */
-import { ENEMY_VIEW_RADIUS, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED, SPRINT_BONUS_PER_LEVEL } from './constants';
+import { ENEMY_VIEW_RADIUS, FREEZE_BEAM_WIDTH, GEM_PULL_SPEED, HEAL_DROP_CHANCE, HEAL_DROP_COOLDOWN, MAX_CHESTS, MAX_FLASHES, MAX_GEMS, MAX_HEALS, MAX_SHOTS, MAX_ZONES, PLAYER_BASE_SPEED, SPRINT_BONUS_PER_LEVEL } from './constants';
 import { ENEMIES, ENEMY_IDS, UPGRADES, WEAPON_IDS, weaponStats, type ShotKind, type WeaponDef, type WeaponId, type WeaponStats, type ZoneKind } from './content';
 import type { Enemy, Gem, Player, Shot, World, Zone } from './sim';
-import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf } from './stats';
+import { areaMultOf, cooldownMultOf, durationMultOf, effectiveStats, luckOf, lv, moveSpeedOf, speedMultOf } from './stats';
 
 /** 적 정의를 지역 상수로 잡아 둔다 (모듈 경계 너머의 이름은 틱마다 수천 번 읽으면 그 자체로 무겁다) */
 const EN = ENEMIES;
@@ -251,7 +251,8 @@ function addZone(world: World, z: Omit<Zone, 'id' | 'born' | 'w'> & { w?: Weapon
   // 피해를 주는 영역과 보이기만 하는 영역은 따로 센다 (보이기만 하는 것이 웅덩이·발자국의 자리를 빼앗지 않게)
   const hurts = z.dmg > 0;
   let n = 0;
-  for (const other of world.zones) if (other.dmg > 0 === hurts) n++;
+  // 이번 틱에 끝난 것(남은 시간 0: 날려 보낸 커밋 등)은 세지 않는다 (틱 끝에 빠진다)
+  for (const other of world.zones) if (other.ttl > 0 && other.dmg > 0 === hurts) n++;
   if (n >= (hurts ? MAX_ZONES : MAX_FLASHES)) return null;
   const zone: Zone = { id: world.nextId++, born: world.tick, w: z.w ?? 'console_log', ...z };
   world.zones.push(zone);
@@ -423,10 +424,14 @@ export function duckState(p: Player): DuckState {
   };
 }
 
-/** i 번째 오리(총 n 마리)의 주인 기준 위치. 서버 판정과 클라이언트 그리기가 함께 쓴다 */
+/**
+ * i 번째 오리(총 n 마리)의 주인 기준 위치. 서버 판정과 클라이언트 그리기가 함께 쓴다.
+ * 둘 이상이면 하나 걸러(홀수 번째) 궤도 반경의 절반에서 돈다: 궤도 안쪽, 몸에 붙은 적도 맞히게 (0.4.0)
+ */
 export function duckOffset(time: number, i: number, n: number, radius: number, speed: number): [number, number] {
   const a = time * speed + (i * Math.PI * 2) / n;
-  return [Math.cos(a) * radius, Math.sin(a) * radius];
+  const r = n >= 2 && i % 2 === 1 ? radius / 2 : radius;
+  return [Math.cos(a) * r, Math.sin(a) * r];
 }
 
 /** 방화벽 반경 (px, 정수. 없으면 0) */
@@ -450,12 +455,29 @@ export function petPosition(world: World, p: Player, w: 'canary' | 'night_owl'):
 
 /** 무기가 겨누는 거리 */
 const AIM = 200;
+/**
+ * CDN 으로 늘어난 겨누는 거리의 상한: 화면의 가장 먼 모서리(296px, client 의 view.ts). 화면에 보이지 않는 적을 겨누지 않게
+ * (일반 적은 ENEMY_VIEW_RADIUS 304 안의 것만 화면에 보낸다)
+ */
+const AIM_MAX = 296;
+/** 스스로 겨누는 투사체 무기(console.log·디버거·정규표현식·AI 에이전트·멀티스레드)의 겨누는 거리: CDN(속도 배율)만큼 멀리서 겨눈다 */
+const aimOf = (p: Player, base = AIM): number => Math.min(AIM_MAX, base * speedMultOf(p));
+/** 러버덕 한 마리의 판정 반경 (듀얼 모니터로 커진다) */
+const DUCK_HIT_R = 10;
 
 /** 이만큼 이상 기울여야 "달리는 중"으로 친다 (거의 0 인 입력으로 제자리에서 달리는 척하지 못하게) */
 const RUNNING = 0.3;
 
 /** 커밋 히스토리가 움직이는 동안 커밋을 남기는 간격(초) (뱀서 Shadow Pinion 의 interval) */
 const TRAIL_INTERVAL = 0.3;
+/**
+ * 한 사람이 땅에 남겨 둘 수 있는 커밋(발자국) 수. 넘으면 가장 오래된 것부터 지운다 (화면에도 지우라고 알린다).
+ * 0.4.0 에 쿨다운 중에도 남기게 하자, 함께 하기에서 넷이 모두 커밋 히스토리에 기계식 키보드·git fork·keep-alive 를 모으면
+ * 발자국만으로 방 전체의 영역 상한(MAX_ZONES 200)에 닿아 다른 무기(핫픽스·금요일 배포)의 영역이 생기지 않았다 (측정: 1분 중 10~15%의 틱).
+ * 넷이 모두 30 개씩이어도 120 이라 다른 무기의 자리(금요일 배포 넷이 70 안팎)가 남는다.
+ * 8단계 혼자는 12 개, git fork·keep-alive 를 모두 가져도 35 개 안팎이라 기계식 키보드·아메리카노까지 모은 빌드만 닿는다
+ */
+const TRAIL_MAX = 30;
 
 const rehitOf = (w: WeaponId): number => (UPGRADES[w] as WeaponDef).rehit ?? 0.5;
 
@@ -495,11 +517,16 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
       runMonitoring(world, grid, p, st, dt);
       continue;
     }
-    // 2단계 인증: 방패가 남아 있는 동안은 쿨다운이 돌지 않는다 (다 쓰면 다시 채우기 시작)
+    // 2단계 인증: 이번 틱에 방패가 한 대를 막았으면 내 둘레(범위 48, 듀얼 모니터는 받지 않는다)의 버그를 때리고 밀쳐 낸다 (0.4.0).
+    // 방패가 남아 있는 동안은 쿨다운이 돌지 않는다 (다 쓰면 다시 채우기 시작)
+    if (w === 'two_factor' && p.parry) {
+      p.parry = false;
+      blast(world, grid, p, w, p.x, p.y, st.area, st.dmg);
+    }
     if (w === 'two_factor' && p.charges > 0) continue;
-    // 커밋 히스토리: 멈추는 순간, 남아 있는 커밋을 바라보는 쪽으로 한꺼번에 날리고 쿨다운을 건다
-    if (w === 'commit_history' && stopped) {
-      launchTrail(world, p, st);
+    // 커밋 히스토리: 쿨다운은 날리기만 막는다. 발자국은 쿨다운 중에도 남긴다 (0.4.0. 예전에는 날린 뒤 6초 동안 발자국이 끊겨 멈출수록 약했다)
+    if (w === 'commit_history') {
+      runTrail(world, grid, p, st, dt, moving, stopped);
       continue;
     }
 
@@ -507,22 +534,6 @@ export function runWeapons(world: World, grid: Grid, p: Player, dt: number): voi
     const cd = prev - dt;
     if (cd > EPS) {
       p.cd[w] = cd;
-      continue;
-    }
-    // 커밋 히스토리: 쿨다운이 끝난 뒤 움직이는 동안, 0.3초 × 쿨다운 배율 ÷ 이동 속도 배율마다 남긴다
-    // (뱀서 Shadow Pinion: 움직이는 동안 생기고, 이동 속도가 빠를수록 자주 생긴다. 간격 0.3초는 위키의 interval).
-    // 멈춰 있는 동안은 간격이 흐르지 않는다. 간격도 쿨다운처럼 넘친 몫을 넘긴다
-    if (w === 'commit_history') {
-      p.cd[w] = 0;
-      if (!moving) continue;
-      const before = p.on[w] ?? 0;
-      const spawn = before - dt;
-      if (spawn > EPS) {
-        p.on[w] = spawn;
-        continue;
-      }
-      p.on[w] = (TRAIL_INTERVAL * cooldownMultOf(p)) / (moveSpeedOf(p) / PLAYER_BASE_SPEED) + spill(before, dt);
-      useWeapon(world, grid, p, w, st);
       continue;
     }
     // 이번 틱에 쿨다운이 끝나 쐈으면 넘친 몫을 다음 쿨다운에서 뺀다 (평균 간격이 st.cd). 쏠 것이 없으면 0 에 머물러 기다리고,
@@ -546,8 +557,8 @@ function runDucks(world: World, grid: Grid, p: Player, st: WeaponStats, dt: numb
     p.duckOn = Math.max(p.duckOn, levelDur * durationMultOf(p));
   } else p.cd.rubber_duck = cd;
   const ds = duckState(p);
-  // 오리 크기도 듀얼 모니터로 커진다
-  const hitR = 6 * areaMultOf(p);
+  // 오리 크기도 듀얼 모니터로 커진다 (0.4.0: 6 → 10)
+  const hitR = DUCK_HIT_R * areaMultOf(p);
   for (let i = 0; i < ds.n; i++) {
     const [ox, oy] = duckOffset(world.time, i, ds.n, ds.radius, ds.speed);
     grid.near(p.x + ox, p.y + oy, hitR, (e) => {
@@ -614,6 +625,32 @@ function dropBombs(world: World, grid: Grid, p: Player, w: WeaponId, [bx, by]: [
   }
 }
 
+/**
+ * 커밋 히스토리 한 틱.
+ * - 멈추는 순간, 쿨다운이 끝나 있으면 남아 있는 커밋을 바라보는 쪽으로 한꺼번에 날리고 쿨다운을 건다 (쿨다운 중이면 날리지 않고 발자국은 남는다)
+ * - 움직이는 동안 0.3초 × 쿨다운 배율 ÷ 이동 속도 배율마다 발자국을 남긴다. 쿨다운 중에도 남긴다
+ *   (뱀서 Shadow Pinion: 움직이는 동안 생기고, 이동 속도가 빠를수록 자주 생긴다. 간격 0.3초는 위키의 interval).
+ *   멈춰 있는 동안은 간격이 흐르지 않는다. 간격도 쿨다운처럼 넘친 몫을 넘긴다
+ */
+function runTrail(world: World, grid: Grid, p: Player, st: WeaponStats, dt: number, moving: boolean, stopped: boolean): void {
+  const w = 'commit_history';
+  const cd = (p.cd[w] ?? 0) - dt;
+  p.cd[w] = cd > EPS ? cd : 0;
+  if (stopped && p.cd[w] === 0) {
+    launchTrail(world, p, st);
+    return;
+  }
+  if (!moving) return;
+  const before = p.on[w] ?? 0;
+  const spawn = before - dt;
+  if (spawn > EPS) {
+    p.on[w] = spawn;
+    return;
+  }
+  p.on[w] = (TRAIL_INTERVAL * cooldownMultOf(p)) / (moveSpeedOf(p) / PLAYER_BASE_SPEED) + spill(before, dt);
+  useWeapon(world, grid, p, w, st);
+}
+
 /** 커밋 히스토리: 남아 있는 내 커밋을 바라보는 쪽으로 날린다. 오래 남아 있던 것일수록 세다 (피해 × (1 + 남아 있던 초)) */
 function launchTrail(world: World, p: Player, st: WeaponStats): void {
   const ang = Math.atan2(p.fy, p.fx);
@@ -647,7 +684,7 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     case 'debugger': {
       // 뱀서 Magic Wand: 가장 가까운 적에게 차례로 쏜다. 앞의 탄이 잡을 적을 빼고 다음으로 가까운 적을 겨눈다
       // (위키의 0.1초 간격은 없이 한 번에 쏘되, 겨누는 순서로 같은 효과를 낸다). 디버거는 중단점을 쏜다 (맞은 버그가 멈춘다: hit)
-      const near = grid.within(p.x, p.y, AIM);
+      const near = grid.within(p.x, p.y, aimOf(p));
       if (near.length === 0) return false;
       near.sort((a, b) => (a.x - p.x) ** 2 + (a.y - p.y) ** 2 - ((b.x - p.x) ** 2 + (b.y - p.y) ** 2));
       const kind = w === 'debugger' ? 'breakpoint' : 'log';
@@ -658,21 +695,25 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'regex': {
-      // 바라보는 방향으로 나란히
-      const ang = Math.atan2(p.fy, p.fx);
+      // 가장 가까운 버그 쪽으로 나란히 (0.4.0. 겨눌 것이 없으면 바라보는 쪽으로: 예전처럼 쿨다운마다 쏜다)
+      const t = grid.nearest(p.x, p.y, aimOf(p));
+      const ang = t ? Math.atan2(t.y - p.y, t.x - p.x) : Math.atan2(p.fy, p.fx);
+      const ux = Math.cos(ang);
+      const uy = Math.sin(ang);
       for (let i = 0; i < n; i++) {
         const off = (i - (n - 1) / 2) * 6;
-        fire(world, p, { kind: 'regex', w, x: p.x - p.fy * off, y: p.y + p.fx * off, ang, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
+        fire(world, p, { kind: 'regex', w, x: p.x - uy * off, y: p.y + ux * off, ang, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
       }
       return true;
     }
     case 'ai_agent': {
       // 무작위 적 하나에게 여러 발을 부채꼴로 (뱀서 Fire Wand)
-      const t = randomTarget(world, grid, p, AIM * 1.1);
+      const t = randomTarget(world, grid, p, aimOf(p, AIM * 1.1));
       if (!t) return false;
       const base = Math.atan2(t.y - p.y, t.x - p.x);
+      // 부채꼴 0.05rad (0.4.0: 0.12 는 100px 너머에서 옆 두 발이 작은 적을 빗나갔다)
       for (let i = 0; i < n; i++) {
-        fire(world, p, { kind: 'ai', w, x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.12, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
+        fire(world, p, { kind: 'ai', w, x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.05, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: st.area });
       }
       return true;
     }
@@ -827,12 +868,23 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'infinite_scroll': {
-      // 세로 띠가 지속 시간 동안 남아, 같은 적을 1초에 한 번 다치게 한다 (뱀서 Song of Mana)
+      // 세로 띠가 지속 시간 동안 남아, 같은 적을 0.5초에 한 번 다치게 한다 (뱀서 Song of Mana 는 1초. 0.4.0: 지속 1초인 띠가
+      // 두 번째로 맞히는 틱에 사라져, 지속이 느는 3·7단계에서 오히려 약해졌다)
       const height = 240;
       addZone(world, { kind: 'band', w, owner: p.id, x: p.x, y: p.y, r: st.area, aux: Math.min(255, Math.round(height / 4)), ttl: st.dur, dmg: st.dmg, every: rehitOf(w) });
       return true;
     }
     case 'commit_history': {
+      // 한 사람의 발자국이 TRAIL_MAX 를 넘지 않게 가장 오래된 것부터 지운다 (영역은 생긴 순서대로 쌓여 있다)
+      let mine = 0;
+      for (const z of world.zones) if (z.owner === p.id && z.kind === 'trail' && z.ttl > 0) mine++;
+      for (let k = 0; k < world.zones.length && mine + n > TRAIL_MAX; k++) {
+        const z = world.zones[k]!;
+        if (z.owner !== p.id || z.kind !== 'trail' || z.ttl <= 0) continue;
+        z.ttl = 0;
+        world.gone.push({ id: z.id, tick: world.tick });
+        mine--;
+      }
       // 개수만큼 조금씩 비켜서 남긴다
       for (let i = 0; i < n; i++) {
         const off = (i - (n - 1) / 2) * 8;
@@ -849,10 +901,12 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       const a = -Math.PI / 2 + (p.freezeDir * Math.PI) / 6;
       const ax = Math.cos(a);
       const ay = Math.sin(a);
-      strip(grid, p.x, p.y, ax, ay, st.area, 10, (e) => {
+      // 0.4.0: 폭 10 → 16, 맞은 버그는 조금 다친다 (얼지 않는 적도 다친다)
+      strip(grid, p.x, p.y, ax, ay, st.area, FREEZE_BEAM_WIDTH, (e) => {
         // 광선이 나가는 쪽(앞)에 있는 적만: 바로 옆에 붙은 적이 방향과 상관없이 늘 얼지 않게
         if ((e.x - p.x) * ax + (e.y - p.y) * ay < 0) return;
-        if (e.resFreeze <= 1) e.frozen = Math.max(e.frozen, st.dur);
+        hit(world, e, st.dmg, p, w);
+        if (e.hp > 0 && e.resFreeze <= 1) e.frozen = Math.max(e.frozen, st.dur);
       });
       flash(world, p, 'beam', p.x, p.y, st.area, angleByte(a), 0.25);
       return true;
@@ -863,11 +917,12 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
       return true;
     }
     case 'sprint': {
-      // 바라보는 쪽 옆으로 여러 번 벤다. 쉬지 않고 걸은 거리만큼 고정 피해가 더해진다 (Stack Overflow 는 붙지 않는다).
+      // 옆으로 여러 번 벤다: 짝수 번째는 바라보는 쪽, 홀수 번째는 반대쪽 (0.4.0. 예전에는 바라보는 쪽만).
+      // 쉬지 않고 걸은 거리만큼 고정 피해가 더해진다 (Stack Overflow 는 붙지 않는다).
       // 뱀서는 걸은 거리 ÷ 200,000 (단위 없음). 우리는 기본 속도로 1초 걸을 때 +1, 상한은 단계 × SPRINT_BONUS_PER_LEVEL
       const bonus = Math.min(SPRINT_BONUS_PER_LEVEL * lv(p, w), (p.moveTime * moveSpeedOf(p)) / PLAYER_BASE_SPEED);
-      const side = p.face;
       for (let i = 0; i < n; i++) {
+        const side = i % 2 === 0 ? p.face : -p.face;
         const y = p.y + (i % 2 === 0 ? -1 : 1) * Math.ceil(i / 2) * 8;
         strip(grid, p.x, y, side, 0, st.area, 10, (e) => hit(world, e, st.dmg + bonus, p, w));
         flash(world, p, 'slash', p.x + (side * st.area) / 2, y, st.area, angleByte(side > 0 ? 0 : Math.PI), st.dur);
@@ -876,11 +931,12 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     }
     case 'logic_bomb': {
       // 멀티스레드 (뱀서 Bracelet): 무작위 적 하나에게 여러 발을 한꺼번에. 지속 시간만큼만 날아간다
-      const t = randomTarget(world, grid, p, AIM);
+      const t = randomTarget(world, grid, p, aimOf(p));
       if (!t) return false;
       const base = Math.atan2(t.y - p.y, t.x - p.x);
+      // 부채꼴 0.06rad (0.4.0: 0.15 는 77px 너머에서 옆 스레드가 빗나갔다)
       for (let i = 0; i < n; i++) {
-        fire(world, p, { kind: 'bomb', w, x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.15, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: Math.max(3, st.area / 4) });
+        fire(world, p, { kind: 'bomb', w, x: p.x, y: p.y, ang: base + (i - (n - 1) / 2) * 0.06, speed: st.speed, ttl: st.dur, dmg: st.dmg, pierce: st.pierce, r: Math.max(3, st.area / 4) });
       }
       return true;
     }

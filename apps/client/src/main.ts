@@ -6,7 +6,7 @@ import {
   LEADERBOARD_MIN_SECONDS,
   LEADERBOARD_SIZE,
   MAX_PAUSE_SECONDS,
-  OFFER_REROLLS,
+  MAX_REROLLS,
   PASSIVE_IDS,
   PASSIVE_SLOTS,
   RELEASES,
@@ -166,7 +166,7 @@ let rerollWait: false | 'pointer' | 'key' = false;
 let offerLevel = 0;
 /**
  * 선택지가 새로 뜬 뒤 잠깐은 새로고침을 받지 않는다: 두 번 누르기(두 번 탭)의 두 번째가 방금 온 새 카드에 쓰여
- * 한 판에 두 번뿐인 새로고침을 한꺼번에 써 버리지 않게. 레벨업 창이 뜨는 순간 화면을 누르던 손가락도 막는다
+ * 한 판에 몇 번뿐인 새로고침을 한꺼번에 써 버리지 않게. 레벨업 창이 뜨는 순간 화면을 누르던 손가락도 막는다
  */
 let rerollReadyAt = 0;
 const REROLL_GUARD_MS = 400;
@@ -520,7 +520,8 @@ function hideLevelup(): void {
 
 /** 새로고침 버튼: 남은 횟수 (서버가 보낸 값. 모양을 확인하고 쓴다) */
 function showReroll(rerolls: number, rerollable: boolean): void {
-  const left = Number.isInteger(rerolls) ? Math.max(0, Math.min(OFFER_REROLLS, rerolls)) : 0;
+  // 서버가 줄 수 있는 최대(시작 + 배포 기도 최대 단계)까지만 믿는다
+  const left = Number.isInteger(rerolls) ? Math.max(0, Math.min(MAX_REROLLS, rerolls)) : 0;
   el.reroll.disabled = left === 0 || rerollable !== true;
   el.rerollLeft.textContent = left === 0 ? '새로고침을 다 썼어요' : rerollable !== true ? '새로 나올 카드가 없어요' : `새로고침 · ${left}번 남음`;
   el.offers.classList.remove('offers--wait');

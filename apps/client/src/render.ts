@@ -3,6 +3,7 @@ import {
   ENEMIES,
   ENEMY_IDS,
   FIELD_ITEM_KINDS,
+  FREEZE_BEAM_WIDTH,
   SHOT_KINDS,
   ZONE_KINDS,
   duckOffset,
@@ -1034,12 +1035,12 @@ export class Renderer {
         break;
       }
       case 'beam': {
-        // 코드 프리즈: 주인에게서 뻗는 얼음빛 광선 (판정 폭 10px)
+        // 코드 프리즈: 주인에게서 뻗는 얼음빛 광선 (서버의 판정 폭 FREEZE_BEAM_WIDTH 와 같은 폭)
         const a = (z.aux / 256) * Math.PI * 2;
         ctx.setTransform(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), X, Y);
         ctx.globalAlpha = (calm ? 0.2 : 0.35) * fade;
         ctx.fillStyle = '#89dceb';
-        ctx.fillRect(0, -5 * S, R, 10 * S);
+        ctx.fillRect(0, (-FREEZE_BEAM_WIDTH / 2) * S, R, FREEZE_BEAM_WIDTH * S);
         ctx.globalAlpha = (calm ? 0.55 : 0.9) * fade;
         ctx.fillStyle = '#eff1f5';
         ctx.fillRect(0, -S, R, 2 * S);

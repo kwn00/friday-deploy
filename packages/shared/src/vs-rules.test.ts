@@ -454,7 +454,9 @@ test('레벨업 선택지 (뱀서): rarity 가 무게다. 무게 40 은 무게 1
     p.offers = null;
   }
   const rate = (id: string): number => (seen[id] ?? 0) / 400;
-  assert.ok(rate('stack_overflow') > rate('logic_bomb') * 1.5, `rarity 100 ${rate('stack_overflow')} vs 40 ${rate('logic_bomb')}`);
+  // 무게 40 의 예: 스냅샷 (멀티스레드는 0.4.0 에 40 → 60)
+  assert.equal(UPGRADES.snapshot.rarity, 40);
+  assert.ok(rate('stack_overflow') > rate('snapshot') * 1.5, `rarity 100 ${rate('stack_overflow')} vs 40 ${rate('snapshot')}`);
   assert.ok(rate('console_log') > 0.2, `가진 것이 먼저 나올 기회가 있다 (${rate('console_log')})`);
 });
 

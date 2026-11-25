@@ -44,6 +44,7 @@ import {
   FIELD_ITEM_KINDS,
   PASSIVE_IDS,
   PASSIVE_SLOTS,
+  PICK_ONCE,
   SHOT_KINDS,
   STAGE,
   STAGE_TIME,
@@ -141,6 +142,8 @@ export interface Player {
   iframe: number;
   /** 2단계 인증 방패: 남은 수. 맞을 때 피해 대신 하나 줄고 잠깐 무적이 된다 */
   charges: number;
+  /** 이번 틱에 방패가 한 대를 막았다: 이어서 도는 무기 차례에 둘레로 반격한다 (combat.ts 의 runWeapons) */
+  parry: boolean;
   /** 쉬지 않고 움직인 시간(초). 스프린트가 세지는 데 쓴다 */
   moveTime: number;
   /** 러버덕이 돌고 있는 남은 시간(초). 0 이면 쉬는 중 */
@@ -158,7 +161,7 @@ export interface Player {
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
   offerTimer: number;
-  /** 이번 판에 남은 레벨업 선택지 새로고침 수 (OFFER_REROLLS 에서 시작한다) */
+  /** 이번 판에 남은 레벨업 선택지 새로고침 수 (OFFER_REROLLS 에서 시작하고, 배포 기도 단계마다 하나 는다) */
   rerolls: number;
   /** 이번 판에서 센 무기·패시브 횟수 (통계용) */
   tally: UpgradeTally;
@@ -429,6 +432,7 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     shield: 0,
     iframe: 0,
     charges: 0,
+    parry: false,
     moveTime: 0,
     duckOn: 0,
     freezeDir: 0,
@@ -511,11 +515,21 @@ function releaseHeld(world: World, p: Player): void {
   }
 }
 
+/** 한 판에 가질 수 있는 새로고침의 최대: 시작할 때의 수 + 배포 기도를 최대 단계까지 올리며 받는 수 (화면의 표시 상한) */
+export const MAX_REROLLS = OFFER_REROLLS + UPGRADES.deploy_prayer.max;
+
 /** 강화 하나를 한 단계 올린다 (레벨업 선택과 보물상자가 같이 쓴다) */
 function levelUp(p: Player, up: UpgradeId): void {
-  p.up[up] = Math.min(UPGRADES[up].max, lv(p, up) + 1);
+  const before = lv(p, up);
+  const hpBefore = maxHpOf(p);
+  p.up[up] = Math.min(UPGRADES[up].max, before + 1);
+  const raised = lv(p, up) > before;
   // 스냅샷: 고를 때마다 부활을 하나 준다
   if (up === 'snapshot') p.revives++;
+  // 배포 기도: 단계가 오를 때마다 새로고침을 하나 준다 (최대 단계면 오르지 않으므로 주지 않는다)
+  if (up === 'deploy_prayer' && raised) p.rerolls++;
+  // 다크 모드: 늘어난 최대 체력만큼 바로 채운다 (우리 규칙. 뱀서 Hollow Heart 는 채우지 않아 고른 순간 아무 변화가 없었다)
+  if (up === 'dark_mode' && p.alive) p.hp = Math.min(maxHpOf(p), p.hp + maxHpOf(p) - hpBefore);
   // 무기는 얻거나 오르면 바로 한 번 쓴다 (뱀서). 러버덕·카나리아·부엉이는 바로 켜진다
   if (isWeapon(up)) {
     p.cd[up] = 0;
@@ -682,7 +696,8 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
       items.push(evo.id);
       continue;
     }
-    const owned = UPGRADE_IDS.filter((u) => lv(p, u) > 0 && lv(p, u) < UPGRADES[u].max);
+    // 한 번만 고르는 것(PICK_ONCE: 저주)은 올리지 않는다
+    const owned = UPGRADE_IDS.filter((u) => lv(p, u) > 0 && lv(p, u) < UPGRADES[u].max && !PICK_ONCE.includes(u));
     if (owned.length === 0) {
       // 찬 양은 화면에 보이는 체력(올림)으로 센다 (레벨업의 refill 과 같다). 남은 몫은 이미 가득이라 더할 것이 없다
       const max = maxHpOf(p);
@@ -774,14 +789,14 @@ function refill(world: World, p: Player): void {
   world.events.push({ type: 'refill', pid: p.id, hp: Math.ceil(max) - Math.ceil(before) });
 }
 
-/** 선택지에 나올 수 있는 것: 가진 것은 최대 단계 전까지, 새 것은 칸이 남아 있을 때만 */
+/** 선택지에 나올 수 있는 것: 가진 것은 최대 단계 전까지(한 번만 고르는 것은 가진 뒤에는 나오지 않는다), 새 것은 칸이 남아 있을 때만 */
 function offerPool(p: Player): UpgradeId[] {
   const weapons = WEAPON_IDS.filter((u) => lv(p, u) > 0).length;
   const passives = PASSIVE_IDS.filter((u) => lv(p, u) > 0).length;
   return UPGRADE_IDS.filter((u) => {
     const l = lv(p, u);
     if (l >= UPGRADES[u].max) return false;
-    if (l > 0) return true;
+    if (l > 0) return !PICK_ONCE.includes(u);
     // 진화한 무기는 보물상자로만 얻는다. 진화해서 없어진 재료 무기도 다시 나오지 않는다
     if (evolutionOf(u) || evolvedAway(p.up, u)) return false;
     return isWeapon(u) ? weapons < WEAPON_SLOTS : passives < PASSIVE_SLOTS;
@@ -1156,10 +1171,11 @@ function advance(world: World, dt: number): void {
     // 되살아난 직후(shield)와 무적 시간(iframe) 동안에는 맞지 않는다
     if (target.shield > 0 || target.iframe > 0) continue;
     target.iframe = INVULN_SECONDS;
-    // 2단계 인증 방패가 있으면 피해 대신 하나를 쓰고 더 오래 무적이 된다
+    // 2단계 인증 방패가 있으면 피해 대신 하나를 쓰고 더 오래 무적이 된다. 이어서 도는 무기 차례에 둘레로 반격한다 (runWeapons)
     if (target.charges > 0) {
       target.charges--;
       target.iframe = Math.max(INVULN_SECONDS, effectiveStats(target, 'two_factor').dur);
+      target.parry = true;
       continue;
     }
     target.hp -= hitDamage(target, power);

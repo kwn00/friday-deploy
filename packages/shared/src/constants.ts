@@ -59,6 +59,9 @@ export const PLAYER_BASE_PICKUP = 36;
  */
 export const SPRINT_BONUS_PER_LEVEL = 5;
 
+/** 코드 프리즈 광선의 폭(px). 서버 판정(combat.ts)과 화면 그림(render.ts)이 같이 쓴다 */
+export const FREEZE_BEAM_WIDTH = 16;
+
 /**
  * 관전(페어 방에서 쓰러졌거나, 관전으로 합류한 경우): 입력으로 시점만 움직인다. 월드에는 아무 영향이 없다.
  * 살아 있는 캐릭터(최고 105px/s)보다 빨라서 동료를 따라다닐 수 있다.
@@ -85,10 +88,11 @@ export const OFFER_COUNT = 3;
 /** 레벨업 선택 제한 시간(초). 넘기면 서버가 첫 번째 선택지를 자동 선택한다. 새로고침하면 다시 이 시간부터 센다 */
 export const OFFER_TIMEOUT = 20;
 /**
- * 한 판에 레벨업 선택지를 새로고침할 수 있는 횟수 (사람마다. 레벨업마다가 아니라 한 판 전체에서).
+ * 한 판을 시작할 때 레벨업 선택지를 새로고침할 수 있는 횟수 (사람마다. 레벨업마다가 아니라 한 판 전체에서).
+ * 배포 기도를 고를 때마다(단계마다) 하나씩 더 생긴다 (sim.ts 의 levelUp. 한 판의 최대는 sim.ts 의 MAX_REROLLS).
  * 새로고침하면 지금 보이는 카드를 빼고 같은 규칙으로 다시 뽑는다 (sim.ts 의 rerollOffers)
  */
-export const OFFER_REROLLS = 2;
+export const OFFER_REROLLS = 3;
 
 /**
  * 적 수의 상한 (뱀서): 살아 있는 적이 300 이상이면 주기적인 스폰을 멈추고, 보스·이벤트는 500 까지만 나온다.

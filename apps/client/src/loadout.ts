@@ -11,7 +11,9 @@ import {
   FIELD_ITEMS,
   PASSIVE_IDS,
   PASSIVE_SLOTS,
+  PICK_ONCE,
   SPRINT_BONUS_PER_LEVEL,
+  SUPPORT_PASSIVES,
   UPGRADES,
   WEAPON_IDS,
   WEAPON_SLOTS,
@@ -69,7 +71,7 @@ export interface LoadoutItem {
   max: number;
   /** 단계: "Lv.3/8". 진화한 무기는 단계 대신 "★ 진화" */
   tag: string;
-  /** 최대 단계면 "최대" (진화한 무기는 tag 가 이미 알린다) */
+  /** 최대 단계면 "최대", 한 번만 고르는 것(저주)을 가졌으면 "더 오르지 않음" (진화한 무기는 tag 가 이미 알린다) */
   badge: string | null;
   evolved: boolean;
   /** 지금 조건이 맞아 보물상자를 열면 진화한다 (게임 칩의 노란 테두리와 같은 뜻) */
@@ -127,9 +129,18 @@ const NONE: HasUpgrades = { up: {} };
 
 /**
  * 패시브의 지금 효과: 그 패시브 하나만 지금 단계로 가진 것처럼 공용 함수에 넣어, 기본값과 비교한다.
- * (사이드 프로젝트의 20·40 레벨 보너스처럼 레벨에 따라 잠깐 붙는 것은 넣지 않는다)
+ * (사이드 프로젝트의 20·40 레벨 보너스처럼 레벨에 따라 잠깐 붙는 것은 넣지 않는다).
+ * 생존·편의 패시브(SUPPORT_PASSIVES)는 본래 효과 뒤에 모든 무기의 피해량 보너스를 붙인다
  */
 function passiveEffects(id: PassiveId, level: number, revives: number): Effect[] {
+  const own = ownEffects(id, level, revives);
+  if (!(SUPPORT_PASSIVES as readonly PassiveId[]).includes(id)) return own;
+  const only: HasUpgrades = { up: { [id]: level } };
+  return [...own, { label: '피해량', value: signedPct(mightOf(only) / mightOf(NONE) - 1) }];
+}
+
+/** 패시브 본래의 지금 효과 (passiveEffects) */
+function ownEffects(id: PassiveId, level: number, revives: number): Effect[] {
   const only: HasUpgrades = { up: { [id]: level } };
   /** 기본값에 대한 배율 */
   const rel = (f: (p: HasUpgrades) => number): number => f(only) / f(NONE);
@@ -162,9 +173,11 @@ function passiveEffects(id: PassiveId, level: number, revives: number): Effect[]
     case 'git_fork':
       return [{ label: '개수', value: signed(add(amountBonusOf)) }];
     case 'deploy_prayer':
+      // 새로고침은 단계가 오를 때마다 하나씩 받았다 (sim.ts 의 levelUp). 남은 수는 레벨업 창에 나온다
       return [
         { label: '운', value: signedPct(rel(luckOf) - 1) },
         { label: '선택지 4개 나올 확률', value: pct(extraOfferChanceOf(only)) },
+        { label: '받은 새로고침', value: `+${level}번` },
       ];
     case 'side_project':
       return [{ label: '얻는 경험치', value: signedPct(rel(growthOf) - 1) }];
@@ -276,6 +289,8 @@ function itemOf(id: UpgradeId, level: number, up: Levels, ready: Set<UpgradeId>,
   const evo = evolutionOf(id);
   const evolved = evo !== undefined;
   const maxed = level >= def.max;
+  // 한 번만 고르는 것(저주)은 가진 뒤에는 더 오르지 않는다 (sim.ts 의 offerPool·openChest). 최대 단계는 예전 기록 때문에 그대로다
+  const once = !maxed && PICK_ONCE.includes(id);
   const lines: EvoLine[] = [];
   if (evo) {
     lines.push({ tone: 'from', text: `재료: ${[...evo.from, ...(evo.with ? [evo.with] : [])].map(label).join(' + ')}` });
@@ -292,12 +307,12 @@ function itemOf(id: UpgradeId, level: number, up: Levels, ready: Set<UpgradeId>,
     level,
     max: def.max,
     tag: evolved ? '★ 진화' : `Lv.${level}/${def.max}`,
-    badge: !evolved && maxed ? '최대' : null,
+    badge: !evolved && maxed ? '최대' : once ? '더 오르지 않음' : null,
     evolved,
     ready: ready.has(id),
     desc: def.desc,
     now: def.kind === 'weapon' ? weaponEffects(id as WeaponId, up) : passiveEffects(id as PassiveId, level, revives),
-    next: evolved || maxed ? null : { tag: `다음 Lv.${level + 1}`, text: upgradeText(id, level + 1) },
+    next: evolved || maxed || once ? null : { tag: `다음 Lv.${level + 1}`, text: upgradeText(id, level + 1) },
     evo: lines,
   };
 }

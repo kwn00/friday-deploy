@@ -22,6 +22,7 @@ import {
   effectiveStats,
   encodeSnapshot,
   evolutionOf,
+  healAmountOf,
   maxHpOf,
   pickOffer,
   setInput,
@@ -80,7 +81,7 @@ test('강화 정의: 개수, 최대 단계, 단계별 증가분이 맞고, 통�
       const max: Partial<Record<UpgradeId, number>> = { code_freeze: 7, two_factor: 7, logic_bomb: 6 };
       // 진화한 무기는 단계가 하나뿐이고 레벨업 선택지에 나오지 않는다
       if (evolutionOf(id)) assert.deepEqual([def.max, def.rarity], [1, 0], `${id}: 진화한 무기`);
-      else assert.equal(def.max, max[id] ?? 8, `${id}: 최대 단계 (뱀서: Clock Lancet·Laurel 7, Bracelet 6, 나머지 8)`);
+      else assert.equal(def.max, max[id] ?? 8, `${id}: 최대 단계 (뱀서와 같다: Clock Lancet·Laurel 7, Bracelet 6, 나머지 8. 바꾸면 예전 기록이 버려진다)`);
       for (let l = 1; l <= def.max; l++) {
         const s = weaponStats(id as WeaponId, l);
         for (const [k, v] of Object.entries(s)) assert.ok(Number.isFinite(v) && v >= 0, `${id} ${l}단계 ${k}=${v}`);
@@ -96,49 +97,62 @@ test('강화 정의: 개수, 최대 단계, 단계별 증가분이 맞고, 통�
     }
   }
   assert.equal(upgradeText('regex', 3), '피해 +5, 개수 +1');
-  assert.equal(upgradeText('coffee', 1), '이동 속도가 빨라진다. (이동 속도 +10%)');
-  assert.equal(upgradeText('npm_install', 2), '끌어당기는 범위 +33%');
+  assert.equal(upgradeText('coffee', 1), '이동 속도가 빨라진다. (이동 속도 +10%, 피해량 +5%)');
+  assert.equal(upgradeText('npm_install', 2), '끌어당기는 범위 +33%, 피해량 +1%');
+  assert.equal(upgradeText('deploy_prayer', 3), '운 +10%, 새로고침 +1, 피해량 +1%');
+  assert.equal(upgradeText('stack_overflow', 2), '피해량 +10%', '무기를 세게 하는 패시브에는 덤이 없다');
   assert.equal(upgradeText('infinite_scroll', 3), '쿨다운 +0.75초, 지속 +0.5초', '쿨다운이 느는 단계는 + 로 보인다');
   assert.equal(upgradeText('two_factor', 4), '방패 +1');
 });
 
-test('뱀서 수치: 최대 단계의 피해·쿨다운·개수·관통·지속이 위키의 같은 무기 값과 같다', () => {
-  // [우리 무기, 최대 단계의 dmg, cd, amount, (뱀서 pierce - 1), dur] (위키 Infobox 의 max-* 값)
-  const table: [WeaponId, number, number, number, number | null, number | null][] = [
-    ['console_log', 30, 1.0, 4, 1, null], // Magic Wand: 30 / 1.0s / 4 / pierce 2
-    ['regex', 16.5, 1.0, 6, 2, null], // Knife: 16.5 / 6 / pierce 3
-    ['ai_agent', 90, 3.0, 3, 0, null], // Fire Wand: 90
-    ['ctrl_x', 40, 1.35, 2, null, null], // Whip: 40 / 2
-    ['brick_book', 80, 4.0, 3, 6, null], // Axe: 80 / 3 / pierce 7
-    ['rollback', 35, 2.0, 3, null, null], // Cross: 35 / 3
-    ['firewall', 15, 1.0, 1, null, null], // Garlic: 15 / 1.0s
-    ['hotfix', 40, 4.5, 4, null, 3.0], // Santa Water: 40 / 4 / 3.0s
-    ['ping_pong', 30, 3.0, 3, null, 3.25], // Runetracer: 30 / 3 / 3.25s
-    ['hot_reload', 65, 4.5, 6, null, null], // Lightning Ring: 65 / 6
-    ['git_clean', 0, 60, 1, null, null], // Pentagram: 60s
-    ['canary', 30, 0.5, 11, null, 4.0], // Peachone: 30 / 0.5s / 11
-    ['broadcast', 15, 1.4, 3, 6, null], // Phiera: 15 / 3 / pierce 7
-    ['keyboard_cat', 10, 5.0, 3, null, 8.0], // Gatti Amari: 3 / 8s
-    ['infinite_scroll', 40, 4.25, 1, null, 2.0], // Song of Mana: 40 / 4.25s / 2s
-    ['commit_history', 25, 6.0, 2, null, 1.75], // Shadow Pinion: 25 / 2 / 1.75s
-    ['code_freeze', 0, 1.0, 1, null, 6.0], // Clock Lancet: 1.0s / 6s
-    ['two_factor', 0, 8.0, 3, null, null], // Laurel: 8s / 충전 3
-    ['sprint', 6, 2.0, 7, null, 0.4], // Vento Sacro: 6 / 7
-    ['logic_bomb', 30, 1.4, 4, 2, 0.4], // Bracelet: 30 / 4 / pierce 3
+test('우리 수치: 무기의 1단계·최대 단계 수치와 무게(rarity)가 수치 표와 같다 (뱀서 위키에서 시작해 0.4.0 에 고쳤다)', () => {
+  // 수치는 뱀서 위키의 같은 무기 값에서 시작해 우리 밸런스로 고친다 (content.ts 의 WeaponStats 주석). 고칠 때는 이 표도 함께 고친다.
+  // [우리 무기, 1단계 dmg, 1단계 cd, 최대 단계의 dmg, cd, amount, pierce(뱀서 pierce - 1), dur, rarity]
+  // 주석: 뱀서의 같은 무기와, 위키 값에서 바꾼 것 (0.4.0)
+  const table: [WeaponId, number, number, number, number, number, number, number, number][] = [
+    ['console_log', 10, 1.2, 30, 1.0, 4, 1, 1.0, 100], // Magic Wand 그대로
+    ['rubber_duck', 10, 2.5, 30, 2.5, 4, 0, 4.0, 80], // King Bible. 쿨 3 → 2.5 (판정 6 → 10, 둘 이상이면 하나 걸러 안쪽 궤도: combat.ts)
+    ['regex', 10, 1.0, 20, 1.0, 6, 2, 0.75, 100], // Knife 6.5 / 16.5. 피해 +3.5, 지속 0.6 → 0.75 (가장 가까운 버그를 겨눈다)
+    ['ai_agent', 20, 2.0, 90, 2.0, 4, 0, 1.4, 80], // Fire Wand. 쿨 3 → 2, 6단계 +1발 (부채꼴 0.12 → 0.05)
+    ['ctrl_x', 15, 1.1, 45, 1.1, 2, 0, 0.15, 100], // Whip 10 / 1.35. 피해 +5, 쿨 1.1, 길이 56 → 64
+    ['brick_book', 20, 3.0, 80, 3.0, 3, 6, 3.0, 100], // Axe. 쿨 4 → 3
+    ['rollback', 5, 2.0, 35, 2.0, 3, 999, 1.8, 80], // Cross 그대로
+    ['firewall', 8, 1.3, 15, 1.0, 1, 0, 0, 70], // Garlic. 1단계 5 → 8 (최대 15 그대로)
+    ['hotfix', 10, 4.5, 40, 4.5, 4, 0, 3.0, 100], // Santa Water 그대로
+    ['ping_pong', 15, 3.0, 30, 3.0, 3, 999, 3.25, 80], // Runetracer. 1단계 10 → 15 (최대 30 그대로)
+    ['hot_reload', 15, 4.5, 65, 4.5, 6, 0, 0.25, 80], // Lightning Ring 그대로
+    ['git_clean', 0, 90, 0, 60, 1, 0, 1.0, 60], // Pentagram 그대로 (남길 확률 0.1 → 0.25: 아래)
+    ['canary', 15, 1.0, 30, 0.5, 11, 0, 4.0, 50], // Peachone. 1단계 10 → 15 (최대 30 그대로)
+    ['night_owl', 15, 1.0, 30, 0.5, 11, 0, 4.0, 50], // Ebony Wings. 카나리아와 같다
+    ['broadcast', 5, 1.4, 15, 1.4, 3, 6, 0.9, 50], // Phiera. 7단계 속도 +50% → +25%
+    ['multicast', 5, 1.4, 15, 1.4, 3, 6, 0.9, 50], // Eight The Sparrow. 브로드캐스트와 같다
+    ['keyboard_cat', 15, 5.0, 35, 5.0, 3, 999, 8.0, 50], // Gatti Amari 10 / 10. 1단계 15, 2·4단계 +5, 7단계 +10
+    ['infinite_scroll', 10, 2.0, 25, 4.25, 1, 0, 2.0, 50], // Song of Mana 40. 4·6·8단계 +10 → +5, 다시 맞히기 1 → 0.5초
+    ['commit_history', 10, 6.0, 25, 6.0, 2, 0, 1.75, 50], // Shadow Pinion 그대로 (쿨다운 중에도 발자국: combat.ts)
+    ['code_freeze', 5, 1.5, 5, 0.5, 1, 999, 6.0, 70], // Clock Lancet 0 / 2 → 1. 피해 5, 쿨 -0.5 (광선 폭 10 → 16)
+    ['two_factor', 10, 8, 10, 6, 3, 0, 1.04, 60], // Laurel 10 → 8. 쿨 -2, 반격 피해 10 (방패가 막으면 둘레 48)
+    ['sprint', 5, 2.0, 13, 2.0, 7, 0, 0.4, 50], // Vento Sacro 2 / 6. 1단계 5, 단계마다 +2 (양옆 번갈아)
+    ['logic_bomb', 10, 1.4, 30, 1.4, 4, 2, 0.6, 60], // Bracelet. 지속 0.4 → 0.6, 속도 500 → 350, 무게 40 → 60
   ];
-  for (const [id, dmg, cd, amount, pierce, dur] of table) {
+  assert.deepEqual(table.map((r) => r[0]), WEAPON_IDS.filter((id) => !evolutionOf(id)), '레벨업으로 얻는 무기를 모두 적었다');
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+  for (const [id, dmg1, cd1, dmg, cd, amount, pierce, dur, rarity] of table) {
+    const a = weaponStats(id, 1);
     const s = weaponStats(id, UPGRADES[id].max);
-    const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
-    assert.ok(near(s.dmg, dmg) && near(s.cd, cd) && near(s.amount, amount), `${id}: ${s.dmg}/${s.cd}/${s.amount}`);
-    if (pierce !== null) assert.equal(s.pierce, pierce, `${id} 관통`);
-    if (dur !== null) assert.ok(near(s.dur, dur), `${id} 지속 ${s.dur}`);
+    assert.ok(near(a.dmg, dmg1) && near(a.cd, cd1), `${id} 1단계: ${a.dmg}/${a.cd}`);
+    assert.ok(near(s.dmg, dmg) && near(s.cd, cd) && near(s.amount, amount), `${id} 최대: ${s.dmg}/${s.cd}/${s.amount}`);
+    assert.equal(s.pierce, pierce, `${id} 관통`);
+    assert.ok(near(s.dur, dur), `${id} 지속 ${s.dur}`);
+    assert.equal(UPGRADES[id].rarity, rarity, `${id} 무게`);
   }
-  // 1단계 = 뱀서의 기본값
-  assert.deepEqual([weaponStats('console_log', 1).dmg, weaponStats('console_log', 1).cd], [10, 1.2], 'Magic Wand 10 / 1.2s');
-  assert.equal(weaponStats('regex', 1).dmg, 6.5, 'Knife 6.5');
+  // 그 밖에 고친 것
   assert.equal(weaponStats('hotfix', 2).area, weaponStats('hotfix', 1).area * 1.2, 'Santa Water 2단계 범위 +20%');
-  // 레벨업 무게(rarity)
-  assert.deepEqual([UPGRADES.console_log.rarity, UPGRADES.logic_bomb.rarity, UPGRADES.snapshot.rarity], [100, 40, 40]);
+  assert.deepEqual([weaponStats('git_clean', 1).chance, weaponStats('git_clean', 8).chance], [0.25, 0.8], 'git clean 남길 확률 (뱀서 0.1 → 0.65)');
+  assert.deepEqual([weaponStats('regex', 1).speed * weaponStats('regex', 1).dur, weaponStats('logic_bomb', 1).speed * weaponStats('logic_bomb', 1).dur], [240, 210], '사거리');
+  assert.equal(weaponStats('broadcast', 8).speed, 260 * 1.25, '7단계부터 +25%');
+  assert.deepEqual([weaponStats('ctrl_x', 1).area, weaponStats('sprint', 1).area], [64, 56]);
+  assert.deepEqual([UPGRADES.infinite_scroll, UPGRADES.two_factor].map((d) => (d.kind === 'weapon' ? [d.rehit ?? null, d.kb] : null)), [[0.5, 1], [null, 2]]);
+  assert.equal(UPGRADES.snapshot.rarity, 40);
 });
 
 test('칸 제한: 무기 6칸·패시브 6칸이 차면 새 것은 선택지에 나오지 않고, 최대 단계인 것도 나오지 않는다', () => {
@@ -197,8 +211,9 @@ test('칸 제한: 칸이 남아 있으면 처음 보는 것도 나온다 (무기
   assert.ok([...seen].some((id) => UPGRADES[id].kind === 'passive'));
 });
 
-test('무기: 피해를 주는 무기 21종과 진화한 무기 6종은 저마다 혼자서 가까이 온 적을 다치게 한다', () => {
-  const quiet = new Set<UpgradeId>(['code_freeze', 'two_factor']);
+test('무기: 2단계 인증을 뺀 무기 22종과 진화한 무기는 저마다 혼자서 가까이 온 적을 다치게 한다', () => {
+  // 2단계 인증은 방패가 막을 때만 반격한다 (아래 2단계 인증 테스트). 코드 프리즈는 0.4.0 부터 조금 다치게 한다
+  const quiet = new Set<UpgradeId>(['two_factor']);
   for (const id of WEAPON_IDS) {
     if (quiet.has(id)) continue;
     const { w, p } = quietWorld(70 + WEAPON_IDS.indexOf(id));
@@ -376,17 +391,35 @@ test('패시브: 테스트 커버리지는 받는 피해를 줄이고, 워라밸
   p.up = { work_life: 5 };
   p.hp = 50;
   for (let i = 0; i < 20 * 10; i++) tick(w, []);
-  assert.ok(Math.abs(p.hp - 60) < 0.01, `10초에 +10 (${p.hp})`);
+  assert.ok(Math.abs(p.hp - 75) < 0.01, `5단계: 1초에 2.5, 10초에 +25 (${p.hp})`);
+  // 회복 아이템 몫은 예전 크기 그대로 (1초 회복과 떼어 두었다): 30 × (1 + 0.2 × 단계)
+  assert.deepEqual([1, 3, 5].map((l) => healAmountOf({ up: { work_life: l } })), [36, 48, 60]);
 });
 
-test('패시브: 다크 모드는 최대 체력을 1.2배씩 곱하고(회복은 없다), 스냅샷은 부활을 주고, 사이드 프로젝트는 경험치를 늘린다', () => {
+test('패시브: 다크 모드는 최대 체력을 1.2배씩 곱하고 늘어난 만큼 바로 채우고, 스냅샷은 부활을 주고, 사이드 프로젝트는 경험치를 늘린다', () => {
   const { w, p } = quietWorld(87);
   p.hp = 60;
   p.offers = ['dark_mode'];
   pickOffer(w, p.id, 0);
   assert.equal(maxHpOf(p), 120);
-  assert.equal(p.hp, 60, '고른다고 회복하지는 않는다 (뱀서 Hollow Heart)');
+  assert.equal(p.hp, 80, '고르면 늘어난 최대 체력(20)만큼 바로 찬다 (0.4.0. 뱀서 Hollow Heart 는 채우지 않는다)');
+  p.offers = ['dark_mode'];
+  pickOffer(w, p.id, 0);
+  assert.ok(Math.abs(p.hp - 104) < 1e-9, `2단계: 120 → 144, +24 (${p.hp})`);
+  // 가득일 때는 가득 그대로, 최대 단계에서 다시 고를 수는 없지만 넘치지는 않는다
+  p.hp = maxHpOf(p);
+  p.offers = ['dark_mode'];
+  pickOffer(w, p.id, 0);
+  assert.ok(Math.abs(p.hp - maxHpOf(p)) < 1e-9, '가득이었으면 새 최대까지');
   assert.ok(Math.abs(maxHpOf({ up: { dark_mode: 5 } }) - 248.832) < 1e-9, '5단계: 100 × 1.2⁵');
+  // 보물상자로 올라도 같다 (가진 것 중 올릴 수 있는 것이 다크 모드뿐이게)
+  const chest = quietWorld(95);
+  chest.p.up = { console_log: UPGRADES.console_log.max, dark_mode: 1 };
+  chest.p.hp = 50;
+  chest.w.items.push({ id: chest.w.nextId++, kind: 'chest', x: chest.p.x, y: chest.p.y, ttl: Infinity, chest: [1, 0, 0, 0] });
+  tick(chest.w, []);
+  assert.equal(chest.p.up.dark_mode, 2);
+  assert.ok(Math.abs(chest.p.hp - 74) < 1e-9, `상자로 올라도 120 → 144, +24 (${chest.p.hp})`);
   p.offers = ['snapshot'];
   pickOffer(w, p.id, 0);
   assert.equal(p.revives, 1);
@@ -397,7 +430,7 @@ test('패시브: 다크 모드는 최대 체력을 1.2배씩 곱하고(회복은
   p.xp = 0;
   w.gems.push({ id: 9600, x: p.x, y: p.y, v: 10 });
   tick(w, []);
-  assert.equal(p.xp, 14, '경험치 10 × 1.4');
+  assert.ok(Math.abs(p.xp - 17.5) < 1e-9, `경험치 10 × 1.75 (단계마다 +15%) (${p.xp})`);
 });
 
 test('패시브: 배포 기도가 있으면 가끔 선택지가 4개, 없으면 늘 3개', () => {
@@ -483,7 +516,7 @@ test('검토 반영: 작은 경험치에 붙는 배율도 쌓여서 반영된다
     w.gems.push({ id: w.nextId++, x: p.x, y: p.y, v: 1 });
     tick(w, []);
   }
-  assert.ok(Math.abs(p.xp - 108) < 1e-6, `버그 경험치(1) 100개 × 1.08 (${p.xp})`);
+  assert.ok(Math.abs(p.xp - 115) < 1e-6, `버그 경험치(1) 100개 × 1.15 (${p.xp})`);
   // 저주는 경험치를 늘리지 않는다 (뱀서 Curse): 버그의 경험치는 1 그대로
   p.up = { console_log: 8, prod_hotfix: 5 };
   const cursed = enemy(9700, p.x + 20, p.y, 'bug', 1);
