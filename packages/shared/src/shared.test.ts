@@ -40,6 +40,7 @@ import {
   areaMultOf,
   effectiveStats,
   type Gem,
+  type Snapshot,
 } from './index';
 
 test('parseClientMsg: 조작된 메시지는 전부 거부', () => {
@@ -402,6 +403,36 @@ test('codec: 손상된 데이터는 예외로 끝난다 (멈추거나 거대한 
     } catch (err) {
       assert.ok(err instanceof RangeError, String(err));
     }
+  }
+});
+
+test('codec: 내 강화 단계는 가진 것만 보낸다 (아이템 종류가 늘어도 스냅샷이 커지지 않는다)', () => {
+  const w = createWorld(5);
+  const p = addPlayer(w, 'a');
+  const snap = buildSnapshot(w, p.id)!;
+  const withUp = (up: Snapshot['me']['up']): Snapshot => ({ ...snap, me: { ...snap.me, up } });
+  const size = (up: Snapshot['me']['up']): number => encodeSnapshot(withUp(up)).length;
+  const none = size({});
+  assert.equal(size({ console_log: 1 }), none + 2, '하나에 2바이트 (번호, 단계)');
+  // 칸을 가득 채운 빌드 (무기 6 + 패시브 6. 진화한 무기와 목록 맨 끝의 아이템까지)
+  const last = UPGRADE_IDS[UPGRADE_IDS.length - 1]!;
+  const full = { console_log: 8, rubber_duck: 8, agi: 1, monitoring: 1, flooding: 1, git_reset: 1, coffee: 5, mech_keyboard: 5, stack_overflow: 5, dark_mode: 4, deploy_prayer: 2, [last]: 1 };
+  assert.equal(Object.keys(full).length, 12);
+  assert.equal(size(full), none + 24, `가득 차도 24바이트 (예전에는 늘 ${UPGRADE_IDS.length}바이트)`);
+  const back = decodeSnapshot(encodeSnapshot(withUp(full)));
+  assert.deepEqual(back.me.up, full);
+  // 화면(main.ts)이 강화 단계를 문자열로 바꿔 바뀜을 비교한다: 늘 UPGRADE_IDS 순서로 풀린다
+  assert.deepEqual(Object.keys(back.me.up), UPGRADE_IDS.filter((id) => id in full));
+  // 손상된 목록: 개수가 아이템 종류보다 많거나, 없는 번호이거나, 단계가 0 이면 예외
+  const a = encodeSnapshot(withUp({}));
+  const b = encodeSnapshot(withUp({ coffee: 3 }));
+  let at = 0;
+  while (a[at] === b[at]) at++;
+  assert.deepEqual([...b.slice(at, at + 3)], [1, UPGRADE_IDS.indexOf('coffee'), 3], '개수, 번호, 단계');
+  for (const [k, v] of [[at, UPGRADE_IDS.length + 1], [at + 1, UPGRADE_IDS.length], [at + 2, 0]] as const) {
+    const bad = b.slice();
+    bad[k] = v;
+    assert.throws(() => decodeSnapshot(bad), RangeError, `${k - at}번째 바이트 = ${v}`);
   }
 });
 

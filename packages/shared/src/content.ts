@@ -177,7 +177,7 @@ export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'tr
 export type ZoneKind = (typeof ZONE_KINDS)[number];
 
 /* ───────────── 강화 (무기 · 패시브) ─────────────
- * 순서가 곧 통신에서 쓰는 순서다 (스냅샷에 내 강화 단계를 이 순서로 싣는다). 새 것은 각 목록의 맨 뒤에 추가할 것. */
+ * 순서가 곧 통신에서 쓰는 번호다 (스냅샷에 내 강화 단계를 UPGRADE_IDS 의 번호로 싣는다). 새 것은 각 목록의 맨 뒤에 추가할 것. */
 
 export const WEAPON_IDS = [
   'console_log',
