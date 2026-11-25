@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import {
   DEFAULT_STARTER,
   DT,
+  EVOLUTIONS,
   STARTER_WEAPONS,
   UPGRADES,
   WEAPON_IDS,
@@ -14,6 +15,7 @@ import {
   addPlayer,
   createWorld,
   evolutionOf,
+  evolutionsUsing,
   isBaseWeapon,
   isStarter,
   isWeapon,
@@ -57,7 +59,8 @@ test('시작 무기: 번호 ↔ 무기, 허용 목록 확인', () => {
 test('시작 무기: 저장된 기록을 읽을 때는 "진화하지 않은 무기" 면 받는다 (나중에 후보에서 빠진 무기도 그대로 보이게)', () => {
   for (const id of WEAPON_IDS) assert.equal(isBaseWeapon(id), evolutionOf(id) === undefined, id);
   assert.equal(isBaseWeapon('hotfix'), true, '지금 후보는 아니지만 읽을 때는 받는다');
-  for (const bad of ['debugger', 'monitoring', 'coffee', 'prod_hotfix', 'nope', '', 3, null, undefined]) assert.equal(isBaseWeapon(bad), false, String(bad));
+  // 0.4.0 에 더한 진화(git reset --hard·grep -r·AGI)도 진화한 무기다: 시작 무기로 남지 않는다
+  for (const bad of ['debugger', 'monitoring', 'git_reset', 'grep_r', 'agi', 'coffee', 'prod_hotfix', 'nope', '', 3, null, undefined]) assert.equal(isBaseWeapon(bad), false, String(bad));
 });
 
 test('parseClientMsg: hello 의 시작 무기는 목록의 번호만 받는다 (없으면 그대로 비워 둔다: 서버가 0번으로)', () => {
@@ -166,4 +169,34 @@ test('시뮬레이션: 시작 무기는 판이 시작되기 전(월드가 돌기
   assert.equal(setStarter(w, p.id, 'ai_agent'), false, '한 틱이라도 돌았으면 바꾸지 않는다');
   assert.equal(p.start, 'firewall');
   assert.equal(p.up.ai_agent, undefined);
+});
+
+test('시작 무기의 진화 길: 롤백·AI 에이전트로 시작해도 최대 단계 + 짝이면 다음 상자에서 진화한다. 시작 무기(기록)는 진화 전 무기로 남는다', () => {
+  // 진화가 있는 후보는 레벨업 카드·타일 안내와 같은 진화로 간다 (방화벽은 아직 없다: 0.4.1)
+  const paths = STARTER_WEAPONS.flatMap((id) => evolutionsUsing(id).map((e) => [id, e.id, e.with] as const));
+  assert.deepEqual(paths, [
+    ['console_log', 'debugger', 'test_coverage'],
+    ['rollback', 'git_reset', 'deploy_prayer'],
+    ['ai_agent', 'agi', 'side_project'],
+  ]);
+  for (const [start, evolved, pair] of paths) {
+    assert.ok(EVOLUTIONS.some((e) => e.id === evolved && e.from.length === 1), `${evolved}: 합치기가 아니라 무기 하나의 진화`);
+    const w = createWorld(11);
+    const p = addPlayer(w, 'a', false, start);
+    p.xpNext = 1e12;
+    w.itemCd = 1e9;
+    w.magnetCd = 1e9;
+    p.up[start] = UPGRADES[start].max;
+    p.up[pair!] = 1;
+    // 발밑의 보물상자 (한 번 오르는 상자: 진화가 먼저다)
+    w.items.push({ id: w.nextId++, kind: 'chest', x: p.x, y: p.y, ttl: Infinity, chest: [1, 0, 0, 0] });
+    w.wave = Math.floor((w.time + DT) / 60);
+    w.spawnCd = 1e9;
+    step(w, DT);
+    assert.equal(p.up[evolved], 1, `${start} → ${evolved}`);
+    assert.equal(p.up[start], undefined, '재료 무기는 진화한 무기가 된다');
+    assert.equal(p.start, start, '시작 무기는 그대로 (순위표의 시작 무기 아이콘)');
+    assert.ok(isBaseWeapon(p.start) && !isBaseWeapon(evolved), '기록을 읽을 때도 시작 무기는 진화하지 않은 무기');
+    assert.deepEqual(p.tally.start, { [start]: 1 }, '통계의 started 도 진화 전 무기로');
+  }
 });

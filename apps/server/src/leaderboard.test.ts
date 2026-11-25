@@ -291,7 +291,7 @@ test('시작 무기: 사람별 시작 무기가 이름과 함께 정렬되어 �
   lb.record(run({ names: ['old_starter'], startsBy: ['hotfix'], time: 300 }));
   assert.deepEqual(lb.top('solo')[0]!.startsBy, ['hotfix']);
   // 사람 수와 다르거나, 진화한 무기·패시브·모르는 값이 섞이면 시작 무기만 남기지 않는다 (기록은 남는다)
-  for (const [i, startsBy] of ([['console_log', 'rollback'], ['debugger'], ['coffee'], ['nope'], [3], 'x'] as unknown as RunReport['startsBy'][]).entries()) {
+  for (const [i, startsBy] of ([['console_log', 'rollback'], ['debugger'], ['git_reset'], ['agi'], ['coffee'], ['nope'], [3], 'x'] as unknown as RunReport['startsBy'][]).entries()) {
     assert.notEqual(lb.record(run({ names: [`bad${i}`], startsBy, time: 250 - i })), null, `기록은 남는다: ${JSON.stringify(startsBy)}`);
   }
   for (const e of lb.top('solo').filter((x) => x.names[0]!.startsWith('bad'))) assert.equal(e.startsBy, undefined, e.names[0]);
