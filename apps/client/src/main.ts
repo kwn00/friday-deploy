@@ -34,6 +34,7 @@ import {
 } from '@friday-deploy/shared';
 import { applyTheme } from './apply-theme';
 import { Sound } from './audio';
+import { magnetPeerText, magnetText, noticeRank, refillText } from './alerts';
 import { chestText } from './chest';
 import { evolveHint, readyMaterials } from './evolve';
 import { Input } from './input';
@@ -334,7 +335,15 @@ function updateHud(s: Snapshot): void {
 let toastTimer = 0;
 /** 지금 떠 있는 알림의 종류: 아이템 소식 / 동료의 연결 소식 */
 let toastKind: 'item' | 'peer' = 'item';
-function toast(text: string, kind: 'item' | 'peer' = 'item'): void {
+/** 지금 떠 있는 알림을 가벼운 알림이 덮으면 안 되는지 (30분 경고, 동료의 연결 소식) */
+let toastPinned = false;
+/**
+ * minor: 자석·체력 채우기처럼 자주 올 수 있는 가벼운 알림. 덮이면 안 되는 알림이 떠 있는 동안에는 띄우지 않는다.
+ * pinned: 이 알림은 가벼운 알림에 덮이지 않는다 (동료의 연결 소식은 언제나)
+ */
+function toast(text: string, kind: 'item' | 'peer' = 'item', opts: { minor?: boolean; pinned?: boolean } = {}): void {
+  if (opts.minor && toastPinned && !el.toast.classList.contains('hidden')) return;
+  toastPinned = kind === 'peer' || opts.pinned === true;
   toastKind = kind;
   el.toast.textContent = text;
   el.toast.classList.remove('hidden');
@@ -374,8 +383,8 @@ function noticeItems(s: Snapshot): void {
     if (knownItems.has(it[0])) continue;
     knownItems.add(it[0]);
     const kind = FIELD_ITEM_KINDS[it[1]];
-    // 한꺼번에 여럿이면 가장 드문 것을 알린다
-    if (kind && (fresh === null || FIELD_ITEMS[kind].weight < FIELD_ITEMS[fresh].weight)) {
+    // 한꺼번에 여럿이면 먼저 알릴 것(보물상자 > 백업 > 자석 > LGTM > 피자)을 알린다
+    if (kind && (fresh === null || noticeRank(kind) < noticeRank(fresh))) {
       fresh = kind;
       freshAt = [it[2], it[3]];
     }
@@ -390,7 +399,7 @@ function noticeItems(s: Snapshot): void {
   // 30분: 화면의 버그가 모두 사라지고 1분마다 월요일 아침(닿으면 바로 쓰러진다)이 온다. 그 순간 한 번 알린다 (다른 알림보다 먼저)
   if (s.time >= STAGE_TIME && !overtimeNoticed && phase === 'playing') {
     overtimeNoticed = true;
-    if (me.alive) toast('⏰ 월요일 아침이 왔다! 닿으면 끝이니 도망쳐!');
+    if (me.alive) toast('⏰ 월요일 아침이 왔다! 닿으면 끝이니 도망쳐!', 'item', { pinned: true });
   }
 }
 
@@ -400,6 +409,7 @@ const ITEM_DROPPED: Record<FieldItemKind, string> = {
   levelup: 'LGTM 이 떨어졌어요',
   revive: '백업이 떨어졌어요!',
   chest: '보물상자가 떨어졌어요! 닿으면 열려요',
+  magnet: '자석이 떨어졌어요! 주우면 경험치가 모두 끌려와요',
 };
 
 let minimapOn = store.get('minimap') !== '0';
@@ -825,6 +835,21 @@ function onMessage(msg: ServerMsg): void {
         toast(chestText(msg.items, msg.heal));
         // 진화했으면 한 번 더 축하한다 (상자 여는 소리는 화면의 상자가 사라질 때 이미 났다)
         if (msg.items.some((id) => evolutionOf(id))) sound.play('evolve');
+      }
+      break;
+    case 'magnet':
+      // 누군가 자석을 주웠다. 나면 몇 개가 끌려오는지 (모양이 맞을 때만 숫자를 쓴다. 주운 소리는 화면의 자석이 사라질 때 이미 났다),
+      // 동료면 누가 주웠는지 (함께 하는 판: 내 근처의 경험치도 그쪽으로 날아간다)
+      if (phase === 'playing') {
+        if (msg.by === myId) toast(magnetText(msg.gems), 'item', { minor: true });
+        else toast(magnetPeerText(roster.find((p) => p.id === msg.by)?.name), 'item', { minor: true });
+      }
+      break;
+    case 'refill':
+      // 강화를 모두 마친 뒤의 레벨업: 체력이 가득 찼다 (체력은 다음 스냅샷이 그린다)
+      if (phase === 'playing') {
+        toast(refillText(msg.hp), 'item', { minor: true });
+        sound.play('heal');
       }
       break;
     case 'pause':

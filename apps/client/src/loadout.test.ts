@@ -248,6 +248,7 @@ function measureDuck(up: Levels, seconds: number): { on: number[]; rest: number[
   p.xpNext = 1e12;
   p.shield = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   p.up = { ...up };
   const states: boolean[] = [];
   const starts: number[] = [];

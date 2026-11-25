@@ -55,6 +55,7 @@ function quiet(seed: number): { w: World; p: Player } {
   p.xpNext = 1e9;
   p.cd.console_log = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   return { w, p };
 }
 /** 웨이브가 적을 내지 않게 한 채로 한 틱 */
@@ -177,6 +178,7 @@ test('함께 하면 최소 수가 늘지만, 적 수의 상한은 같다 (무료
   const b = addPlayer(w, 'b');
   a.xpNext = b.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   step(w, DT);
   assert.equal(w.enemies.length, Math.round(STAGE[0]!.min * 1.4), '두 명: 최소 × 1.4');
 });
@@ -357,6 +359,7 @@ test('보물상자는 기본 단계보다 적게 나오지 않는다: 굴리는 
   p.xpNext = 1e9;
   p.cd.console_log = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   // 굴림 값 (× 100 이 확률(%)보다 작으면 성공). 0.0001 은 언제나 성공, 0.9999 는 100% 가 아니면 실패
   const values = [0.0001, 0.02, 0.04, 0.08, 0.3, 0.6, 0.9999];
   const odds: Odds[] = [[2, 3, 10, 50], ...STAGE.flatMap((wv) => (wv.boss ? [wv.boss.chest] : []))];

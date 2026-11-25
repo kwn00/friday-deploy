@@ -43,6 +43,7 @@ function quietWorld(seed: number): { w: World; p: Player } {
   const p = addPlayer(w, 'a');
   p.xpNext = 1e9;
   w.itemCd = 1e9;
+  w.magnetCd = 1e9;
   noSpawn(w);
   return { w, p };
 }
@@ -163,14 +164,22 @@ test('칸 제한: 무기 6칸·패시브 6칸이 차면 새 것은 선택지에 
     pickOffer(w, p.id, round % p.offers.length);
     for (const id of owned) assert.ok((p.up[id] ?? 0) <= UPGRADES[id].max, `${id} 단계 상한`);
   }
-  // 모두 최대가 되면 선택지 대신 회복 아이템 하나만큼 (30) 채운다 (뱀서: 금화 또는 Floor Chicken. 우리는 금화가 없다)
+  // 모두 최대가 되면(강화를 모두 마쳤다) 선택지 대신 체력을 가득 채운다 (0.3.5 부터. 예전에는 회복 아이템 하나만큼 30)
   for (const id of owned) p.up[id] = UPGRADES[id].max;
   p.hp = 10;
   p.xp = p.xpNext = 5;
+  w.events.length = 0;
   w.gems.push({ id: w.nextId++, x: p.x, y: p.y, v: 1 });
   tick(w, []);
   assert.equal(p.offers, null);
-  assert.equal(p.hp, 40);
+  assert.equal(p.hp, maxHpOf(p), '체력이 가득 찬다');
+  const max = Math.ceil(maxHpOf(p));
+  assert.deepEqual(
+    w.events.filter((e) => e.type === 'refill'),
+    [{ type: 'refill', pid: p.id, hp: max - 10 }],
+    '찬 사람에게 찬 양을 알린다',
+  );
+  assert.ok(!w.events.some((e) => e.type === 'offers'), '선택지는 뜨지 않는다');
 });
 
 test('칸 제한: 칸이 남아 있으면 처음 보는 것도 나온다 (무기 1개로 시작)', () => {
@@ -278,9 +287,10 @@ test('git clean (뱀서 Pentagram): 화면 안의 적을 사신만 빼고 지운
     const reaper = enemy(9305, p.x - 40, p.y - 40, 'monday', 1e9);
     w.gems.push({ id: 9304, x: p.x + 50, y: p.y + 50, v: 3 });
     w.heals.push({ id: 9306, x: p.x - 60, y: p.y });
-    // 필드 아이템: 화면 안(주울 수 있는 거리 밖)의 셋과 화면 밖의 하나. 보물상자: 전에 잡은 보스가 화면 안과 밖에 남긴 것
-    const inView = [9310, 9311, 9312];
+    // 필드 아이템: 화면 안(주울 수 있는 거리 밖)의 넷과 화면 밖의 하나. 보물상자: 전에 잡은 보스가 화면 안과 밖에 남긴 것
+    const inView = [9310, 9311, 9312, 9316];
     w.items.push(
+      { id: 9316, kind: 'magnet', x: p.x + 80, y: p.y - 120, ttl: 60 },
       { id: 9310, kind: 'heal', x: p.x + 120, y: p.y, ttl: 60 },
       { id: 9311, kind: 'levelup', x: p.x, y: p.y - 200, ttl: 60 },
       { id: 9312, kind: 'revive', x: p.x - 150, y: p.y + 150, ttl: 60 },
@@ -304,7 +314,7 @@ test('git clean (뱀서 Pentagram): 화면 안의 적을 사신만 빼고 지운
     } else {
       assert.equal(w.gems.length, 0, '지우는 쪽: 경험치를 남기지 않고, 있던 것도 지운다');
       assert.equal(w.heals.length, 0);
-      assert.ok(inView.every((id) => !ids.has(id)), '지우는 쪽: 화면 안의 필드 아이템(피자·LGTM·백업)도 지운다');
+      assert.ok(inView.every((id) => !ids.has(id)), '지우는 쪽: 화면 안의 필드 아이템(피자·LGTM·백업·자석)도 지운다');
     }
   }
 });

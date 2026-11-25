@@ -184,7 +184,7 @@ function dropGem(world: World, x: number, y: number, v: number): void {
     const i = farthestGem(world);
     if (i >= 0) v += world.gems.splice(i, 1)[0]!.v;
     else if (!mergeHeld(world)) {
-      // 모두 끌려오는 중 (거의 없는 일): 새로 만들지 않고 하나에 더한다
+      // 모두 끌려오는 중이고 합칠 것도 없다 (거의 없는 일. 자석을 주운 직후처럼 모두 끌려오는 중이면 대개 mergeHeld 가 자리를 만든다): 새로 만들지 않고 하나에 더한다
       world.gems[0]!.v += v;
       return;
     }
@@ -193,7 +193,7 @@ function dropGem(world: World, x: number, y: number, v: number): void {
 }
 
 /**
- * 땅이 가득한데 모두 끌려오는 중일 때: rm -rf node_modules 가 끌어 같은 주인을 기다리는 경험치 둘을 하나로 합쳐 자리를 만든다
+ * 땅이 가득한데 모두 끌려오는 중일 때: rm -rf node_modules 나 자석이 끌어 같은 주인을 기다리는 경험치 둘을 하나로 합쳐 자리를 만든다
  * (주인이 레벨업을 고르는 동안 오래 기다릴 수 있다: 그동안 동료가 잡은 적도 그 자리에 경험치를 떨어뜨리게).
  * 합친 값과 주인은 그대로라 아무것도 잃지 않는다. 합칠 것이 없으면 false
  */
@@ -766,7 +766,7 @@ function useWeapon(world: World, grid: Grid, p: Player, w: WeaponId, st: WeaponS
     case 'git_clean':
     case 'rm_rf': {
       // 뱀서 Pentagram: 화면 안의 적을 모두 지운다 (사신만 버틴다). 쓸 때마다 한 번 굴려서
-      // - 대개는 경험치 없이 지우고, 화면의 경험치·회복 아이템·필드 아이템(피자·LGTM·백업)도 함께 지운다
+      // - 대개는 경험치 없이 지우고, 화면의 경험치·회복 아이템·필드 아이템(피자·LGTM·백업·자석)도 함께 지운다
       // - '남길 확률'(단계와 운으로 오른다)에 걸리면 처치한 것처럼 경험치를 떨어뜨리고, 아이템은 그대로 둔다
       // 보물상자는 어느 쪽이든 지우지 않는다 (git clean 은 저절로 터지므로, 보스를 잡고 상자로 가는 사이에 터져도 상자는 남는다.
       // 지워진 보스의 상자도 그 자리에 떨어진다)

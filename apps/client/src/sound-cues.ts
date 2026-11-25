@@ -68,6 +68,7 @@ const ITEM_SOUND: Record<(typeof FIELD_ITEM_KINDS)[number], SfxId> = {
   levelup: 'pickup',
   revive: 'backup',
   chest: 'chest',
+  magnet: 'magnet',
 };
 
 export class SoundCues {

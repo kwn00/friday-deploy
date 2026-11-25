@@ -623,14 +623,14 @@ export function upgradesOf(up: Partial<Record<UpgradeId, number>>): OwnedUpgrade
 /* ───────────── 필드 아이템 ───────────── */
 
 /** 순서가 곧 통신에서 쓰는 번호다. 중간에 끼워 넣지 말고 뒤에 추가할 것 */
-export const FIELD_ITEM_KINDS = ['heal', 'levelup', 'revive', 'chest'] as const;
+export const FIELD_ITEM_KINDS = ['heal', 'levelup', 'revive', 'chest', 'magnet'] as const;
 export type FieldItemKind = (typeof FIELD_ITEM_KINDS)[number];
 
 export interface FieldItemDef {
   name: string;
   icon: string;
   desc: string;
-  /** 놓일 때 이 종류가 뽑힐 비중 */
+  /** 놓일 때 이 종류가 뽑힐 비중 (0 이면 이 굴림으로는 나오지 않는다: 보물상자는 보스가, 자석은 따로 센 시간이 놓는다) */
   weight: number;
 }
 
@@ -640,4 +640,6 @@ export const FIELD_ITEMS: Record<FieldItemKind, FieldItemDef> = {
   revive: { name: '백업', icon: '💾', desc: '쓰러져도 한 번 되살아난다', weight: 1 },
   // 보스가 떨어뜨린다 (저절로 놓이지 않는다). 열면 가진 무기·패시브가 1, 3 또는 5번 오른다
   chest: { name: '보물상자', icon: '🎁', desc: '가진 것이 1~5번 강화된다', weight: 0 },
+  // 다른 필드 아이템과 따로, 평균 MAGNET_INTERVAL 초에 하나 놓인다 (sim.ts). 주우면 맵의 경험치가 모두 끌려온다
+  magnet: { name: '자석', icon: '🧲', desc: '맵의 경험치를 모두 끌어당긴다', weight: 0 },
 };
