@@ -11,6 +11,7 @@ import {
   MAGNET_INTERVAL,
   MAX_FIELD_ITEMS,
   MAX_MAGNETS,
+  OFFER_TIMEOUT,
   PLAYER_BASE_PICKUP,
   UPGRADES,
   UPGRADE_IDS,
@@ -226,6 +227,89 @@ test('자석: 스냅샷에는 거리와 상관없이 실리고, 이진 스냅샷
   assert.equal(FIELD_ITEM_KINDS[back[1]], 'magnet');
   // 필드 아이템은 절대 좌표(f32)로 오간다
   assert.ok(Math.abs(back[2] - row[2]) < 0.01 && Math.abs(back[3] - row[3]) < 0.01);
+});
+
+test('자석: 동료가 고르는 동안 기다리던 경험치는 내 자석이 가져온다. 지금 끌어당기는 중인 것은 그대로다', () => {
+  const { w, ps } = quiet(59, 2);
+  const [a, b] = ps as [Player, Player];
+  b.x = a.x + 2500;
+  b.y = a.y;
+  w.gems.push({ id: 8301, x: a.x + 1200, y: a.y, v: 1 }, { id: 8302, x: a.x - 1500, y: a.y, v: 1 });
+  putMagnet(w, a.x + 5, a.y);
+  quietStep(w);
+  // a 가 고르는 중: 기다리던 것은 b 의 자석이 가져간다
+  a.offers = ['coffee'];
+  putMagnet(w, b.x + 5, b.y);
+  w.events.length = 0;
+  quietStep(w);
+  assert.ok(w.gems.every((g) => g.to === b.id && g.hold), '모두 b 에게');
+  assert.deepEqual(w.events.find((e) => e.type === 'magnet'), { type: 'magnet', pid: b.id, gems: 2 });
+  // b 가 끌어당기는 중(고르지 않는다)이면 a 의 다음 자석은 손대지 않는다. 이미 내게 오던 것은 다시 세지 않는다
+  a.offers = null;
+  w.gems.push({ id: 8303, x: a.x + 900, y: a.y, v: 1, to: a.id, sp: 200 });
+  putMagnet(w, a.x + 5, a.y);
+  w.events.length = 0;
+  quietStep(w);
+  const g = (id: number) => w.gems.find((x) => x.id === id);
+  assert.equal(g(8301)?.to, b.id);
+  assert.equal(g(8302)?.to, b.id);
+  assert.equal(g(8303)?.to, a.id);
+  assert.equal(g(8303)?.hold, true, '이미 내게 오던 것도 기다리게 된다');
+  assert.deepEqual(w.events.find((e) => e.type === 'magnet'), { type: 'magnet', pid: a.id, gems: 0 }, '새로 끈 것만 센다');
+});
+
+test('자석: 함께 하는 판에서 고르지 않아 시간이 다 되면(자리를 비움) 기다리던 경험치를 놓는다. 혼자 하는 판은 놓지 않는다', () => {
+  for (const players of [2, 1]) {
+    const { w, ps } = quiet(60, players);
+    const a = ps[0]!;
+    const b = ps[1];
+    if (b) {
+      b.x = a.x + 3000;
+      b.y = a.y;
+    }
+    w.gems.push({ id: 8401, x: a.x + 1500, y: a.y, v: 1 }, { id: 8402, x: a.x, y: a.y - 1800, v: 1 });
+    putMagnet(w, a.x + 5, a.y);
+    quietStep(w);
+    a.offers = ['coffee'];
+    const at = w.gems.map((g) => [g.x, g.y]);
+    for (let i = 0; i < OFFER_TIMEOUT * 20 + 2; i++) quietStep(w);
+    assert.equal(a.offers, null, `${players}명: 서버가 대신 골랐다`);
+    assert.equal(a.tally.auto.coffee, 1);
+    if (b) {
+      assert.ok(w.gems.every((g) => g.to === undefined && g.hold === undefined), '함께: 놓였다 (누구나 주울 수 있다)');
+      assert.deepEqual(w.gems.map((g) => [g.x, g.y]), at, '놓인 자리는 기다리던 자리');
+      // 놓인 것은 b 가 다가가면 평소처럼 끌어당긴다
+      const left = w.gems[0]!;
+      b.x = left.x + 10;
+      b.y = left.y;
+      for (let i = 0; i < 20; i++) quietStep(w);
+      assert.ok(!w.gems.includes(left));
+      assert.equal(b.xp, 1);
+    } else {
+      assert.ok(w.gems.every((g) => g.to === a.id && g.hold === true), '혼자: 놓지 않고 이어서 끌려온다');
+    }
+  }
+});
+
+test('자석: 맵에 이미 자석이 있으면 그 차례는 건너뛰고, 다른 필드 아이템의 수(MAX_FIELD_ITEMS)에는 세지 않는다', () => {
+  const { w, ps } = quiet(61);
+  const p = ps[0]!;
+  // 이미 있는 자석(멀리, 오래 남는다) + 때가 된 다음 자석
+  w.items.push({ id: 8501, kind: 'magnet', x: p.x + 2000, y: p.y, ttl: 1e9 });
+  w.magnetCd = 0;
+  quietStep(w);
+  assert.equal(w.items.filter((it) => it.kind === 'magnet').length, MAX_MAGNETS, '건너뛴다');
+  assert.ok(w.magnetCd > MAGNET_INTERVAL * 0.6 - 1, '다음 차례는 다시 센다');
+  // 피자·LGTM·백업이 가득(3개)이어도 자석은 놓이고, 자석이 있어도 피자·LGTM·백업은 3개까지 놓인다
+  w.items.length = 0;
+  for (let k = 0; k < MAX_FIELD_ITEMS; k++) w.items.push({ id: 8510 + k, kind: 'heal', x: p.x + 3000 + k, y: p.y, ttl: 1e9 });
+  w.magnetCd = 0;
+  quietStep(w);
+  assert.equal(w.items.filter((it) => it.kind === 'magnet').length, 1, '다른 아이템이 가득이어도 자석은 놓인다');
+  w.items = w.items.filter((it) => it.kind === 'magnet' || it.id !== 8510);
+  w.itemCd = 0;
+  quietStep(w);
+  assert.equal(w.items.filter((it) => it.kind !== 'magnet' && it.kind !== 'chest').length, MAX_FIELD_ITEMS, '자석이 자리를 차지하지 않는다');
 });
 
 /** 무기 6칸·패시브 6칸을 모두 최대로 채운다 (더 올릴 것이 없다) */

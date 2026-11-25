@@ -1,4 +1,4 @@
-import { FIELD_ITEMS } from '@friday-deploy/shared';
+import { FIELD_ITEMS, sanitizeName, type FieldItemKind } from '@friday-deploy/shared';
 
 /**
  * 서버가 알려 준 자석·체력 채우기의 알림 문구. 숫자는 서버에서 온 값이라 모양을 확인하고 쓴다:
@@ -25,3 +25,19 @@ export function refillText(hp: unknown): string {
   const n = count(hp, MAX_HP_SHOWN);
   return `❤️ 레벨 업! 체력을 가득 채웠어요${n !== null && n > 0 ? ` (+${n})` : ''}`;
 }
+
+/** 동료가 자석을 주웠을 때. name 은 서버가 보낸 동료의 이름이라 다시 정제해서 쓴다 (모르면 '동료') */
+export function magnetPeerText(name: unknown): string {
+  const who = typeof name === 'string' && name.length > 0 ? `${sanitizeName(name)} 님이` : '동료가';
+  return `${FIELD_ITEMS.magnet.icon} ${who} 자석을 주웠어요! 경험치가 모두 그쪽으로 끌려가요`;
+}
+
+/**
+ * 한 번에 여러 아이템이 새로 놓였을 때 알릴 순서 (앞일수록 먼저). 놓일 때의 비중(weight)은 0 이 "따로 놓는다"는 뜻이라
+ * 드문 정도로 쓸 수 없다: 자석(평균 3분에 하나)은 백업(평균 3시간에 하나)보다 흔하다
+ */
+const NOTICE_ORDER: readonly FieldItemKind[] = ['chest', 'revive', 'magnet', 'levelup', 'heal'];
+export const noticeRank = (kind: FieldItemKind): number => {
+  const i = NOTICE_ORDER.indexOf(kind);
+  return i < 0 ? NOTICE_ORDER.length : i;
+};

@@ -21,6 +21,7 @@ import {
   evolutionsUsing,
   evolvedAway,
   isWeapon,
+  maxHpOf,
   ownedUpgrades,
   pickOffer,
   readyEvolutions,
@@ -154,7 +155,7 @@ test('레벨업 선택지: 진화한 무기와 진화해서 없어진 재료 무
   assert.ok(seen.has('broadcast') && seen.has('test_coverage'), '다른 것은 그대로 나온다');
 });
 
-test('레벨업 선택지: 진화 뒤에 남는 것을 다 올리면 선택지 대신 회복한다 (진화한 무기를 기다리며 멈추지 않는다)', () => {
+test('레벨업 선택지: 진화 뒤에 남는 것을 다 올리면 선택지 대신 체력을 가득 채운다 (진화한 무기를 기다리며 멈추지 않는다)', () => {
   const { w, p } = quietWorld(304);
   p.up = {};
   // 진화한 무기 6개로 무기 칸이 가득, 패시브도 모두 최대
@@ -164,9 +165,11 @@ test('레벨업 선택지: 진화 뒤에 남는 것을 다 올리면 선택지 �
   p.hp = 10;
   p.xp = p.xpNext = 5;
   w.gems.push({ id: w.nextId++, x: p.x, y: p.y, v: 1 });
+  const before = w.events.length;
   tick(w, []);
   assert.equal(p.offers, null);
-  assert.ok(p.hp > 10);
+  assert.equal(p.hp, maxHpOf(p), '체력이 가득 찬다');
+  assert.equal(w.events.slice(before).filter((e) => e.type === 'refill').length, 1);
   // 선택지를 고르는 흐름도 그대로 (가짜 선택은 받지 않는다)
   assert.equal(pickOffer(w, p.id, 0), false);
 });

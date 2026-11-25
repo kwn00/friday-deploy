@@ -212,6 +212,13 @@ body {
 
 /* 아이템 알림: 같은 자리에 잠깐 떴다 사라진다. 긴 문구는 줄을 바꾼다 */
 .hud__note--toast {
+  /* 가운데 맞춤을 left: 50% + translate 로 하면 줄바꿈 폭이 화면의 절반에 묶여 긴 알림이 좁은 화면에서 4줄이 된다.
+     양쪽을 0 으로 두고 내용만큼의 폭(최대 화면 - 24px)을 가운데에 놓는다 */
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin-inline: auto;
+  transform: none;
   white-space: normal;
   word-break: keep-all;
   color: var(--text);

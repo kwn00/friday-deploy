@@ -527,10 +527,14 @@ export class Room {
         // 보물상자: 연 사람에게만 무엇이 올랐는지 알려 준다 (끊겨 있으면 다음 스냅샷의 강화 단계로 알 수 있다)
         const conn = this.conns.get(ev.pid);
         if (conn) this.send(conn, { t: 'chest', items: ev.items, heal: ev.heal });
-      } else if (ev.type === 'magnet' || ev.type === 'refill') {
-        // 자석을 주운 사람, 체력이 가득 찬 사람에게만 알린다 (화면의 알림용. 끊겨 있으면 보내지 않는다: 결과는 스냅샷에 이미 있다)
+      } else if (ev.type === 'magnet') {
+        // 자석: 방의 모두에게 누가 주웠는지 알린다 (함께 하는 판에서는 동료 근처의 경험치도 주운 사람에게 날아가므로, 왜 그런지 알 수 있게).
+        // 화면의 알림용이다: 끌어당기는 것은 서버가 하고, 끊겨 있으면 보내지 않는다 (send 가 열린 연결에만 보낸다)
+        for (const conn of this.conns.values()) this.send(conn, { t: 'magnet', by: ev.pid, gems: ev.gems });
+      } else if (ev.type === 'refill') {
+        // 강화를 모두 마친 뒤의 레벨업으로 체력이 가득 찬 사람에게만 (화면의 알림용. 체력은 스냅샷이 보낸다)
         const conn = this.conns.get(ev.pid);
-        if (conn) this.send(conn, ev.type === 'magnet' ? { t: 'magnet', gems: ev.gems } : { t: 'refill', hp: ev.hp });
+        if (conn) this.send(conn, { t: 'refill', hp: ev.hp });
       } else if (ev.type === 'over') {
         this.finish();
         return true;

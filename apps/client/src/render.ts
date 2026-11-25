@@ -60,7 +60,7 @@ const ITEM_FX: Record<FieldItemKind, { glow: string; spark: [string, string] }> 
   levelup: { glow: '249,226,175', spark: ['#f9e2af', '#a6e3a1'] },
   revive: { glow: '137,220,235', spark: ['#89dceb', '#eff1f5'] },
   chest: { glow: '249,226,175', spark: ['#f9e2af', '#fab387'] },
-  magnet: { glow: '243,139,168', spark: ['#f38ba8', '#bac2de'] },
+  magnet: { glow: '230,69,83', spark: ['#e64553', '#bac2de'] },
 };
 
 /** 화면 가장자리 표시의 테두리·화살표 색 (미니맵의 표시와 같은 색) */
@@ -69,7 +69,7 @@ const EDGE_COLOR: Record<FieldItemKind, string> = {
   levelup: '#f9e2af',
   revive: '#89dceb',
   chest: '#fab387',
-  magnet: '#f38ba8',
+  magnet: '#e64553',
 };
 /** 가장자리 표시: 상자 반쪽 크기, 화살표 길이, 화면 가운데(캐릭터)에서 떨어뜨릴 최소 거리 (논리 픽셀. 캐릭터와 닉네임을 덮지 않을 만큼) */
 const EDGE_HALF = 9;

@@ -1208,7 +1208,7 @@ test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레�
   assert.equal(me.rerolls, 1);
 });
 
-test('자석·체력 채우기: 주운 사람(채워진 사람)에게만 알린다. 끌어당기기와 체력은 서버가 한다', () => {
+test('자석은 방의 모두에게 누가 주웠는지, 체력 채우기는 채워진 사람에게만 알린다. 끌어당기기와 체력은 서버가 한다', () => {
   const rooms = new RoomManager();
   const room = rooms.create('coop')!;
   const a = join(room, 'a');
@@ -1228,8 +1228,8 @@ test('자석·체력 채우기: 주운 사람(채워진 사람)에게만 알린�
   w.gems.push({ id: 90_001, x: pa.x + 2000, y: pa.y, v: 1 }, { id: 90_002, x: pa.x - 1200, y: pa.y + 900, v: 1 });
   w.items.push({ id: 90_010, kind: 'magnet', x: pa.x + 3, y: pa.y, ttl: 90 });
   mock.timers.tick(50);
-  assert.deepEqual(last(a.ws, 'magnet'), { t: 'magnet', gems: 2 });
-  assert.equal(last(b.ws, 'magnet'), undefined, '다른 사람에게는 보내지 않는다');
+  assert.deepEqual(last(a.ws, 'magnet'), { t: 'magnet', by: pa.id, gems: 2 });
+  assert.deepEqual(last(b.ws, 'magnet'), { t: 'magnet', by: pa.id, gems: 2 }, '동료에게도 누가 주웠는지 알린다 (동료 근처의 경험치도 날아가므로)');
   assert.ok(w.gems.every((g) => g.to === pa.id), '끌어당기는 것은 서버');
 
   // 강화를 모두 마친 뒤의 레벨업 (무기 6칸·패시브 6칸이 모두 최대. 저절로 차는 워라밸은 빼서 찬 양을 정확히 잰다): 체력이 가득 차고 그 사람에게만 알린다

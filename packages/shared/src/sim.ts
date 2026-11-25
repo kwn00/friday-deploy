@@ -247,7 +247,8 @@ export interface Gem {
   /** 끌려가는 현재 속도 (px/s) */
   sp?: number;
   /**
-   * rm -rf node_modules 가 끌어당긴 것: 주인이 레벨업을 고르는 동안 놓지 않고 그 자리에서 기다렸다가 이어서 끌려간다
+   * rm -rf node_modules 나 자석이 끌어당긴 것: 주인이 레벨업을 고르는 동안 놓지 않고 그 자리에서 기다렸다가 이어서 끌려간다
+   * (함께 하는 판에서 고르지 않아 시간이 다 되면 놓는다: releaseHeld)
    * (함께 하는 판에서는 고르는 동안에도 월드가 돈다. 놓아 버리면 주인의 획득 범위 밖에 그대로 남는다)
    */
   hold?: true;
@@ -486,10 +487,28 @@ export function pickOffer(world: World, id: number, choice: number, auto = false
   levelUp(p, up);
   p.offers = null;
   p.offerTimer = 0;
+  if (auto) releaseHeld(world, p);
   // 고르고 나서 잠깐 무적 (뱀서: 레벨업 뒤 "a brief moment of invulnerability")
   p.iframe = Math.max(p.iframe, INVULN_SECONDS);
   checkLevelUp(world, p);
   return true;
+}
+
+/**
+ * 고르지 않아 시간이 다 된 사람(자리를 비웠거나 연결이 끊겼다)을 기다리던 경험치(자석, rm -rf node_modules 가 끈 것)를 그 자리에 놓는다.
+ * 함께 하는 판에서만: 고르는 동안에도 월드가 돌아서, 놓지 않으면 레벨업마다 20초씩 맵의 경험치가 묶여 동료가 줍지 못한다.
+ * 놓인 것은 보통 경험치처럼 가까이 온 사람이 끌어당긴다. 혼자 하는 판은 고르는 동안 월드가 멈춰 있으므로 놓지 않는다 (놓으면 손해만 본다)
+ */
+function releaseHeld(world: World, p: Player): void {
+  let others = false;
+  for (const q of world.players.values()) if (q !== p && q.alive) others = true;
+  if (!others) return;
+  for (const g of world.gems) {
+    if (g.to !== p.id || !g.hold) continue;
+    g.to = undefined;
+    g.sp = undefined;
+    g.hold = undefined;
+  }
 }
 
 /** 강화 하나를 한 단계 올린다 (레벨업 선택과 보물상자가 같이 쓴다) */
@@ -614,17 +633,19 @@ function takeItem(world: World, p: Player, it: FieldItem): void {
 
 /**
  * 자석 (뱀서 Vacuum): 맵의 경험치를 거리와 상관없이 모두 이 사람에게 끌어당긴다. 주운 순간 땅에 있는 것만 (나중에 떨어지는 것은 끌지 않는다).
- * - 다른 살아 있는 사람이 이미 끌어당기고 있는 것은 그대로 둔다 (곧 그 사람이 먹는다). 다만 그 사람이 레벨업을 고르는 중이라
- *   다음 틱에 놓을 것(rm -rf node_modules 가 끈 것이 아닌 것)과, 쓰러졌거나 나간 사람이 끌던 것은 내가 가져온다
+ * - 다른 살아 있는 사람이 지금 끌어당기고 있는 것은 그대로 둔다 (곧 그 사람이 먹는다). 그 사람이 레벨업을 고르는 중이라
+ *   기다리고 있는 것(앞서 주운 자석이나 rm -rf node_modules 가 끈 것)과, 쓰러졌거나 나간 사람이 끌던 것은 내가 가져온다
+ *   (함께 하는 판에서 동료가 고르는 동안 맵의 경험치가 묶여 있으면, 내 자석으로 다시 가져올 수 있게)
  * - rm -rf node_modules 가 끈 것처럼(hold) 내가 레벨업을 고르는 동안에도 놓지 않고 그 자리에서 기다렸다가 이어서 끌려간다
- *   (자석으로 레벨이 여러 번 오를 수 있고, 함께 하는 판에서는 고르는 동안에도 월드가 돈다. 놓아 버리면 내 획득 범위 밖에 그대로 남는다)
+ *   (자석으로 레벨이 여러 번 오를 수 있고, 함께 하는 판에서는 고르는 동안에도 월드가 돈다. 놓아 버리면 내 획득 범위 밖에 그대로 남는다).
+ *   고르지 않고 시간이 다 되면 놓는다 (pickOffer)
  */
 function pullAllGems(world: World, p: Player): void {
   let pulled = 0;
   for (const g of world.gems) {
     if (g.to !== p.id) {
       const owner = g.to === undefined ? undefined : world.players.get(g.to);
-      if (owner && owner.alive && (g.hold || owner.offers === null)) continue;
+      if (owner && owner.alive && owner.offers === null) continue;
       g.to = p.id;
       g.sp = GEM_PULL_SPEED;
       pulled++;
@@ -1195,7 +1216,7 @@ function advance(world: World, dt: number): void {
   const gains = new Map<Player, number>();
   world.gems = world.gems.filter((g) => {
     let p = g.to === undefined ? undefined : world.players.get(g.to);
-    // rm -rf 가 끈 것은 주인이 고르는 동안 그 자리에서 기다린다 (쓰러지거나 나가면 놓는다)
+    // rm -rf·자석이 끈 것은 주인이 고르는 동안 그 자리에서 기다린다 (쓰러지거나 나가면 놓는다)
     if (p && g.hold && p.alive && p.offers !== null) return true;
     // 끌던 사람이 쓰러졌거나, 나갔거나, 레벨업 선택 중이면 놓는다 (선택 중에는 예전에도 줍지 못했다)
     if (p && (!p.alive || p.offers !== null)) p = undefined;
@@ -1398,7 +1419,7 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
     for (const g of gems) if (tierOf(g) === tier) snap.g.push([g.id, r1(g.x), r1(g.y), tier]);
   }
   for (const h of world.heals) if (near(h.x, h.y)) snap.h.push([h.id, Math.round(h.x), Math.round(h.y)]);
-  // 필드 아이템은 거리와 상관없이 모두에게 보낸다: 찾아가라고 놓는 것이라 숨길 정보가 아니다 (최대 MAX_FIELD_ITEMS 개).
+  // 필드 아이템은 거리와 상관없이 모두에게 보낸다: 찾아가라고 놓는 것이라 숨길 정보가 아니다 (최대 MAX_FIELD_ITEMS + MAX_MAGNETS 개).
   // 보물상자는 미니맵 범위의 두 배 안의 것만 (보스는 가까이서 쓰러지므로 대개 그 안이다. 최대 MAX_CHESTS 개)
   const c2 = (VIEW_RADIUS * 2) ** 2;
   for (const it of world.items) if (it.kind !== 'chest' || (it.x - cx) ** 2 + (it.y - cy) ** 2 <= c2) snap.i.push([it.id, FIELD_ITEM_KINDS.indexOf(it.kind), r1(it.x), r1(it.y), it.ttl <= FIELD_ITEM_FADE ? 1 : 0]);
