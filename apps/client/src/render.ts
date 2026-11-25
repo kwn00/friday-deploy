@@ -3,6 +3,7 @@ import {
   ENEMIES,
   ENEMY_IDS,
   FIELD_ITEM_KINDS,
+  FREEZE_BEAM_WIDTH,
   SHOT_KINDS,
   ZONE_KINDS,
   duckOffset,
@@ -130,6 +131,8 @@ const GROUND: ReadonlySet<ZoneKind> = new Set<ZoneKind>(['pool', 'trail', 'fire'
 const ZONE_FADE = 6;
 /** 웅덩이가 처음에 퍼지는 시간 (틱) */
 const POOL_GROW = 3;
+/** 패킷 플러딩의 물결 뒤로 따라오는 옅은 고리의 간격 (월드 단위. 그림만이다) */
+const WAVE_GAP = 24;
 
 type Row = number[];
 interface Index {
@@ -613,8 +616,8 @@ export class Renderer {
       let spr = this.spr.shots[kind];
       const x = mix(p?.[2], s[2]);
       const y = mix(p?.[3], s[3]);
-      // 날아가는 커밋과 멀티스레드의 실: 날아온 쪽으로 꼬리를 그린다 (방향은 직전 위치에서)
-      if ((kind === 'drill' || kind === 'bomb') && p) this.drawTail(kind, sx(x), sy(y), s[2] - p[2]!, s[3] - p[3]!, S);
+      // 날아가는 커밋과 멀티스레드의 실, 감시 새: 날아온 쪽으로 꼬리를 그린다 (방향은 직전 위치에서)
+      if ((kind === 'drill' || kind === 'bomb' || kind === 'watch') && p) this.drawTail(kind, sx(x), sy(y), s[2] - p[2]!, s[3] - p[3]!, S);
       if (kind === 'canary' && p) {
         // 나는 쪽을 바라본다 (좌우로 거의 안 움직일 때는 바라보던 쪽 그대로)
         const dx = s[2] - p[2]!;
@@ -790,7 +793,8 @@ export class Renderer {
   /**
    * 공격 영역을 그린다. ground 가 true 면 바닥에 남는 것(웅덩이, 커밋 발자국), false 면 나머지(베기, 번개, 폭발, 광선, 지우기, 세로 띠).
    * 휴대폰에서 영역이 150개쯤 있어도 부드럽도록 사각형·원·선만 쓴다 (그라디언트·그림자 없음).
-   * 동작 줄이기 설정(calm)에서는 커지거나 쓸고 지나가는 움직임 없이 옅게 나타났다 흐려지기만 한다.
+   * 동작 줄이기 설정(calm)에서는 커지거나 쓸고 지나가는 움직임 없이 옅게 나타났다 흐려지기만 한다
+   * (패킷 플러딩의 물결만 예외: 앞의 고리 하나는 퍼진다. 화면보다 커서 다 퍼진 모양으로는 보이지 않고, 언제 맞는지 알려야 한다).
    */
   private drawZones(c: ZoneCtx, ground: boolean): void {
     const { ctx } = this;
@@ -998,20 +1002,58 @@ export class Renderer {
         break;
       }
       case 'blast': {
-        // 폭발: 주황 원 + 노란 속. 순간 커졌다가 흐려진다
+        // 폭발: 주황 원 + 노란 속. 순간 커졌다가 흐려진다.
+        // 24시간 모니터링(aux 1)은 청록 고리와 옅은 속: 큰 폭발(반경 72)이 1초에 4번 터져도 눈이 덜 어지럽게, 다른 폭발과도 구분되게
         const r = calm ? R : R * (0.55 + 0.45 * Math.min(1, p * 2.5));
-        ctx.globalAlpha = (calm ? 0.2 : 0.32) * fade;
-        ctx.fillStyle = '#fab387';
+        const watch = z.aux === 1;
+        const rim = watch ? '#94e2d5' : '#fab387';
+        ctx.globalAlpha = (calm ? 0.2 : watch ? 0.16 : 0.32) * fade;
+        ctx.fillStyle = rim;
         this.circle(X, Y, r);
         ctx.fill();
         ctx.globalAlpha = (calm ? 0.4 : 0.8) * fade;
-        ctx.strokeStyle = '#fab387';
-        ctx.lineWidth = S;
+        ctx.strokeStyle = rim;
+        ctx.lineWidth = (watch ? 2 : 1) * S;
         ctx.stroke();
-        ctx.globalAlpha = (calm ? 0.25 : 0.5) * fade;
-        ctx.fillStyle = '#f9e2af';
-        this.circle(X, Y, r * 0.5);
+        ctx.globalAlpha = (calm ? 0.25 : watch ? 0.18 : 0.5) * fade;
+        ctx.fillStyle = watch ? '#eff1f5' : '#f9e2af';
+        this.circle(X, Y, r * (watch ? 0.3 : 0.5));
         ctx.fill();
+        break;
+      }
+      case 'wave': {
+        // 패킷 플러딩의 물결: 생긴 자리에서 하늘색 고리가 퍼진다. 앞은 서버의 판정(combat.ts 의 sweepWave)과 같은 식이다:
+        // 남는 틱 수(D) 동안 반경까지 고르게 퍼지고, 생긴 틱의 스냅샷(from + 1)에서 이미 한 틱만큼 나가 있다.
+        // 뒤로 옅은 고리가 겹 수(aux) - 1 개 따라온다 (그림만. 판정은 하나다). 고리 위에는 패킷 봉투를 놓는다.
+        // 원 안은 칠하지 않는다 (방화벽처럼, 큰 원을 칠하면 휴대폰에서 그리는 비용이 크다).
+        // 동작 줄이기 설정에서는 앞의 고리 하나만 옅게 그린다 (따라오는 고리와 봉투 없이). 다른 영역처럼 다 퍼진 고리로 그리면
+        // 반경(234)이 휴대폰 화면보다 커서 보이지 않고, 언제 어디가 맞는지도 알 수 없다
+        const D = Math.max(1, z.to - z.from - 2);
+        const k = Math.max(0, Math.min(1, (c.t - z.from) / D));
+        const front = R * k;
+        const a = 1 - k * k;
+        ctx.strokeStyle = '#89b4fa';
+        ctx.globalAlpha = (calm ? 0.5 : 0.9) * a;
+        ctx.lineWidth = (calm ? 1 : 2) * S;
+        this.circle(X, Y, front);
+        ctx.stroke();
+        if (calm) break;
+        ctx.lineWidth = S;
+        for (let i = 1; i < z.aux; i++) {
+          const r = front - i * WAVE_GAP * S;
+          if (r <= 0) break;
+          ctx.globalAlpha = (0.45 / i) * a;
+          this.circle(X, Y, r);
+          ctx.stroke();
+        }
+        if (front < 4 * S) break;
+        const env = this.spr.shots.packet;
+        const n = Math.max(8, Math.min(16, Math.round(front / (15 * S))));
+        ctx.globalAlpha = a;
+        for (let i = 0; i < n; i++) {
+          const ang = z.id * 0.7 + (i * Math.PI * 2) / n;
+          ctx.drawImage(env, Math.round(X + Math.cos(ang) * front - env.width / 2), Math.round(Y + Math.sin(ang) * front - env.height / 2));
+        }
         break;
       }
       case 'band': {
@@ -1034,12 +1076,12 @@ export class Renderer {
         break;
       }
       case 'beam': {
-        // 코드 프리즈: 주인에게서 뻗는 얼음빛 광선 (판정 폭 10px)
+        // 코드 프리즈: 주인에게서 뻗는 얼음빛 광선 (서버의 판정 폭 FREEZE_BEAM_WIDTH 와 같은 폭)
         const a = (z.aux / 256) * Math.PI * 2;
         ctx.setTransform(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), X, Y);
         ctx.globalAlpha = (calm ? 0.2 : 0.35) * fade;
         ctx.fillStyle = '#89dceb';
-        ctx.fillRect(0, -5 * S, R, 10 * S);
+        ctx.fillRect(0, (-FREEZE_BEAM_WIDTH / 2) * S, R, FREEZE_BEAM_WIDTH * S);
         ctx.globalAlpha = (calm ? 0.55 : 0.9) * fade;
         ctx.fillStyle = '#eff1f5';
         ctx.fillRect(0, -S, R, 2 * S);
@@ -1166,19 +1208,28 @@ export class Renderer {
 
   /**
    * 날아가는 것의 꼬리 (X, Y 는 머리, 기기 픽셀. dx, dy 는 한 틱 동안 움직인 거리, 월드 단위).
-   * 날아가는 커밋(drill): 초록 줄 (git 그래프의 선처럼). 멀티스레드(bomb): 바늘이 끌고 가는 가는 분홍 실
+   * 날아가는 커밋(drill): 초록 줄 (git 그래프의 선처럼). 멀티스레드(bomb): 바늘이 끌고 가는 가는 분홍 실.
+   * 감시 새(watch): 날개 빛(노랑)이 남는 짧은 꼬리와 옅은 보라 띠
    */
-  private drawTail(kind: 'drill' | 'bomb', X: number, Y: number, dx: number, dy: number, S: number): void {
+  private drawTail(kind: 'drill' | 'bomb' | 'watch', X: number, Y: number, dx: number, dy: number, S: number): void {
     const len = Math.hypot(dx, dy);
     if (len < 0.5) return;
     const { ctx } = this;
-    const L = (kind === 'drill' ? 12 : 16) * S;
+    const L = (kind === 'drill' ? 12 : kind === 'watch' ? 10 : 16) * S;
     const tx = X - (dx / len) * L;
     const ty = Y - (dy / len) * L;
     ctx.beginPath();
     ctx.moveTo(X, Y);
     ctx.lineTo(tx, ty);
-    if (kind === 'drill') {
+    if (kind === 'watch') {
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = '#8f6fd1';
+      ctx.lineWidth = 3 * S;
+      ctx.stroke();
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = '#f9e2af';
+      ctx.lineWidth = S;
+    } else if (kind === 'drill') {
       ctx.globalAlpha = 0.55;
       ctx.strokeStyle = '#a6e3a1';
       ctx.lineWidth = 2 * S;

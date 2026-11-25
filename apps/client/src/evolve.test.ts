@@ -10,7 +10,14 @@ test('진화 안내: 재료 무기·짝 패시브·합치기마다 알맞은 문
   assert.equal(evolveHint('night_owl', {}), '✨ 합치기: 🐤 카나리아와 둘 다 최대 단계 → 🕐 24시간 모니터링');
   assert.equal(evolveHint('multicast', {}), '✨ 합치기: 📡 브로드캐스트와 둘 다 최대 단계 → 🌊 패킷 플러딩');
   assert.equal(evolveHint('prod_hotfix', {}), '✨ 진화: 💧 핫픽스 최대 단계와 함께 → 🌋 금요일 배포');
-  assert.equal(evolveHint('regex', {}), null, '진화가 없는 무기');
+  // 0.4.0 에 더한 진화
+  assert.equal(evolveHint('rollback', {}), '✨ 진화: 최대 단계 + 🙏 배포 기도 → ⏪ git reset --hard');
+  assert.equal(evolveHint('deploy_prayer', {}), '✨ 진화: ↩️ 롤백 최대 단계와 함께 → ⏪ git reset --hard');
+  assert.equal(evolveHint('regex', {}), '✨ 진화: 최대 단계 + 🚀 CDN → 🔎 grep -r');
+  assert.equal(evolveHint('cdn', {}), '✨ 진화: 🔣 정규표현식 최대 단계와 함께 → 🔎 grep -r');
+  assert.equal(evolveHint('ai_agent', {}), '✨ 진화: 최대 단계 + 📚 사이드 프로젝트 → 🧠 AGI');
+  assert.equal(evolveHint('side_project', {}), '✨ 진화: 🤖 AI 에이전트 최대 단계와 함께 → 🧠 AGI');
+  assert.equal(evolveHint('ctrl_x', {}), null, '진화가 없는 무기');
   assert.equal(evolveHint('coffee', {}), null, '짝이 아닌 패시브');
   assert.equal(evolveHint('test_coverage', { debugger: 1 }), null, '이미 진화했으면 알리지 않는다');
 });

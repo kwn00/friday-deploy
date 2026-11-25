@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import type { WebSocket } from 'ws';
-import { UPGRADES, decodeSnapshot, maxHpOf, xpForLevel, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
+import { OFFER_REROLLS, UPGRADES, decodeSnapshot, maxHpOf, xpForLevel, type RunResult, type ServerMsg, type Snapshot } from '@friday-deploy/shared';
+import { starterIndex, type StarterId } from '@friday-deploy/shared';
 import { Leaderboard, MemoryStore, type RunReport } from './leaderboard';
 import { RoomManager, type Conn, type Room } from './room';
 
@@ -47,9 +48,9 @@ function socket(): FakeSocket {
   };
 }
 
-function join(room: Room, name: string): { conn: Conn; ws: FakeSocket } {
+function join(room: Room, name: string, start?: StarterId): { conn: Conn; ws: FakeSocket } {
   const ws = socket();
-  const conn = room.join(ws as unknown as WebSocket, `sid-${name}`, name);
+  const conn = room.join(ws as unknown as WebSocket, `sid-${name}`, name, start);
   return { conn, ws };
 }
 const last = <T extends ServerMsg['t']>(ws: FakeSocket, t: T): Extract<ServerMsg, { t: T }> | undefined =>
@@ -1107,27 +1108,30 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   const me = room.world.players.get(a.conn.pid)!;
   room.onReroll(a.conn, me.level);
   assert.equal(last(a.ws, 'levelup'), undefined, '선택 중이 아니면 아무것도 보내지 않는다');
-  assert.equal(me.rerolls, 2);
+  assert.equal(me.rerolls, OFFER_REROLLS);
   me.xp = me.xpNext;
   room.world.gems.push({ id: 99_999, x: me.x, y: me.y, v: 1 });
   advance(100);
   const first = last(a.ws, 'levelup')!;
-  assert.deepEqual([first.timeout, first.rerolls, first.rerollable], [20, 2, true]);
+  assert.deepEqual([first.timeout, first.rerolls, first.rerollable], [20, OFFER_REROLLS, true]);
   advance(8000);
   room.onReroll(a.conn, me.level);
   advance(50);
   const second = last(a.ws, 'levelup')!;
   assert.notDeepEqual(second.offers, first.offers);
   assert.ok(second.offers.every((o) => !first.offers.some((f) => f.id === o.id)), '지금 카드는 다시 나오지 않는다');
-  assert.deepEqual([second.timeout, second.rerolls, second.rerollable], [20, 1, true]);
+  assert.deepEqual([second.timeout, second.rerolls, second.rerollable], [20, OFFER_REROLLS - 1, true]);
 
-  // 일시정지 중에는 틱이 돌지 않으므로 바로 보낸다
+  // 일시정지 중에는 틱이 돌지 않으므로 바로 보낸다 (남은 것을 모두 쓴다)
   room.onPause(a.conn, true);
-  const n = a.ws.msgs.length;
-  room.onReroll(a.conn, me.level);
-  const third = last(a.ws, 'levelup')!;
-  assert.ok(a.ws.msgs.length > n, '바로 왔다');
-  assert.deepEqual([third.rerolls, third.rerollable], [0, false]);
+  let third = second;
+  for (let left = OFFER_REROLLS - 2; left >= 0; left--) {
+    const n = a.ws.msgs.length;
+    room.onReroll(a.conn, me.level);
+    third = last(a.ws, 'levelup')!;
+    assert.ok(a.ws.msgs.length > n, '바로 왔다');
+    assert.deepEqual([third.rerolls, third.rerollable], [left, left > 0]);
+  }
 
   // 다 쓴 뒤의 새로고침: 위반이 아니고, 지금 선택지를 (한 번) 다시 보내 화면이 기다리며 멈춰 있지 않게 한다
   const before = a.ws.msgs.length;
@@ -1142,8 +1146,13 @@ test('새로고침: 선택지와 함께 남은 횟수가 가고, 새로고침하
   room.onReroll(a.conn, me.level - 1);
   assert.equal(a.ws.msgs.length, sent, '더는 답하지 않는다');
   room.onPause(a.conn, false);
-  assert.equal(room.onPick(a.conn, 0), true);
-  assert.equal(me.up[third.offers[0]!.id], third.offers[0]!.level, '고른 것은 마지막 새 선택지의 첫 카드');
+  // 선택지는 서버의 난수로 정해지므로 아래를 바꾸는 카드는 고르지 않는다 (첫 카드를 고르면 가끔 걸려 실패했다):
+  // - 배포 기도: 고를 때마다 새로고침이 하나 생긴다 (그 규칙은 reroll.test.ts 에서 본다)
+  // - git clean: 고르자마자 터져 다음 레벨업을 일으킬 경험치를 지울 수 있다
+  const pick = third.offers.findIndex((o) => o.id !== 'deploy_prayer' && o.id !== 'git_clean');
+  assert.ok(pick >= 0);
+  assert.equal(room.onPick(a.conn, pick), true);
+  assert.equal(me.up[third.offers[pick]!.id], third.offers[pick]!.level, '고른 것은 마지막 새 선택지의 카드');
 
   // 새 선택지가 뜨면 다시 한 번 답한다 (한 번만 답하는 것은 선택지마다다)
   me.xp = me.xpNext;
@@ -1173,7 +1182,7 @@ test('새로고침: 다시 연결해도 남은 새로고침 수가 이어진다'
   assert.ok(rooms.resume(keyOf(a.ws), ws as unknown as WebSocket));
   const again = last(ws, 'levelup')!;
   assert.deepEqual(again.offers, shown.offers);
-  assert.deepEqual([again.rerolls, again.rerollable], [1, true]);
+  assert.deepEqual([again.rerolls, again.rerollable], [OFFER_REROLLS - 1, true]);
 });
 
 test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레벨업으로 넘어간 뒤에 늦게 온 새로고침은 받지 않는다 (보지 못한 카드에 횟수를 쓰지 않는다)', () => {
@@ -1194,18 +1203,22 @@ test('새로고침: 시간이 다 되어 서버가 대신 고르고 다음 레�
   }
   const second = last(a.ws, 'levelup')!;
   assert.equal(second.level, first.level + 1, '서버가 대신 골랐고 다음 선택지가 떴다');
+  // 서버가 대신 고른 것이 배포 기도면 새로고침이 하나 늘어 있다 (단계마다 +1). 그 밖에는 처음 그대로다
+  const had = me.rerolls;
+  assert.equal(had, OFFER_REROLLS + (me.up.deploy_prayer ?? 0));
+  assert.equal(second.rerolls, had);
   // 화면은 아직 첫 선택지를 보고 새로고침을 눌렀다
   const before = a.ws.msgs.length;
   room.onReroll(a.conn, first.level);
   advance(50);
   assert.equal(a.ws.msgs.slice(before).filter((m) => m.t === 'levelup').length, 1, '지금 선택지를 한 번 다시 보낸다');
-  assert.equal(me.rerolls, 2, '횟수가 줄지 않는다');
+  assert.equal(me.rerolls, had, '횟수가 줄지 않는다');
   assert.deepEqual(me.offers, second.offers.map((o) => o.id), '다음 선택지는 그대로');
   assert.deepEqual(last(a.ws, 'levelup')!.offers, second.offers);
   // 지금 선택지의 레벨로 보내면 받는다
   room.onReroll(a.conn, second.level);
   advance(50);
-  assert.equal(me.rerolls, 1);
+  assert.equal(me.rerolls, had - 1);
 });
 
 test('자석은 방의 모두에게 누가 주웠는지, 체력 채우기는 채워진 사람에게만 알린다. 끌어당기기와 체력은 서버가 한다', () => {
@@ -1249,4 +1262,133 @@ test('자석은 방의 모두에게 누가 주웠는지, 체력 채우기는 채
   assert.equal(last(a.ws, 'refill'), undefined);
   room.leave(a.conn);
   room.leave(b.conn);
+});
+
+/* ───────────── 시작 무기 ───────────── */
+
+const playersOf = (ws: FakeSocket) => last(ws, 'roster')!.players;
+const rostersSince = (ws: FakeSocket, from: number) => ws.msgs.slice(from).filter((m) => m.t === 'roster').length;
+
+test('시작 무기(혼자): hello 에서 고른 무기 1단계로 바로 시작하고, 기록에 그 무기가 남는다. 판 도중의 바꾸기는 무시한다', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), null));
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a', 'ai_agent');
+  const p = room.world.players.get(a.conn.pid)!;
+  assert.deepEqual(p.up, { ai_agent: 1 });
+  advance(200);
+  assert.deepEqual(a.ws.snaps.at(-1)!.me.up, { ai_agent: 1 }, '스냅샷의 내 강화 단계');
+  // 혼자 하는 방은 들어오자마자 시작한다: 바꿀 수 없다 (위반은 아니다)
+  room.onStarter(a.conn, starterIndex('firewall'));
+  advance(100);
+  assert.deepEqual([p.start, room.world.players.get(a.conn.pid)!.up.firewall, a.conn.start], ['ai_agent', undefined, 'ai_agent']);
+  survive(room, [a.conn], 31);
+  down(room, a.conn);
+  advance(100);
+  assert.equal(reports.length, 1);
+  assert.deepEqual(reports[0]!.startsBy, ['ai_agent']);
+});
+
+test('시작 무기: Room 이 한 번 더 확인한다 (허용 목록 밖이면 기본 무기, 없으면 기본 무기)', () => {
+  const rooms = new RoomManager();
+  for (const bad of ['debugger', 'hotfix', 'coffee', 'friday_deploy'] as unknown as StarterId[]) {
+    const room = rooms.create('solo')!;
+    const a = join(room, 'a', bad);
+    assert.deepEqual([a.conn.start, room.world.players.get(a.conn.pid)!.up], ['console_log', { console_log: 1 }], String(bad));
+    room.leave(a.conn);
+  }
+  const room = rooms.create('solo')!;
+  const a = join(room, 'a');
+  assert.deepEqual(room.world.players.get(a.conn.pid)!.up, { console_log: 1 });
+  room.leave(a.conn);
+});
+
+test('시작 무기(대기실): 각자 고르고, 바꾸면 다음 틱에 사람 목록이 한 번만 간다. 같은 값은 보내지 않는다. 시작하면 각자의 무기로', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a', 'rollback');
+  const b = join(room, 'b');
+  assert.deepEqual(playersOf(a.ws).map((p) => [p.name, p.start]), [['a', 'rollback'], ['b', 'console_log']]);
+  const before = a.ws.msgs.length;
+  // 한 틱 안에 여러 번 바꿔도 사람 목록은 다음 틱에 한 번 (바꾸기를 퍼부어 전송량을 늘릴 수 없다)
+  room.onStarter(b.conn, starterIndex('firewall'));
+  room.onStarter(b.conn, starterIndex('ai_agent'));
+  room.onStarter(b.conn, starterIndex('firewall'));
+  assert.equal(rostersSince(a.ws, before), 0, '바로 보내지 않는다');
+  advance(50);
+  assert.equal(rostersSince(a.ws, before), 1);
+  assert.deepEqual(playersOf(a.ws).map((p) => p.start), ['rollback', 'firewall']);
+  assert.deepEqual(playersOf(b.ws).map((p) => p.start), ['rollback', 'firewall']);
+  assert.deepEqual(room.world.players.get(b.conn.pid)!.up, { firewall: 1 });
+  // 같은 값으로 "바꾸기": 아무것도 보내지 않는다
+  const n = a.ws.msgs.length;
+  room.onStarter(b.conn, starterIndex('firewall'));
+  advance(200);
+  assert.equal(rostersSince(a.ws, n), 0);
+  room.onStart(a.conn);
+  advance(100);
+  assert.deepEqual(a.ws.snaps.at(-1)!.me.up, { rollback: 1 });
+  assert.deepEqual(b.ws.snaps.at(-1)!.me.up, { firewall: 1 });
+  room.leave(a.conn);
+  room.leave(b.conn);
+});
+
+test('시작 무기: 판이 시작된 뒤의 바꾸기는 무시한다 (판 도중에 무기를 바꿀 수 없다)', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  const b = join(room, 'b', 'firewall');
+  room.onStart(a.conn);
+  advance(100);
+  const pb = room.world.players.get(b.conn.pid)!;
+  const n = a.ws.msgs.length;
+  for (let i = 0; i < 4; i++) room.onStarter(b.conn, i);
+  advance(200);
+  assert.equal(rostersSince(a.ws, n), 0, '사람 목록도 보내지 않는다');
+  assert.deepEqual([pb.start, b.conn.start, pb.up.firewall], ['firewall', 'firewall', 1]);
+  for (const id of ['console_log', 'rollback', 'ai_agent'] as const) assert.equal(pb.up[id], undefined, id);
+  room.leave(a.conn);
+  room.leave(b.conn);
+});
+
+test('시작 무기: 바꾸기만 보내서는 대기실을 붙잡아 둘 수 없다 (활동으로 세지 않는다)', () => {
+  const rooms = new RoomManager();
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a');
+  for (let i = 0; i < 22 && !room.closed; i++) {
+    advance(30_000);
+    room.onStarter(a.conn, 1 + (i % 3));
+  }
+  assert.deepEqual(a.ws.closed, [4008, 'lobby_idle']);
+  assert.equal(room.closed, true);
+});
+
+test('시작 무기: 판이 끝나 대기실로 돌아가도 고른 무기가 남고, 도중에 들어온 사람은 자기 무기 1단계로 들어온다. 기록에는 처음부터 한 사람의 무기만', () => {
+  const reports: RunReport[] = [];
+  const rooms = new RoomManager((r) => (reports.push(r), null));
+  const room = rooms.create('coop')!;
+  const a = join(room, 'a', 'firewall');
+  const b = join(room, 'b', 'rollback');
+  room.onStart(a.conn);
+  survive(room, [a.conn, b.conn], 6);
+  const late = join(room, 'late', 'ai_agent');
+  assert.deepEqual(room.world.players.get(late.conn.pid)!.up, { ai_agent: 1 }, '도중 합류: 자기 무기 1단계');
+  survive(room, [a.conn, b.conn, late.conn], 30);
+  for (const c of [a, b, late]) down(room, c.conn);
+  advance(100);
+  assert.equal(reports.length, 1);
+  assert.deepEqual([reports[0]!.names, reports[0]!.startsBy], [['a', 'b'], ['firewall', 'rollback']]);
+  // 대기실: 새 월드에서도 각자의 무기 (1단계만)
+  assert.equal(last(a.ws, 'roster')!.started, false);
+  assert.deepEqual(playersOf(a.ws).map((p) => [p.name, p.start]), [['a', 'firewall'], ['b', 'rollback'], ['late', 'ai_agent']]);
+  for (const c of [a, b, late]) assert.deepEqual(room.world.players.get(c.conn.pid)!.up, { [c.conn.start]: 1 }, c.conn.name);
+  // 대기실에서 바꾸고 다시 시작하면 바꾼 무기로
+  room.onStarter(a.conn, starterIndex('console_log'));
+  advance(50);
+  assert.equal(playersOf(b.ws)[0]!.start, 'console_log');
+  room.onStart(a.conn);
+  advance(100);
+  assert.deepEqual(a.ws.snaps.at(-1)!.me.up, { console_log: 1 });
+  assert.deepEqual(late.ws.snaps.at(-1)!.me.up, { ai_agent: 1 });
+  for (const c of [a, b, late]) room.leave(c.conn);
 });

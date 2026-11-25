@@ -36,10 +36,21 @@
         <p class="prompt">~/prod <span class="branch">(main)</span> $</p>
         <h1 id="title-text" class="logo">FRIDAY DEPLOY</h1>
         <p id="tagline-text" class="tagline"></p>
-        <label class="field">
-          <span>git config user.name</span>
-          <input id="name-input" type="text" maxlength="12" autocomplete="off" spellcheck="false" placeholder="닉네임" />
-        </label>
+        <!-- 닉네임과 시작 무기: 세로 화면은 위아래로, 낮은 가로 화면은 나란히 (style.css 의 .setup) -->
+        <div class="setup">
+          <label class="field">
+            <span>git config user.name</span>
+            <input id="name-input" type="text" maxlength="12" autocomplete="off" spellcheck="false" placeholder="닉네임" />
+          </label>
+          <!-- 시작 무기: 타일(네이티브 radio)은 main.ts 가 목록(STARTER_WEAPONS)으로 만든다. 고른 무기의 이름과 짧은 설명이 아래 한 줄에 (낮은 가로 화면은 위).
+               세로가 모자란 화면은 legend 대신 타일 왼쪽의 짧은 이름표를 보인다 (style.css) -->
+          <fieldset id="starter-title" class="starter">
+            <legend class="starter__legend">시작 무기</legend>
+            <span class="starter__label" aria-hidden="true">시작 무기</span>
+            <div class="starter__tiles"></div>
+            <p class="starter__desc" aria-live="polite"></p>
+          </fieldset>
+        </div>
         <div class="buttons">
           <button id="btn-solo" class="btn btn--primary" type="button">▶ npm run solo</button>
           <button id="btn-create" class="btn" type="button">👥 pair programming <small>방 만들기</small></button>
@@ -60,12 +71,21 @@
     </section>
 
     <section id="screen-lobby" class="screen hidden">
-      <div class="panel">
+      <div class="panel panel--lobby">
         <h2 class="panel__title">👥 pair programming</h2>
         <p class="panel__sub">같이 할 사람에게 이 코드를 알려주세요 (최대 4명)</p>
         <p id="lobby-code" class="code" aria-label="방 코드"></p>
-        <div class="buttons">
-          <button id="btn-invite" class="btn" type="button">🔗 초대 링크 복사</button>
+        <!-- 초대 링크와 내 시작 무기: 세로 화면은 위아래로, 낮은 가로 화면은 나란히 (style.css 의 .lobby__top) -->
+        <div class="lobby__top">
+          <div class="buttons">
+            <button id="btn-invite" class="btn" type="button">🔗 초대 링크 복사</button>
+          </div>
+          <!-- 대기실에서도 내 시작 무기를 바꿀 수 있다 (판이 시작되기 전까지). 한 줄로 작게: 이름표 + 타일. 사람 목록에는 각자의 무기 아이콘이 붙는다 -->
+          <fieldset id="starter-lobby" class="starter starter--lobby">
+            <legend class="starter__legend">내 시작 무기</legend>
+            <span class="starter__label" aria-hidden="true">시작 무기</span>
+            <div class="starter__tiles"></div>
+          </fieldset>
         </div>
         <ul id="lobby-players" class="players"></ul>
         <p id="lobby-status" class="hint"></p>

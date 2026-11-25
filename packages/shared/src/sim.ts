@@ -44,6 +44,7 @@ import {
   FIELD_ITEM_KINDS,
   PASSIVE_IDS,
   PASSIVE_SLOTS,
+  PICK_ONCE,
   SHOT_KINDS,
   STAGE,
   STAGE_TIME,
@@ -65,7 +66,8 @@ import {
   type WeaponId,
   type ZoneKind,
 } from './content';
-import { Grid, auraRadius, duckState, petPosition, runWeapons, updateShots, updateZones } from './combat';
+import { DEFAULT_STARTER, isStarter, type StarterId } from './content';
+import { Grid, auraRadius, duckState, hatchWatch, petPosition, runWeapons, updateShots, updateZones } from './combat';
 import { curseOf, effectiveStats, extraOfferChanceOf, growthOf, healAmountOf, hitDamage, luckOf, lv, maxHpOf, moveSpeedOf, pickupOf, recoveryOf } from './stats';
 import type { Offer, Snapshot } from './protocol';
 import { derivedSecret, sfc32, type Rand, type Seed } from './rng';
@@ -78,15 +80,17 @@ const EN = ENEMIES;
  * - offered: 레벨업 선택지에 나온 횟수
  * - picked: 직접 고른 횟수 / auto: 시간이 지나 자동으로 골라진 횟수
  * - chest: 보물상자로 오른 횟수 (진화한 무기는 진화한 횟수)
+ * - start: 시작 무기로 고른 것 (판마다 하나. 선택지에서 고른 것과 따로 센다: 선택률이 부풀지 않게)
  */
 export interface UpgradeTally {
   offered: Partial<Record<UpgradeId, number>>;
   picked: Partial<Record<UpgradeId, number>>;
   auto: Partial<Record<UpgradeId, number>>;
   chest: Partial<Record<UpgradeId, number>>;
+  start: Partial<Record<UpgradeId, number>>;
 }
 
-export const newTally = (): UpgradeTally => ({ offered: {}, picked: {}, auto: {}, chest: {} });
+export const newTally = (): UpgradeTally => ({ offered: {}, picked: {}, auto: {}, chest: {}, start: {} });
 const tallyUp = (map: Partial<Record<UpgradeId, number>>, id: UpgradeId): void => void (map[id] = (map[id] ?? 0) + 1);
 
 export interface Player {
@@ -141,6 +145,8 @@ export interface Player {
   iframe: number;
   /** 2단계 인증 방패: 남은 수. 맞을 때 피해 대신 하나 줄고 잠깐 무적이 된다 */
   charges: number;
+  /** 이번 틱에 방패가 한 대를 막았다: 이어서 도는 무기 차례에 둘레로 반격한다 (combat.ts 의 runWeapons) */
+  parry: boolean;
   /** 쉬지 않고 움직인 시간(초). 스프린트가 세지는 데 쓴다 */
   moveTime: number;
   /** 러버덕이 돌고 있는 남은 시간(초). 0 이면 쉬는 중 */
@@ -150,18 +156,22 @@ export interface Player {
   /** 마지막으로 커밋 히스토리 발자국을 남긴 자리 */
   trailX: number;
   trailY: number;
-  /** 소환물(카나리아·부엉이)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
-  pets: Partial<Record<'canary' | 'night_owl', number>>;
+  /** 소환물(카나리아·부엉이·24시간 모니터링의 감시 새)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
+  pets: Partial<Record<'canary' | 'night_owl' | 'monitoring', number>>;
+  /** 감시 새의 처음 각도(rad): 보물상자에서 진화할 때 카나리아가 있던 각도에서 이어 돈다 (combat.ts 의 hatchWatch) */
+  watchPhase: number;
   /** 켜져 있는 남은 시간(초): 카나리아·부엉이가 폭탄을 퍼붓는 동안 */
   on: Partial<Record<UpgradeId, number>>;
   up: Partial<Record<UpgradeId, number>>;
   cd: Partial<Record<UpgradeId, number>>;
   offers: UpgradeId[] | null;
   offerTimer: number;
-  /** 이번 판에 남은 레벨업 선택지 새로고침 수 (OFFER_REROLLS 에서 시작한다) */
+  /** 이번 판에 남은 레벨업 선택지 새로고침 수 (OFFER_REROLLS 에서 시작하고, 배포 기도 단계마다 하나 는다) */
   rerolls: number;
   /** 이번 판에서 센 무기·패시브 횟수 (통계용) */
   tally: UpgradeTally;
+  /** 이 판을 시작한 무기 (STARTER_WEAPONS 중 하나. 1단계로 받았다). 순위표 기록에 남긴다 */
+  start: StarterId;
 }
 
 export interface Enemy {
@@ -205,8 +215,10 @@ export interface Shot {
   vx: number;
   vy: number;
   ttl: number;
-  /** 처음 수명 (롤백이 돌아오는 때를 계산한다) */
+  /** 롤백이 되돌아서는 때를 정하는 기준 시간 (그 절반에 되돌아서고, 기준 시간에 던진 자리를 지난다). 다른 무기는 처음 수명 */
   life: number;
+  /** 쏜 뒤 지난 시간(초). 롤백의 움직임을 이것으로 계산한다 (ttl 은 기준 시간보다 길게 줄 수 있어서 ttl 로 셀 수 없다) */
+  age: number;
   dmg: number;
   pierce: number;
   r: number;
@@ -227,7 +239,7 @@ export interface Zone {
   x: number;
   y: number;
   r: number;
-  /** 종류별 추가 값(0~255): 베기·광선은 각도, 세로 띠는 높이/4 */
+  /** 종류별 추가 값(0~255): 베기·광선은 각도, 세로 띠는 높이/4, 물결은 그려 줄 고리 수, 폭발은 색 */
   aux: number;
   ttl: number;
   dmg: number;
@@ -235,6 +247,12 @@ export interface Zone {
   every: number;
   /** 생긴 틱 (스냅샷에는 생긴 틱에만 싣는다) */
   born: number;
+  /**
+   * 물결(wave)만 쓰는 서버 전용 값 (스냅샷에는 싣지 않는다): 이 물결에 이미 맞은 적의 id 와 고리 두께의 반(px).
+   * 맞은 적은 적마다 두는 잠금 표(lock) 대신 물결마다 기억한다 (물결마다 새 키가 적의 잠금 표에 쌓이면 정리 비용이 커진다)
+   */
+  hit?: Set<number>;
+  band?: number;
 }
 
 export interface Gem {
@@ -393,8 +411,10 @@ export const xpForLevel = (level: number): number => xpTotal(level) - xpTotal(le
 /**
  * 플레이어를 추가한다.
  * spectator 가 true 면 캐릭터 없이 관전으로만 들어온다 (이번 판이 끝날 때까지 시점만 움직일 수 있다).
+ * start: 시작 무기 (1단계로 받는다). 허용 목록 밖의 값이면 기본 무기로 시작한다 (검증은 서버의 Room 이 먼저 한다)
  */
-export function addPlayer(world: World, name: string, spectator = false): Player {
+export function addPlayer(world: World, name: string, spectator = false, start: StarterId = DEFAULT_STARTER): Player {
+  if (!isStarter(start)) start = DEFAULT_STARTER;
   const id = world.nextId++;
   // 합류 시 기존 플레이어 근처에 스폰
   const anchor = [...world.players.values()].find((p) => p.alive);
@@ -429,22 +449,44 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     shield: 0,
     iframe: 0,
     charges: 0,
+    parry: false,
     moveTime: 0,
     duckOn: 0,
     freezeDir: 0,
     trailX: Number.NaN,
     trailY: Number.NaN,
     pets: {},
+    watchPhase: 0,
     on: {},
-    up: { console_log: 1 },
+    up: { [start]: 1 },
     cd: {},
     offers: null,
     offerTimer: 0,
     rerolls: OFFER_REROLLS,
-    tally: newTally(),
+    tally: { ...newTally(), start: { [start]: 1 } },
+    start,
   };
   world.players.set(id, p);
   return p;
+}
+
+/**
+ * 판이 시작되기 전(대기실)에 시작 무기를 바꾼다. 바꿨으면 true.
+ * 월드가 한 틱이라도 돌았으면(판이 시작됐다) 바꾸지 않는다: 판 도중에 무기를 바꿀 수 없다.
+ * 허용 목록 밖의 값, 몸이 없는 관전자, 같은 무기도 바꾸지 않는다.
+ */
+export function setStarter(world: World, id: number, start: StarterId): boolean {
+  const p = world.players.get(id);
+  if (!p || !p.body || world.tick !== 0 || !isStarter(start) || p.start === start) return false;
+  p.start = start;
+  // 시작 무기 말고는 아직 아무것도 없다 (대기실). 무기에 딸린 상태도 처음으로 돌린다
+  p.up = { [start]: 1 };
+  p.cd = {};
+  p.on = {};
+  p.pets = {};
+  p.watchPhase = 0;
+  p.tally.start = { [start]: 1 };
+  return true;
 }
 
 export function removePlayer(world: World, id: number): void {
@@ -511,11 +553,21 @@ function releaseHeld(world: World, p: Player): void {
   }
 }
 
+/** 한 판에 가질 수 있는 새로고침의 최대: 시작할 때의 수 + 배포 기도를 최대 단계까지 올리며 받는 수 (화면의 표시 상한) */
+export const MAX_REROLLS = OFFER_REROLLS + UPGRADES.deploy_prayer.max;
+
 /** 강화 하나를 한 단계 올린다 (레벨업 선택과 보물상자가 같이 쓴다) */
 function levelUp(p: Player, up: UpgradeId): void {
-  p.up[up] = Math.min(UPGRADES[up].max, lv(p, up) + 1);
+  const before = lv(p, up);
+  const hpBefore = maxHpOf(p);
+  p.up[up] = Math.min(UPGRADES[up].max, before + 1);
+  const raised = lv(p, up) > before;
   // 스냅샷: 고를 때마다 부활을 하나 준다
   if (up === 'snapshot') p.revives++;
+  // 배포 기도: 단계가 오를 때마다 새로고침을 하나 준다 (최대 단계면 오르지 않으므로 주지 않는다)
+  if (up === 'deploy_prayer' && raised) p.rerolls++;
+  // 다크 모드: 늘어난 최대 체력만큼 바로 채운다 (우리 규칙. 뱀서 Hollow Heart 는 채우지 않아 고른 순간 아무 변화가 없었다)
+  if (up === 'dark_mode' && p.alive) p.hp = Math.min(maxHpOf(p), p.hp + maxHpOf(p) - hpBefore);
   // 무기는 얻거나 오르면 바로 한 번 쓴다 (뱀서). 러버덕·카나리아·부엉이는 바로 켜진다
   if (isWeapon(up)) {
     p.cd[up] = 0;
@@ -677,12 +729,13 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
   for (let i = 0; i < n; i++) {
     const evo = readyEvolutions(p.up)[0];
     if (evo) {
-      evolve(p, evo);
+      evolve(world, p, evo);
       tallyUp(p.tally.chest, evo.id);
       items.push(evo.id);
       continue;
     }
-    const owned = UPGRADE_IDS.filter((u) => lv(p, u) > 0 && lv(p, u) < UPGRADES[u].max);
+    // 한 번만 고르는 것(PICK_ONCE: 저주)은 올리지 않는다
+    const owned = UPGRADE_IDS.filter((u) => lv(p, u) > 0 && lv(p, u) < UPGRADES[u].max && !PICK_ONCE.includes(u));
     if (owned.length === 0) {
       // 찬 양은 화면에 보이는 체력(올림)으로 센다 (레벨업의 refill 과 같다). 남은 몫은 이미 가득이라 더할 것이 없다
       const max = maxHpOf(p);
@@ -701,9 +754,11 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
 
 /**
  * 진화: 재료 무기를 칸에서 빼고 진화한 무기를 넣는다 (짝 패시브는 그대로). 바로 한 번 쓴다.
- * 카나리아·부엉이의 id 는 남겨 둔다: 24시간 모니터링이 같은 새를 이어서 돌린다 (화면에서 새가 바뀌지 않게)
+ * 24시간 모니터링은 재료를 빼기 전에 감시 새를 띄운다: 카나리아의 id 와 각도를 이어받아, 이 틱의 스냅샷부터 같은 새로 보인다
+ * (예전에는 다음에 무기가 돌 때 정해져서, 진화한 틱과 곧바로 레벨업을 고르는 동안 새가 보이지 않았다)
  */
-function evolve(p: Player, evo: Evolution): void {
+function evolve(world: World, p: Player, evo: Evolution): void {
+  if (evo.id === 'monitoring') hatchWatch(world, p);
   for (const f of evo.from) {
     delete p.up[f];
     delete p.cd[f];
@@ -774,14 +829,14 @@ function refill(world: World, p: Player): void {
   world.events.push({ type: 'refill', pid: p.id, hp: Math.ceil(max) - Math.ceil(before) });
 }
 
-/** 선택지에 나올 수 있는 것: 가진 것은 최대 단계 전까지, 새 것은 칸이 남아 있을 때만 */
+/** 선택지에 나올 수 있는 것: 가진 것은 최대 단계 전까지(한 번만 고르는 것은 가진 뒤에는 나오지 않는다), 새 것은 칸이 남아 있을 때만 */
 function offerPool(p: Player): UpgradeId[] {
   const weapons = WEAPON_IDS.filter((u) => lv(p, u) > 0).length;
   const passives = PASSIVE_IDS.filter((u) => lv(p, u) > 0).length;
   return UPGRADE_IDS.filter((u) => {
     const l = lv(p, u);
     if (l >= UPGRADES[u].max) return false;
-    if (l > 0) return true;
+    if (l > 0) return !PICK_ONCE.includes(u);
     // 진화한 무기는 보물상자로만 얻는다. 진화해서 없어진 재료 무기도 다시 나오지 않는다
     if (evolutionOf(u) || evolvedAway(p.up, u)) return false;
     return isWeapon(u) ? weapons < WEAPON_SLOTS : passives < PASSIVE_SLOTS;
@@ -1156,10 +1211,11 @@ function advance(world: World, dt: number): void {
     // 되살아난 직후(shield)와 무적 시간(iframe) 동안에는 맞지 않는다
     if (target.shield > 0 || target.iframe > 0) continue;
     target.iframe = INVULN_SECONDS;
-    // 2단계 인증 방패가 있으면 피해 대신 하나를 쓰고 더 오래 무적이 된다
+    // 2단계 인증 방패가 있으면 피해 대신 하나를 쓰고 더 오래 무적이 된다. 이어서 도는 무기 차례에 둘레로 반격한다 (runWeapons)
     if (target.charges > 0) {
       target.charges--;
       target.iframe = Math.max(INVULN_SECONDS, effectiveStats(target, 'two_factor').dur);
+      target.parry = true;
       continue;
     }
     target.hp -= hitDamage(target, power);
@@ -1306,6 +1362,12 @@ function segmentDist(px: number, py: number, ax: number, ay: number, bx: number,
   const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2)) : 0;
   return Math.hypot(px - (ax + vx * t), py - (ay + vy * t));
 }
+
+/** 소환물의 통신 번호 (스냅샷마다 찾지 않게) */
+const CANARY = SHOT_KINDS.indexOf('canary');
+const OWL = SHOT_KINDS.indexOf('owl');
+const WATCH = SHOT_KINDS.indexOf('watch');
+
 /** 보물상자를 열 수 있는 거리 (몸이 닿을 때) */
 const CHEST_REACH = 14;
 /** 경험치 색 단계 (뱀서): 2 이하 파랑, 9 이하 초록, 그 위는 빨강 */
@@ -1387,16 +1449,20 @@ export function buildSnapshot(world: World, pid: number, zonesAfter?: number): S
     if (EN[e.type].boss && !EN[e.type].killRes) snap.b.push([e.id, Math.max(1, Math.min(100, Math.ceil((e.hp / (e.maxHp ?? e.hp)) * 100)))]);
   }
   for (const s of world.shots) if (near(s.x, s.y)) snap.s.push([s.id, SHOT_KINDS.indexOf(s.kind), r1(s.x), r1(s.y)]);
-  // 카나리아·부엉이: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
-  // (24시간 모니터링은 두 마리를 함께 돌린다)
+  // 카나리아·부엉이·감시 새: 서버에서는 위치만 계산하는 것이라 목록에 없다. 보이는 사람에게 투사체처럼 보낸다
+  // (24시간 모니터링은 감시 새 한 마리만 보낸다. 재료였던 두 새는 진화하면 없어진다)
   for (const p of world.players.values()) {
     if (!p.alive) continue;
-    const both = lv(p, 'monitoring') > 0;
+    const watch = p.pets.monitoring;
+    if (watch !== undefined && lv(p, 'monitoring') > 0) {
+      const [x, y] = petPosition(world, p, 'monitoring');
+      if (near(x, y)) snap.s.push([watch, WATCH, r1(x), r1(y)]);
+    }
     for (const w of ['canary', 'night_owl'] as const) {
       const id = p.pets[w];
-      if (id === undefined || (lv(p, w) === 0 && !both)) continue;
+      if (id === undefined || lv(p, w) === 0) continue;
       const [x, y] = petPosition(world, p, w);
-      if (near(x, y)) snap.s.push([id, SHOT_KINDS.indexOf(w === 'canary' ? 'canary' : 'owl'), r1(x), r1(y)]);
+      if (near(x, y)) snap.s.push([id, w === 'canary' ? CANARY : OWL, r1(x), r1(y)]);
     }
   }
   // 바닥 영역: 아직 보내지 않은 것 중 조금이라도 보이는 것 (크기만큼 넓게 본다). 한 번만, 남는 시간과 함께 보낸다

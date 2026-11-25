@@ -1,4 +1,4 @@
-import { LEADERBOARD_SIZE, UPGRADES, evolutionOf, type BoardId, type LeaderboardItem, type LeaderboardResponse } from '@friday-deploy/shared';
+import { LEADERBOARD_SIZE, UPGRADES, evolutionOf, type BoardId, type LeaderboardItem, type LeaderboardResponse, type WeaponId } from '@friday-deploy/shared';
 import { LeaderboardError, fetchLeaderboard } from './net';
 import { findMine, type MyPlace } from './mine';
 import { sharesOf } from './shares';
@@ -46,6 +46,16 @@ function itemLine(items: LeaderboardItem[], who: string | null): HTMLElement {
     line.append(item);
   }
   return line;
+}
+
+/** 이름 앞의 시작 무기 아이콘 (무기는 net.ts 가 "진화하지 않은 무기 id" 인지 확인했다. 아이콘과 이름은 우리 목록의 것) */
+function startIcon(id: WeaponId): HTMLElement {
+  const def = UPGRADES[id];
+  const icon = node('span', 'row__start chip__icon', def.icon);
+  icon.title = `시작 무기: ${def.name}`;
+  icon.setAttribute('role', 'img');
+  icon.setAttribute('aria-label', `시작 무기 ${def.name}`);
+  return icon;
 }
 
 export class Leaderboard {
@@ -198,6 +208,7 @@ export class Leaderboard {
     let mineRow: HTMLElement | null = null;
     let hasShares = false;
     let hasItems = false;
+    let hasStarts = false;
     for (const e of data.entries.slice(0, LEADERBOARD_SIZE)) {
       const li = node('li', 'row');
       const rank = node('span', `row__rank${e.rank <= 3 ? ` row__rank--${e.rank}` : ''}`, String(e.rank));
@@ -205,8 +216,12 @@ export class Leaderboard {
       const names = node('span', 'row__names');
       const shares = sharesOf(e.killsBy, e.names.length);
       if (shares) hasShares = true;
+      // 시작 무기 (0.4.0 부터 남긴다). 진화하면 아이템 줄에서 사라지므로 이름 앞에 따로 둔다
+      const starts = e.startsBy && e.startsBy.length === e.names.length ? e.startsBy : null;
+      if (starts) hasStarts = true;
       e.names.forEach((name, i) => {
         if (i > 0) names.append(shares ? ' · ' : ', ');
+        if (starts) names.append(startIcon(starts[i]!));
         names.append(name);
         if (shares) names.append(node('small', 'row__share', ` ${shares[i]}%`));
       });
@@ -231,6 +246,7 @@ export class Leaderboard {
     }
     this.body.replaceChildren(list);
     const legend = [
+      hasStarts ? '이름 앞 아이콘은 시작 무기예요' : '',
       hasShares ? '이름 옆 % 는 처치 기여도예요 (기여도가 큰 사람부터)' : '',
       hasItems ? '아이콘은 끝날 때 가진 무기·패시브, 숫자는 단계예요' : '',
     ].filter(Boolean);

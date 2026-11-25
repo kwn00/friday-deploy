@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { APP_VERSION, LEADERBOARD_MIN_SECONDS, UPGRADES, UPGRADE_IDS, newTally, type UpgradeStatsResponse, type UpgradeTally } from '@friday-deploy/shared';
-import { Leaderboard, MemoryStore, emptyStats, sumStats, type LeaderboardStore, type RunRecord, type RunReport, type StoredStats } from './leaderboard';
+import { Leaderboard, MemoryStore, addStatsInto, emptyStats, sumStats, type LeaderboardStore, type RunRecord, type RunReport, type StoredStats } from './leaderboard';
 import { UpgradeStats, statsOfRun, topRunsOf, upgradeList, versionList } from './stats';
 
 const V = APP_VERSION;
@@ -32,9 +32,37 @@ test('통계: 판 하나를 몫으로 바꾼다 (사람마다 한 판, 끝날 �
   const d = statsOfRun(report(), 1234)!;
   assert.equal(d.runs, 1);
   assert.equal(d.since, 1234);
-  assert.deepEqual(d.upgrades.console_log, { offered: 2, picked: 1, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 3 });
-  assert.deepEqual(d.upgrades.regex, { offered: 1, picked: 0, autoPicked: 1, chest: 0, finalOwned: 0, finalLevelSum: 0 });
+  assert.deepEqual(d.upgrades.console_log, { offered: 2, picked: 1, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 3, started: 0 });
+  assert.deepEqual(d.upgrades.regex, { offered: 1, picked: 0, autoPicked: 1, chest: 0, finalOwned: 0, finalLevelSum: 0, started: 0 });
   assert.equal(Object.keys(d.upgrades).length, 2, '센 것이 없는 아이템은 싣지 않는다');
+});
+
+test('통계: 시작 무기는 선택지·고른 것과 따로 started 로 센다 (선택률이 부풀지 않는다). 응답에도 싣는다', () => {
+  const d = statsOfRun(
+    report({
+      names: ['a', 'b'],
+      killsBy: [1, 1],
+      itemsBy: [[{ id: 'rollback', level: 2 }], [{ id: 'console_log', level: 1 }]],
+      tallies: [tally({ start: { rollback: 1 }, offered: { rollback: 1 }, picked: { rollback: 1 } }), tally({ start: { console_log: 1 } })],
+    }),
+    1,
+  )!;
+  assert.deepEqual(d.upgrades.rollback, { offered: 1, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 2, started: 1 }, '2단계는 선택지에서 고른 것');
+  assert.deepEqual(d.upgrades.console_log, { offered: 0, picked: 0, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 1, started: 1 });
+  // 이상한 값은 걸러 낸다 (다른 횟수와 같은 규칙)
+  const odd = statsOfRun(report({ tallies: [tally({ start: { firewall: -1, ai_agent: 1.7, nope: 5 } as never })] }), 1)!;
+  assert.equal(odd.upgrades.firewall?.started ?? 0, 0);
+  assert.equal(odd.upgrades.ai_agent!.started, 1);
+  // 이 값을 세기 전의 횟수(예전 서버가 넘긴 모양)에는 start 가 없다: 0 으로
+  const { start: _drop, ...noStart } = newTally();
+  assert.notEqual(statsOfRun(report({ tallies: [noStart as UpgradeTally] }), 1), null);
+  const s = emptyStats();
+  s.runs = 2;
+  addStatsInto(s, d);
+  assert.deepEqual(upgradeList(s, 'weapon').filter((u) => u.started > 0).map((u) => [u.id, u.started]).sort(), [['console_log', 1], ['rollback', 1]]);
+  // 0.3.x 의 몫처럼 started 가 없는 합계를 더해도 0 으로 본다
+  addStatsInto(s, { runs: 1, since: null, upgrades: { firewall: { offered: 1, picked: 1, autoPicked: 0, chest: 0, finalOwned: 0, finalLevelSum: 0 } as never } });
+  assert.equal(upgradeList(s, 'weapon').find((u) => u.id === 'firewall')!.started, 0);
 });
 
 test('통계: 리더보드처럼 30초가 안 되는 판은 세지 않고, 사람 수와 횟수·아이템 수가 맞지 않으면 세지 않는다', () => {
@@ -71,9 +99,9 @@ test('통계: 함께 한 판은 사람마다 따로 센다. 이상한 값(음수
 test('통계: 응답 목록은 모든 아이템이고, 선택률 높은 순이며, 비율을 계산한다', () => {
   const s = emptyStats();
   s.runs = 4;
-  s.upgrades.regex = { offered: 10, picked: 6, autoPicked: 2, chest: 0, finalOwned: 3, finalLevelSum: 12 };
-  s.upgrades.coffee = { offered: 10, picked: 9, autoPicked: 0, chest: 1, finalOwned: 4, finalLevelSum: 10 };
-  s.upgrades.console_log = { offered: 3, picked: 0, autoPicked: 0, chest: 5, finalOwned: 4, finalLevelSum: 20 };
+  s.upgrades.regex = { offered: 10, picked: 6, autoPicked: 2, chest: 0, finalOwned: 3, finalLevelSum: 12, started: 0 };
+  s.upgrades.coffee = { offered: 10, picked: 9, autoPicked: 0, chest: 1, finalOwned: 4, finalLevelSum: 10, started: 0 };
+  s.upgrades.console_log = { offered: 3, picked: 0, autoPicked: 0, chest: 5, finalOwned: 4, finalLevelSum: 20, started: 0 };
   const all = upgradeList(s, null);
   assert.equal(all.length, UPGRADE_IDS.length, '나온 적 없는 것도 0 으로 싣는다');
   assert.deepEqual(all.slice(0, 2).map((u) => u.id), ['coffee', 'regex']);
@@ -92,19 +120,24 @@ test('통계: 응답 목록은 모든 아이템이고, 선택률 높은 순이�
 test('통계: 진화한 무기는 재료를 함께 싣고, 보물상자 횟수가 진화한 횟수다', () => {
   const s = emptyStats();
   s.runs = 2;
-  s.upgrades.debugger = { offered: 0, picked: 0, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 1 };
+  s.upgrades.debugger = { offered: 0, picked: 0, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 1, started: 0 };
   const all = upgradeList(s, 'weapon');
   const dbg = all.find((u) => u.id === 'debugger')!;
   assert.deepEqual(dbg.evolve, { from: ['console_log'], with: 'test_coverage' });
   assert.deepEqual([dbg.chest, dbg.pickRate, dbg.finalOwnedRate, dbg.avgFinalLevel], [1, 0, 0.5, 1]);
   assert.deepEqual(all.find((u) => u.id === 'monitoring')!.evolve, { from: ['canary', 'night_owl'], with: null }, '합치기는 짝 패시브 없음');
+  // 0.4.0 에 더한 진화도 같은 모양 (선택지에는 나오지 않아 offered 0, 보물상자로만 센다)
+  assert.deepEqual(all.find((u) => u.id === 'git_reset')!.evolve, { from: ['rollback'], with: 'deploy_prayer' });
+  assert.deepEqual(all.find((u) => u.id === 'grep_r')!.evolve, { from: ['regex'], with: 'cdn' });
+  assert.deepEqual(all.find((u) => u.id === 'agi')!.evolve, { from: ['ai_agent'], with: 'side_project' });
+  assert.equal(all.find((u) => u.id === 'agi')!.offered, 0);
   assert.equal(all.find((u) => u.id === 'console_log')!.evolve, undefined, '진화하지 않은 것에는 없다');
   assert.ok(!('evolve' in all.find((u) => u.id === 'regex')!), 'JSON 에도 키가 없다');
   // 판의 몫: 진화한 횟수(상자)와 끝날 때 가진 것
   const t = newTally();
   t.chest.debugger = 1;
   const d = statsOfRun(report({ tallies: [t], itemsBy: [[{ id: 'debugger', level: 1 }, { id: 'test_coverage', level: 2 }]] }), 1)!;
-  assert.deepEqual(d.upgrades.debugger, { offered: 0, picked: 0, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 1 });
+  assert.deepEqual(d.upgrades.debugger, { offered: 0, picked: 0, autoPicked: 0, chest: 1, finalOwned: 1, finalLevelSum: 1, started: 0 });
 });
 
 test('통계: 순위 기록에서는 사람마다 끝날 때 가진 것을 센다 (아이템을 남기기 전의 기록은 빠진다)', () => {
@@ -188,7 +221,7 @@ test('통계: 저장이 실패하면 몫을 모아 두었다가 다시 더한다
 
 test('통계: 지난 시즌은 저장소에서 읽고, 응답은 약속한 모양이다', async () => {
   const store = new MemoryStore();
-  await store.addStats(7, '0.1.0', { runs: 2, since: Date.UTC(2026, 0, 2, 3), upgrades: { coffee: { offered: 4, picked: 2, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 3 } } }, 's7');
+  await store.addStats(7, '0.1.0', { runs: 2, since: Date.UTC(2026, 0, 2, 3), upgrades: { coffee: { offered: 4, picked: 2, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 3, started: 0 } } }, 's7');
   const old: RunRecord = { id: 'old', board: 'coop', season: 7, names: ['x', 'y'], itemsBy: [[{ id: 'coffee', level: 2 }], []], time: 300, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1 };
   await store.save(old);
   const lb = new Leaderboard(store, 0);
@@ -199,7 +232,7 @@ test('통계: 지난 시즌은 저장소에서 읽고, 응답은 약속한 모�
   assert.deepEqual([res.version, res.currentVersion, res.versions], [null, V, [{ version: '0.1.0', runs: 2, since: '2026-01-02' }]], '지난 시즌에는 지금 버전을 끼워 넣지 않는다');
   assert.deepEqual([res.season, res.current, res.seasons, res.since, res.runs, res.persistent, res.loading], [7, 0, [0, 7], '2026-01-02', 2, false, false]);
   assert.ok(res.upgrades.every((u) => u.kind === 'passive'));
-  assert.deepEqual(res.upgrades[0], { id: 'coffee', name: UPGRADES.coffee.name, icon: UPGRADES.coffee.icon, kind: 'passive', offered: 4, picked: 2, autoPicked: 0, pickRate: 0.5, chest: 0, finalOwnedRate: 0.5, avgFinalLevel: 3 });
+  assert.deepEqual(res.upgrades[0], { id: 'coffee', name: UPGRADES.coffee.name, icon: UPGRADES.coffee.icon, kind: 'passive', offered: 4, picked: 2, autoPicked: 0, pickRate: 0.5, chest: 0, started: 0, finalOwnedRate: 0.5, avgFinalLevel: 3 });
   assert.deepEqual(res.topRuns, { runs: 2, owned: [{ id: 'coffee', rate: 0.5, avgLevel: 2 }] });
   // 지금 시즌: 아직 센 판이 없다
   const now = must(await stats.response(0, null, null, [0, 7], lb));
@@ -322,7 +355,7 @@ test('통계: 지금 시즌은 순위 기록을 아직 다 불러오지 못했�
 test('버전: 판은 서버의 게임 버전으로 쌓이고, 버전을 고르면 그 버전만, 고르지 않으면 시즌 전체를 답한다', async () => {
   const store = new MemoryStore();
   // 지난 버전(0.2.1)과 다음 버전(0.3.0)에 쌓인 몫이 이미 있다
-  await store.addStats(0, '0.2.1', { runs: 2, since: Date.UTC(2026, 10, 10), upgrades: { regex: { offered: 4, picked: 4, autoPicked: 0, chest: 0, finalOwned: 2, finalLevelSum: 6 } } }, 'old');
+  await store.addStats(0, '0.2.1', { runs: 2, since: Date.UTC(2026, 10, 10), upgrades: { regex: { offered: 4, picked: 4, autoPicked: 0, chest: 0, finalOwned: 2, finalLevelSum: 6, started: 0 } } }, 'old');
   await store.addStats(0, '0.3.0', { runs: 1, since: Date.UTC(2026, 10, 30), upgrades: {} }, 'new');
   const lb = new Leaderboard(store, 0, '0.2.5');
   const stats = new UpgradeStats(store, 0, Date.now, '0.2.5');

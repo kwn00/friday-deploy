@@ -40,6 +40,7 @@ import {
   areaMultOf,
   effectiveStats,
   type Gem,
+  type Snapshot,
 } from './index';
 
 test('parseClientMsg: 조작된 메시지는 전부 거부', () => {
@@ -202,7 +203,7 @@ test('sim: 보스는 보물상자를 떨어뜨리고, 회복 아이템은 체력
   const w = createWorld(7);
   const p = addPlayer(w, 'a');
   w.enemies.push({ id: 9001, type: 'legacy_code', x: p.x + 200, y: p.y, hp: 1, spd: 1, frozen: 0, kbTaken: 0, resFreeze: 0, kbTime: 0, kbMult: 0, vx: 0, vy: 0, life: 0, hit: false, chest: [1, 0, 0, 100] });
-  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, turn: 0, w: 'console_log' });
+  w.shots.push({ id: 9002, kind: 'log', owner: p.id, x: p.x + 200, y: p.y, vx: 0, vy: 0, ttl: 1, dmg: 99, pierce: 0, r: 4, hit: new Set(), life: 1, age: 0, rehit: 0, turn: 0, w: 'console_log' });
   step(w, DT);
   assert.equal(w.items.filter((it) => it.kind === 'chest').length, 1, '보스 처치 → 보물상자');
   assert.equal(w.heals.length, 0, '보스는 회복 아이템을 떨어뜨리지 않는다 (뱀서)');
@@ -295,7 +296,7 @@ test('sim: 러버덕은 정해진 시간 돌고 쉬기를 되풀이하고, 화�
     counts.push(buildSnapshot(w, p.id)!.p[0]![6]);
   }
   const on = counts.filter((n) => n === 2).length / counts.length;
-  // 3.5초 돌고 3초 쉰다 → 약 54%
+  // 3.5초 돌고 2.5초 쉰다 → 약 58% (0.4.0 에 쿨다운 3 → 2.5)
   assert.ok(on > 0.45 && on < 0.62, `도는 시간의 비율 ${on.toFixed(2)}`);
   assert.ok(counts.includes(0), '쉬는 동안은 0');
   // 도는 중인 순간을 골라 서버 판정 위치와 화면 위치를 비교한다
@@ -405,6 +406,36 @@ test('codec: 손상된 데이터는 예외로 끝난다 (멈추거나 거대한 
   }
 });
 
+test('codec: 내 강화 단계는 가진 것만 보낸다 (아이템 종류가 늘어도 스냅샷이 커지지 않는다)', () => {
+  const w = createWorld(5);
+  const p = addPlayer(w, 'a');
+  const snap = buildSnapshot(w, p.id)!;
+  const withUp = (up: Snapshot['me']['up']): Snapshot => ({ ...snap, me: { ...snap.me, up } });
+  const size = (up: Snapshot['me']['up']): number => encodeSnapshot(withUp(up)).length;
+  const none = size({});
+  assert.equal(size({ console_log: 1 }), none + 2, '하나에 2바이트 (번호, 단계)');
+  // 칸을 가득 채운 빌드 (무기 6 + 패시브 6. 진화한 무기와 목록 맨 끝의 아이템까지)
+  const last = UPGRADE_IDS[UPGRADE_IDS.length - 1]!;
+  const full = { console_log: 8, rubber_duck: 8, agi: 1, monitoring: 1, flooding: 1, git_reset: 1, coffee: 5, mech_keyboard: 5, stack_overflow: 5, dark_mode: 4, deploy_prayer: 2, [last]: 1 };
+  assert.equal(Object.keys(full).length, 12);
+  assert.equal(size(full), none + 24, `가득 차도 24바이트 (예전에는 늘 ${UPGRADE_IDS.length}바이트)`);
+  const back = decodeSnapshot(encodeSnapshot(withUp(full)));
+  assert.deepEqual(back.me.up, full);
+  // 화면(main.ts)이 강화 단계를 문자열로 바꿔 바뀜을 비교한다: 늘 UPGRADE_IDS 순서로 풀린다
+  assert.deepEqual(Object.keys(back.me.up), UPGRADE_IDS.filter((id) => id in full));
+  // 손상된 목록: 개수가 아이템 종류보다 많거나, 없는 번호이거나, 단계가 0 이면 예외
+  const a = encodeSnapshot(withUp({}));
+  const b = encodeSnapshot(withUp({ coffee: 3 }));
+  let at = 0;
+  while (a[at] === b[at]) at++;
+  assert.deepEqual([...b.slice(at, at + 3)], [1, UPGRADE_IDS.indexOf('coffee'), 3], '개수, 번호, 단계');
+  for (const [k, v] of [[at, UPGRADE_IDS.length + 1], [at + 1, UPGRADE_IDS.length], [at + 2, 0]] as const) {
+    const bad = b.slice();
+    bad[k] = v;
+    assert.throws(() => decodeSnapshot(bad), RangeError, `${k - at}번째 바이트 = ${v}`);
+  }
+});
+
 test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시가 붙는다 (체력은 여전히 보내지 않는다)', () => {
   const w = createWorld(31);
   const p = addPlayer(w, 'a');
@@ -417,7 +448,7 @@ test('sim: 맞고 살아남은 적은 그 틱의 스냅샷에만 피격 표시�
   assert.equal(row(5001)!.length, 6, '[id, 종류, x, y, 피격, 얼음] 뿐: 체력은 없다');
 
   const tank = w.enemies.find((e) => e.id === 5001)!;
-  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, rehit: 0, turn: 0, w: 'console_log' });
+  w.shots.push({ id: 5003, kind: 'log', owner: p.id, x: tank.x, y: tank.y, vx: 0, vy: 0, ttl: 1, dmg: 12, pierce: 0, r: 4, hit: new Set(), life: 1, age: 0, rehit: 0, turn: 0, w: 'console_log' });
   step(w, DT);
   assert.equal(row(5001)![4], 1, '맞은 틱');
   assert.equal(row(5002)![4], 0, '안 맞은 적');

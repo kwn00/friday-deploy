@@ -12,7 +12,11 @@ import { DT } from './constants';
 import { ENEMY_IDS, FIELD_ITEM_KINDS, UPGRADE_IDS, ZONE_KINDS, type UpgradeId } from './content';
 import type { Snapshot } from './protocol';
 
-const VERSION = 8;
+/**
+ * 형식이 바뀌면 올린다. 9 (0.4.0): 내 강화 단계를 가진 것만 보낸다 (개수, 그다음 UPGRADE_IDS 의 번호와 단계 쌍).
+ * 8 까지는 모든 아이템의 단계를 UPGRADE_IDS 순서로 1바이트씩(0.3.5 에 44개) 보내서, 아이템이 늘 때마다 모든 스냅샷이 커졌다
+ */
+const VERSION = 9;
 /** 상대 좌표 정밀도: 1/16 픽셀. i16 범위는 ±2047 픽셀로 관심 영역 반경(420)보다 충분히 넓다. */
 const Q = 16;
 /**
@@ -156,7 +160,16 @@ export function encodeSnapshot(s: Snapshot): Uint8Array {
   w.varuint(s.me.level);
   w.varuint(s.me.kills);
   w.u8(Math.max(0, Math.min(255, s.me.revives)));
-  for (const id of UPGRADE_IDS) w.u8(s.me.up[id] ?? 0);
+  // 내 강화 단계: 가진 것만. 보통 몇 개라 3~25바이트다 (칸이 무기 6 + 패시브 6). 받는 쪽에서 UPGRADE_IDS 순서로 풀린다
+  let owned = 0;
+  for (const id of UPGRADE_IDS) if ((s.me.up[id] ?? 0) > 0) owned++;
+  w.u8(owned);
+  for (let i = 0; i < UPGRADE_IDS.length; i++) {
+    const lv = s.me.up[UPGRADE_IDS[i]!] ?? 0;
+    if (lv <= 0) continue;
+    w.u8(i);
+    w.u8(Math.min(255, lv));
+  }
 
   // 플레이어는 멀리 있을 수 있어 절대 좌표(f32)로 보낸다. 최대 4명이라 크기 부담이 없다.
   w.u8(s.p.length);
@@ -273,9 +286,13 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot {
     revives: r.u8(),
     up: {},
   };
-  for (const id of UPGRADE_IDS) {
+  const owned = r.u8();
+  if (owned > UPGRADE_IDS.length) throw new RangeError('snapshot upgrade list too long');
+  for (let k = 0; k < owned; k++) {
+    const id = UPGRADE_IDS[r.u8()];
     const lv = r.u8();
-    if (lv > 0) (me.up as Partial<Record<UpgradeId, number>>)[id] = lv;
+    if (id === undefined || lv === 0) throw new RangeError('bad upgrade in snapshot');
+    (me.up as Partial<Record<UpgradeId, number>>)[id] = lv;
   }
 
   const count = (): number => {

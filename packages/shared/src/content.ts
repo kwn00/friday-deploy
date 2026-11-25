@@ -161,22 +161,23 @@ export const STAGE_TIME = 30 * 60;
 
 /**
  * 투사체·소환물 종류. 순서가 곧 통신에서 쓰는 번호다 (중간에 끼워 넣지 말고 뒤에 추가할 것).
- * 소환물(카나리아, 부엉이, 고양이)도 위치가 움직이는 것이라 투사체 목록으로 보낸다.
+ * 소환물(카나리아, 부엉이, 고양이, 24시간 모니터링의 감시 새 watch)도 위치가 움직이는 것이라 투사체 목록으로 보낸다.
  */
-export const SHOT_KINDS = ['log', 'regex', 'ai', 'book', 'rollback', 'ping', 'packet', 'bomb', 'canary', 'owl', 'cat', 'drill', 'breakpoint', 'socket'] as const;
+export const SHOT_KINDS = ['log', 'regex', 'ai', 'book', 'rollback', 'ping', 'packet', 'bomb', 'canary', 'owl', 'cat', 'drill', 'breakpoint', 'socket', 'watch'] as const;
 export type ShotKind = (typeof SHOT_KINDS)[number];
 
 /**
  * 바닥에 생기는 공격 영역 종류 (통신 번호 = 순서). 그리는 모양:
  * slash: 각도 a 방향으로 길이 r 인 베기 / pool: 반경 r 웅덩이 / bolt: 반경 r 번개 / wipe: 반경 r 전체 지우기 /
- * blast: 반경 r 폭발 / band: 폭 r 의 세로 띠 / trail: 반경 r 발자국 / beam: 각도 a 방향 길이 r 광선 / fire: 반경 r 불바다(금요일 배포).
- * wipe 의 aux 는 0 이면 git clean, 1 이면 rm -rf node_modules (색만 다르다)
+ * blast: 반경 r 폭발 / band: 폭 r 의 세로 띠 / trail: 반경 r 발자국 / beam: 각도 a 방향 길이 r 광선 / fire: 반경 r 불바다(금요일 배포) /
+ * wave: 생긴 자리에서 반경 r 까지 남는 시간 동안 고르게 퍼지는 고리(패킷 플러딩. aux 는 그려 줄 고리 수).
+ * wipe 의 aux 는 0 이면 git clean, 1 이면 rm -rf node_modules (색만 다르다). blast 의 aux 는 0 이면 주황, 1 이면 24시간 모니터링(청록)
  */
-export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'trail', 'beam', 'fire'] as const;
+export const ZONE_KINDS = ['slash', 'pool', 'bolt', 'wipe', 'blast', 'band', 'trail', 'beam', 'fire', 'wave'] as const;
 export type ZoneKind = (typeof ZONE_KINDS)[number];
 
 /* ───────────── 강화 (무기 · 패시브) ─────────────
- * 순서가 곧 통신에서 쓰는 순서다 (스냅샷에 내 강화 단계를 이 순서로 싣는다). 새 것은 각 목록의 맨 뒤에 추가할 것. */
+ * 순서가 곧 통신에서 쓰는 번호다 (스냅샷에 내 강화 단계를 UPGRADE_IDS 의 번호로 싣는다). 새 것은 각 목록의 맨 뒤에 추가할 것. */
 
 export const WEAPON_IDS = [
   'console_log',
@@ -209,6 +210,10 @@ export const WEAPON_IDS = [
   'rm_rf',
   'monitoring',
   'flooding',
+  // 0.4.0 에 더한 진화 (뒤에만 붙인다: 스냅샷의 내 강화 단계가 이 순서다)
+  'git_reset',
+  'grep_r',
+  'agi',
 ] as const;
 export type WeaponId = (typeof WEAPON_IDS)[number];
 
@@ -234,13 +239,31 @@ export type PassiveId = (typeof PASSIVE_IDS)[number];
 export const UPGRADE_IDS = [...WEAPON_IDS, ...PASSIVE_IDS] as const;
 export type UpgradeId = WeaponId | PassiveId;
 
+/**
+ * 생존·편의 패시브 7종 (무기를 세게 하지 않는 것): 고르면 모든 무기의 피해가 조금 오른다 (우리 규칙. 뱀서에는 없다. stats.ts 의 mightOf).
+ * 고르는 결정은 1단계에서 나므로 1단계에 몰았다: 1단계 +5%, 2~5단계는 +1%씩 (하나에 최대 +9%, 6칸을 모두 채우면 +54% 로
+ * Stack Overflow 5단계 +50% 와 비슷하다). 스냅샷(다 쓰면 칸에서 빠진다)과 저주(운영 서버 직접 수정)는 넣지 않는다
+ */
+export const SUPPORT_PASSIVES = ['coffee', 'npm_install', 'dark_mode', 'test_coverage', 'work_life', 'side_project', 'deploy_prayer'] as const satisfies readonly PassiveId[];
+/** 생존·편의 패시브 하나가 그 단계까지 더하는 피해 배율 (단계 0 이면 0) */
+export const supportMight = (level: number): number => (level > 0 ? 0.04 + 0.01 * Math.min(level, 5) : 0);
+
+/**
+ * 한 번 가지면 더 오르지 않는 것: 가진 뒤에는 레벨업 선택지와 보물상자에 나오지 않는다 (sim.ts 의 offerPool, openChest).
+ * 운영 서버 직접 수정(저주): 금요일 배포의 짝으로 1단계만 노려도, 가진 것을 먼저 넣는 굴림과 보물상자로 원하지 않는 단계가 붙었다.
+ * 최대 단계(max)는 낮추지 않는다: 예전 기록의 2~5단계가 ownedUpgrades 에서 버려져 순위표에서 사라지지 않게
+ */
+export const PICK_ONCE: readonly UpgradeId[] = ['prod_hotfix'];
+
 /** 한 판에 가질 수 있는 무기 / 패시브 수 (처음 갖고 시작하는 무기 포함) */
 export const WEAPON_SLOTS = 6;
 export const PASSIVE_SLOTS = 6;
 
 /**
- * 무기의 능력치. 단계가 오르면 levels 의 값이 더해진다. 수치는 뱀서 위키의 같은 무기 값을 그대로 옮겼다
- * (피해·쿨다운·개수·지속·관통·최대 단계). 크기와 속도는 우리 화면 단위(px)라 기본값은 우리 것이고, 단계 증가분만 비율로 옮겼다.
+ * 무기의 능력치. 단계가 오르면 levels 의 값이 더해진다. 수치는 뱀서 위키의 같은 무기 값(피해·쿨다운·개수·지속·관통·최대 단계)에서
+ * 시작해 우리 밸런스로 고친다 (0.4.0 부터. 고친 값과 까닭은 docs/releases 와 upgrades.test.ts 의 수치 표에 있다).
+ * 최대 단계는 바꾸지 않는다 (예전 기록의 단계가 ownedUpgrades 에서 버려지지 않게).
+ * 크기와 속도는 우리 화면 단위(px)라 기본값은 우리 것이고, 단계 증가분만 비율로 옮겼다.
  * - dmg: 한 번 맞힐 때의 피해 (Stack Overflow 로 늘어난다)
  * - cd: 쿨다운(초). 다시 쓰기까지의 시간 (기계식 키보드로 줄어든다)
  * - amount: 한 번에 나가는 개수 (git fork 로 늘어난다)
@@ -322,13 +345,16 @@ const P = (name: string, icon: string, desc: string, per: string | string[], rar
   per,
   rarity,
 });
+/** 생존·편의 패시브의 단계별 문구: 본래 효과 뒤에 그 단계에서 오르는 피해량(supportMight)을 붙인다 */
+const withMight = (per: string | string[], max = 5): string[] =>
+  Array.from({ length: max }, (_, i) => `${Array.isArray(per) ? per[i] : per}, 피해량 +${Math.round((supportMight(i + 1) - supportMight(i)) * 100)}%`);
 
-/** 카나리아·야근 부엉이 (뱀서의 Peachone·Ebony Wings 와 같은 수치) */
+/** 카나리아·야근 부엉이 (뱀서의 Peachone·Ebony Wings 에서 시작. 0.4.0: 1단계 피해 10 → 15, 3단계 증가분 10 → 5 로 8단계 30 은 그대로) */
 const BIRD: [Base, Partial<WeaponStats>[]] = [
-  { dmg: 10, cd: 1.0, amount: 4, area: 18, speed: 1.4, dur: 4.0, pierce: 0 },
+  { dmg: 15, cd: 1.0, amount: 4, area: 18, speed: 1.4, dur: 4.0, pierce: 0 },
   [
     { amount: 1, area: 0.4 },
-    { amount: 1, dmg: 10 },
+    { amount: 1, dmg: 5 },
     { amount: 1, cd: -0.25 },
     { amount: 1, area: 0.4 },
     { amount: 1, dmg: 10 },
@@ -336,10 +362,13 @@ const BIRD: [Base, Partial<WeaponStats>[]] = [
     { amount: 1, area: 0.4 },
   ],
 ];
-/** 브로드캐스트·멀티캐스트 (뱀서의 Phiera Der Tuphello·Eight The Sparrow 와 같은 수치) */
+/**
+ * 브로드캐스트·멀티캐스트 (뱀서의 Phiera Der Tuphello·Eight The Sparrow 에서 시작).
+ * 0.4.0: 7단계 속도 +50% → +25% (한 틱에 19.5px 를 가서 작은 적을 건너뛰었다. 16px 면 판정 폭 안이다)
+ */
 const CAST: [Base, Partial<WeaponStats>[]] = [
   { dmg: 5, cd: 1.4, amount: 1, area: 5, speed: 260, dur: 0.9, pierce: 0 },
-  [{ amount: 1 }, { pierce: 2 }, { amount: 1 }, { dmg: 5 }, { pierce: 2 }, { dmg: 5, speed: 0.5 }, { pierce: 2 }],
+  [{ amount: 1 }, { pierce: 2 }, { amount: 1 }, { dmg: 5 }, { pierce: 2 }, { dmg: 5, speed: 0.25 }, { pierce: 2 }],
 ];
 
 export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
@@ -351,47 +380,49 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
     [{ amount: 1 }, { cd: -0.2 }, { amount: 1 }, { dmg: 10 }, { amount: 1 }, { pierce: 1 }, { dmg: 10 }],
     { rarity: 100, kb: 1, ignores: ['dur'] }),
   rubber_duck: W('러버덕', '🦆', '잠깐씩 주위를 도는 오리. 설명하다 보면 버그가 죽는다.',
-    { dmg: 10, cd: 3.0, amount: 1, area: 36, speed: 2.6, dur: 3.0, pierce: 0 },
+    { dmg: 10, cd: 2.5, amount: 1, area: 36, speed: 2.6, dur: 3.0, pierce: 0 },
     [{ amount: 1 }, { area: 0.25, speed: 0.3 }, { dur: 0.5, dmg: 10 }, { amount: 1 }, { area: 0.25, speed: 0.3 }, { dur: 0.5, dmg: 10 }, { amount: 1 }],
     { rarity: 80, kb: 1, rehit: 1.7 }),
-  regex: W('정규표현식', '🔣', '바라보는 방향으로 나란히 날린다. 쓴 사람도 못 읽는다.',
-    { dmg: 6.5, cd: 1.0, amount: 1, area: 5, speed: 320, dur: 0.6, pierce: 0 },
+  regex: W('정규표현식', '🔣', '가장 가까운 버그 쪽으로 나란히 날린다. 쓴 사람도 못 읽는다.',
+    { dmg: 10, cd: 1.0, amount: 1, area: 5, speed: 320, dur: 0.75, pierce: 0 },
     [{ amount: 1 }, { amount: 1, dmg: 5 }, { amount: 1 }, { pierce: 1 }, { amount: 1 }, { amount: 1, dmg: 5 }, { pierce: 1 }],
     { rarity: 100, kb: 0.5, ignores: ['dur'] }),
+  // AI 에이전트 (0.4.0): 쿨 3 → 2, 6단계 +1발, 8단계 관통 +1. 한 버그만 맞히는 탓에 8단계도 22분에 console.log 8단계보다 약해서
+  // (최종 수치 재측정: 22분 DPS 171 대 229) 마지막 단계에 한 마리를 더 꿰뚫게 했다
   ai_agent: W('AI 에이전트', '🤖', '아무 버그 하나를 골라 여러 발을 세게 쏜다.',
-    { dmg: 20, cd: 3.0, amount: 3, area: 6, speed: 180, dur: 1.4, pierce: 0 },
-    [{ dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }],
+    { dmg: 20, cd: 2.0, amount: 3, area: 6, speed: 180, dur: 1.4, pierce: 0 },
+    [{ dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10, amount: 1 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10, pierce: 1 }],
     { rarity: 80, kb: 1, ignores: ['dur'] }),
   ctrl_x: W('Ctrl+X', '✂️', '바라보는 쪽을 옆으로 크게 잘라낸다. 개수가 늘면 반대쪽도.',
-    { dmg: 10, cd: 1.35, amount: 1, area: 56, speed: 0, dur: 0.15, pierce: 0 },
+    { dmg: 15, cd: 1.1, amount: 1, area: 64, speed: 0, dur: 0.15, pierce: 0 },
     [{ amount: 1 }, { dmg: 5 }, { dmg: 5, area: 0.1 }, { dmg: 5 }, { dmg: 5, area: 0.1 }, { dmg: 5 }, { dmg: 5 }],
     { rarity: 100, kb: 1, ignores: ['speed', 'dur'] }),
   brick_book: W('벽돌책', '🧱', '두꺼운 기술서를 던진다. 위로 날아갔다 떨어지며 버그를 짓누른다.',
-    { dmg: 20, cd: 4.0, amount: 1, area: 8, speed: 260, dur: 3.0, pierce: 2 },
+    { dmg: 20, cd: 3.0, amount: 1, area: 8, speed: 260, dur: 3.0, pierce: 2 },
     [{ amount: 1 }, { dmg: 20 }, { pierce: 2 }, { amount: 1 }, { dmg: 20 }, { pierce: 2 }, { dmg: 20 }],
     { rarity: 100, kb: 1, ignores: ['dur'] }),
-  rollback: W('롤백', '↩️', '가까운 버그 쪽으로 날아갔다가 되돌아와 뒤로 계속 날아간다. 오가며 맞힌다.',
+  rollback: W('롤백', '↩️', '부메랑처럼 날아갔다 돌아온다. 오가며 두 번 벤다.',
     { dmg: 5, cd: 2.0, amount: 1, area: 9, speed: 300, dur: 1.8, pierce: 999 },
     [{ dmg: 10 }, { area: 0.1, speed: 0.25 }, { amount: 1 }, { dmg: 10 }, { area: 0.1, speed: 0.25 }, { amount: 1 }, { dmg: 10 }],
     { rarity: 80, kb: 1, ignores: ['dur'] }),
   firewall: W('방화벽', '🔥', '내 주위의 버그를 계속 태운다. 맞을수록 잘 밀리고 잘 언다.',
-    { dmg: 5, cd: 1.3, amount: 1, area: 30, speed: 0, dur: 0, pierce: 0 },
-    [{ area: 0.4, dmg: 2 }, { cd: -0.1, dmg: 1 }, { area: 0.2, dmg: 1 }, { cd: -0.1, dmg: 2 }, { area: 0.2, dmg: 1 }, { cd: -0.1, dmg: 1 }, { area: 0.2, dmg: 2 }],
+    { dmg: 8, cd: 1.3, amount: 1, area: 30, speed: 0, dur: 0, pierce: 0 },
+    [{ area: 0.4 }, { cd: -0.1 }, { area: 0.2, dmg: 1 }, { cd: -0.1, dmg: 2 }, { area: 0.2, dmg: 1 }, { cd: -0.1, dmg: 1 }, { area: 0.2, dmg: 2 }],
     { rarity: 70, kb: 0, ignores: ['speed', 'amount', 'dur'] }),
   hotfix: W('핫픽스', '💧', '급하게 뿌린 패치가 바닥에 고인다. 밟은 버그가 녹는다.',
     { dmg: 10, cd: 4.5, amount: 1, area: 22, speed: 0, dur: 2.0, pierce: 0 },
     [{ amount: 1, area: 0.2 }, { dur: 0.5, dmg: 10 }, { amount: 1, area: 0.2 }, { dur: 0.25, dmg: 10 }, { amount: 1, area: 0.2 }, { dur: 0.25, dmg: 5 }, { area: 0.2, dmg: 5 }],
     { rarity: 100, kb: 0, rehit: 0.5, ignores: ['speed'] }),
   ping_pong: W('핑퐁', '🏓', '아무 방향으로 날아가 화면 끝쯤에서 튕긴다. 계속 오가며 맞힌다.',
-    { dmg: 10, cd: 3.0, amount: 1, area: 6, speed: 200, dur: 2.25, pierce: 999 },
-    [{ dmg: 5, speed: 0.2 }, { dur: 0.25, dmg: 5 }, { amount: 1 }, { dmg: 5, speed: 0.2 }, { dur: 0.25, dmg: 5 }, { amount: 1 }, { dur: 0.5 }],
+    { dmg: 15, cd: 3.0, amount: 1, area: 6, speed: 200, dur: 2.25, pierce: 999 },
+    [{ speed: 0.2 }, { dur: 0.25, dmg: 5 }, { amount: 1 }, { dmg: 5, speed: 0.2 }, { dur: 0.25, dmg: 5 }, { amount: 1 }, { dur: 0.5 }],
     { rarity: 80, kb: 1, rehit: 0.5 }),
   hot_reload: W('핫 리로드', '⚡', '갑자기 번쩍. 주변의 아무 버그에게나 내리친다.',
     { dmg: 15, cd: 4.5, amount: 2, area: 14, speed: 0, dur: 0.25, pierce: 0 },
     [{ amount: 1 }, { area: 1.0, dmg: 10 }, { amount: 1 }, { area: 1.0, dmg: 20 }, { amount: 1 }, { area: 1.0, dmg: 20 }, { amount: 1 }],
     { rarity: 80, kb: 1, ignores: ['speed', 'dur'] }),
-  git_clean: W('git clean -fd', '🧹', '가끔 화면의 버그를 통째로 지운다. 경험치·아이템도 자주 지워지지만 보물상자는 남는다.',
-    { dmg: 0, cd: 90, amount: 1, area: 0, speed: 0, dur: 1.0, pierce: 0, chance: 0.1 },
+  git_clean: W('git clean -fd', '🧹', '가끔 화면의 버그를 보스까지 통째로 지운다. 경험치는 자주 같이 지워지지만 보물상자는 남는다.',
+    { dmg: 0, cd: 90, amount: 1, area: 0, speed: 0, dur: 1.0, pierce: 0, chance: 0.25 },
     [{ cd: -10 }, { chance: 0.15 }, { cd: -10 }, { chance: 0.2 }, { cd: -5 }, { chance: 0.2 }, { cd: -5 }],
     { rarity: 60, kb: 0, ignores: ['might', 'amount', 'area', 'speed', 'dur'], labels: { chance: '아이템과 경험치를 남길 확률' } }),
   canary: W('카나리아', '🐤', '내 주위를 시계 방향으로 돌며 4초 동안 폭탄을 퍼붓는다. 배포 전에 먼저 날려 보낸다.', ...BIRD,
@@ -403,33 +434,33 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   multicast: W('멀티캐스트', '📨', '대각선 네 방향으로 패킷을 쏜다.', ...CAST,
     { rarity: 50, kb: 0.1, ignores: ['dur'] }),
   keyboard_cat: W('키보드 고양이', '🐈', '고양이를 풀어 둔다. 제멋대로 돌아다니며 닿는 버그를 할퀸다.',
-    { dmg: 10, cd: 5.0, amount: 1, area: 8, speed: 60, dur: 5.0, pierce: 999 },
-    [{ speed: 0.2 / 0.4 }, { dur: 1.5 }, { speed: 0.2 / 0.4 }, { amount: 1 }, { dur: 1.5 }, { speed: 0.2 / 0.4 }, { amount: 1 }],
+    { dmg: 15, cd: 5.0, amount: 1, area: 8, speed: 60, dur: 5.0, pierce: 999 },
+    [{ speed: 0.2 / 0.4, dmg: 5 }, { dur: 1.5 }, { speed: 0.2 / 0.4, dmg: 5 }, { amount: 1 }, { dur: 1.5 }, { speed: 0.2 / 0.4, dmg: 10 }, { amount: 1 }],
     { rarity: 50, kb: 0.1, rehit: 1.0 }),
-  infinite_scroll: W('무한 스크롤', '🖱️', '내 자리를 위아래로 길게 쓸어내린다. 단계가 오르면 오래 남는 대신 쿨다운이 길어진다.',
+  infinite_scroll: W('무한 스크롤', '🖱️', '내 자리를 위아래로 길게 쓸어내린다. 단계가 오르면 더 오래 남는다.',
     { dmg: 10, cd: 2.0, amount: 1, area: 22, speed: 0, dur: 0.5, pierce: 0 },
-    [{ area: 1.0 }, { dur: 0.5, cd: 0.75 }, { area: 0.25, dmg: 10 }, { dur: 0.5, cd: 0.75 }, { area: 0.25, dmg: 10 }, { dur: 0.5, cd: 0.75 }, { area: 0.25, dmg: 10 }],
-    { rarity: 50, kb: 1, rehit: 1.0, ignores: ['amount', 'speed'] }),
-  commit_history: W('커밋 히스토리', '👣', '움직이는 동안 지나간 자리에 커밋을 남기고, 멈추면 바라보는 쪽으로 한꺼번에 날린다.',
+    [{ area: 1.0 }, { dur: 0.5, cd: 0.75 }, { area: 0.25, dmg: 5 }, { dur: 0.5, cd: 0.75 }, { area: 0.25, dmg: 5 }, { dur: 0.5, cd: 0.75 }, { area: 0.25, dmg: 5 }],
+    { rarity: 50, kb: 1, rehit: 0.5, ignores: ['amount', 'speed'] }),
+  commit_history: W('커밋 히스토리', '👣', '걸으면 발자국이 남고, 밟은 버그가 다친다. 멈추면 발자국을 앞으로 날린다.',
     { dmg: 10, cd: 6.0, amount: 1, area: 10, speed: 0, dur: 1.0, pierce: 0 },
     [{ amount: 1 }, { dmg: 5 }, { dur: 0.25 }, { dmg: 5 }, { dur: 0.25 }, { dmg: 5 }, { dur: 0.25 }],
     { rarity: 50, kb: 1, rehit: 2.0 }),
-  code_freeze: W('코드 프리즈', '🧊', '시곗바늘처럼 돌아가며 광선을 쏜다. 맞은 버그는 잠깐 얼어붙는다.',
-    { dmg: 0, cd: 2.0, amount: 1, area: 110, speed: 0, dur: 2.0, pierce: 999 },
+  code_freeze: W('코드 프리즈', '🧊', '시곗바늘처럼 돌아가며 광선을 쏜다. 맞은 버그는 조금 다치고 잠깐 얼어붙는다.',
+    { dmg: 5, cd: 1.5, amount: 1, area: 110, speed: 0, dur: 2.0, pierce: 999 },
     [{ dur: 1 }, { cd: -0.5 }, { dur: 1 }, { dur: 1 }, { cd: -0.5 }, { dur: 1 }],
-    { rarity: 70, kb: 0, ignores: ['might', 'amount', 'speed', 'area'], labels: { dur: '얼리는 시간' } }),
-  two_factor: W('2단계 인증', '🔐', '방패를 만든다. 맞을 때 방패가 대신 막고 잠깐 무적이 된다.',
-    { dmg: 0, cd: 10, amount: 1, area: 0, speed: 0, dur: 0.24, pierce: 0 },
+    { rarity: 70, kb: 0, ignores: ['amount', 'speed', 'area'], labels: { dur: '얼리는 시간' } }),
+  two_factor: W('2단계 인증', '🔐', '방패가 대신 맞아 주고 둘레의 버그를 밀쳐 낸다. 다 쓰면 다시 찬다.',
+    { dmg: 10, cd: 8, amount: 1, area: 48, speed: 0, dur: 0.24, pierce: 0 },
     [{ cd: -0.5, dur: 0.2 }, { cd: -0.5, dur: 0.2 }, { amount: 1 }, { cd: -0.5, dur: 0.2 }, { cd: -0.5, dur: 0.2 }, { amount: 1 }],
-    { rarity: 60, kb: 0, ignores: ['might', 'amount', 'area', 'speed', 'dur'], labels: { amount: '방패', dur: '무적' } }),
-  sprint: W('스프린트', '🌪️', '바라보는 쪽 옆으로 여러 번 벤다. 쉬지 않고 걸을수록 피해가 늘어난다.',
-    { dmg: 2, cd: 2.0, amount: 4, area: 48, speed: 0, dur: 0.4, pierce: 0 },
-    [{ dmg: 1 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 1 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 1 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 1 }],
+    { rarity: 60, kb: 2, ignores: ['amount', 'area', 'speed', 'dur'], labels: { dmg: '반격 피해', amount: '방패', dur: '무적' } }),
+  sprint: W('스프린트', '🌪️', '양옆을 번갈아 여러 번 벤다. 쉬지 않고 걸을수록 세진다.',
+    { dmg: 5, cd: 2.0, amount: 4, area: 56, speed: 0, dur: 0.4, pierce: 0 },
+    [{ dmg: 2 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 2 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 2 }, { amount: 1, area: 0.2 / 1.4 }, { dmg: 2 }],
     { rarity: 50, kb: 0.1, crit: { chance: 0.05, mult: 2 }, ignores: ['dur'] }),
   logic_bomb: W('멀티스레드', '🧵', '무작위 버그 하나에게 스레드 여러 개를 한꺼번에 보낸다.',
-    { dmg: 10, cd: 1.4, amount: 3, area: 22, speed: 500, dur: 0.4, pierce: 0 },
+    { dmg: 10, cd: 1.4, amount: 3, area: 22, speed: 350, dur: 0.6, pierce: 0 },
     [{ dmg: 10 }, { pierce: 1 }, { amount: 1, area: 0.1 / 0.9 }, { pierce: 1 }, { dmg: 10 }],
-    { rarity: 40, kb: 1 }),
+    { rarity: 60, kb: 1 }),
 
   /* ── 진화한 무기 (EVOLUTIONS). 단계가 하나뿐이고 레벨업 선택지에는 나오지 않는다 (rarity 0).
    *    수치는 우리 게임의 것이다 (뱀서의 진화를 옮긴 것이 아니다). 재료 무기의 최대 단계보다 1.5~3배쯤 세다.
@@ -446,29 +477,52 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
   rm_rf: W('rm -rf node_modules', '♻️', '화면을 지우고 새로 받는다. 경험치는 모두 남아 내 쪽으로 끌려온다.',
     { dmg: 0, cd: 45, amount: 1, area: 0, speed: 0, dur: 1.0, pierce: 0, chance: 1 }, [],
     { rarity: 0, kb: 0, ignores: ['might', 'amount', 'area', 'speed', 'dur'] }),
-  monitoring: W('24시간 모니터링', '🕐', '카나리아와 부엉이가 쉬지 않고 함께 돌며 폭탄을 퍼붓는다.',
-    { dmg: 40, cd: 0.5, amount: 11, area: 40, speed: 1.4, dur: 0, pierce: 0 }, [],
+  // 24시간 모니터링 (0.4.0): 카나리아와 부엉이가 센 감시 새 한 마리가 됐다. 내 둘레(궤도 56)를 시계 방향으로 쉬지 않고 돌며
+  // 쿨다운마다 자기 자리에 큰 폭탄 하나(반경 72)를 떨군다. 궤도가 폭발 반경보다 작아 몸에 붙은 버그도 늘 맞는다.
+  // 개수(git fork)는 지나온 자리에 폭탄을 더 떨구고, 범위는 폭탄 크기, 속도(CDN)는 도는 빠르기다 (combat.ts 의 runMonitoring)
+  monitoring: W('24시간 모니터링', '🕐', '아주 센 감시 새 한 마리가 쉬지 않고 돌며 큰 폭탄을 떨군다.',
+    { dmg: 240, cd: 0.25, amount: 1, area: 72, speed: 2.0, dur: 0, pierce: 0 }, [],
     { rarity: 0, kb: 2, ignores: ['dur'] }),
-  flooding: W('패킷 플러딩', '🌊', '여덟 방향으로 패킷을 한꺼번에 쏟아낸다.',
-    { dmg: 20, cd: 1.0, amount: 3, area: 5, speed: 390, dur: 0.9, pierce: 8 }, [],
-    { rarity: 0, kb: 0.1, ignores: ['dur'] }),
+  // 패킷 플러딩 (0.4.0): 쿨다운마다 내 자리에서 물결이 반경 speed × dur (234) 까지 퍼지며, 닿는 버그를 모두 한 번씩 맞히고 밀어낸다.
+  // 반경은 CDN·keep-alive 로 늘지 않는다 (넓이가 제곱으로 커져 너무 세다). 개수(git fork)는 물결의 겹 수라 피해에 곱해지고
+  // (판정은 하나로 합친다), 범위(듀얼 모니터)는 고리 두께(반쪽 6px)다 (combat.ts 의 sweepWave)
+  flooding: W('패킷 플러딩', '🌊', '내 자리에서 패킷 물결이 퍼져, 닿는 버그를 모두 맞히고 밀어낸다.',
+    { dmg: 10, cd: 1.2, amount: 3, area: 6, speed: 260, dur: 0.9, pierce: 999 }, [],
+    { rarity: 0, kb: 1, ignores: ['dur', 'speed'] }),
+  // 0.4.0 에 더한 진화 셋: 재료 무기의 동작 갈래와 그림을 그대로 쓴다 (새 투사체 종류도, 새 판정 규칙도 없다).
+  // 짝은 무기를 세게 하지 않아 잘 고르지 않던 패시브다 (배포 기도·CDN·사이드 프로젝트에 고를 까닭을 준다)
+  // git reset --hard (롤백 + 배포 기도): 롤백처럼 던지는 부메랑이 넷이고 더 크고 세다 (움직임은 롤백 갈래 그대로). 관통 제한이 없고,
+  // 같은 적을 0.5초에 한 번 (롤백과 같다). 치명타 확률에는 운(배포 기도)이 곱해진다 (hit)
+  git_reset: W('git reset --hard', '⏪', '전부 되돌린다. 롤백 여럿이 부채꼴로 날아가 다 꿰뚫고, 운이 좋으면 두 배로 벤다.',
+    { dmg: 45, cd: 2.0, amount: 4, area: 14, speed: 450, dur: 1.8, pierce: 999 }, [],
+    { rarity: 0, kb: 1, rehit: 0.5, crit: { chance: 0.25, mult: 2 }, ignores: ['dur'] }),
+  // grep -r (정규표현식 + CDN): 정규표현식처럼 가장 가까운 버그 쪽으로(없으면 바라보는 쪽으로) 나란히 쏘되, 더 자주·더 많이·더 멀리
+  grep_r: W('grep -r', '🔎', '찾을 때까지 멈추지 않는다. 가장 가까운 버그 쪽으로 쉴 새 없이 쏟아낸다.',
+    { dmg: 18, cd: 0.4, amount: 4, area: 5, speed: 380, dur: 0.65, pierce: 3 }, [],
+    { rarity: 0, kb: 0.5, ignores: ['dur'] }),
+  // AGI (AI 에이전트 + 사이드 프로젝트): AI 에이전트처럼 아무 버그 하나에게 부채꼴로 쏘되, 크고 느린 답이 넷까지 더 꿰뚫는다.
+  // 판정 반경 8 은 AI 에이전트의 그림('ai')에 맞춘 크기다. 관통 무한은 너무 세서(22분에 금요일 배포 가까이) 4 로 했다.
+  // 재료가 한두 버그만 맞혀서 후반에는 재료보다 훨씬 세다 (22분 3배쯤. 그래도 디버거의 2배쯤으로 진화 무기 가운데 약한 편)
+  agi: W('AGI', '🧠', '스스로 생각하기 시작했다. 크고 느린 답이 버그를 여럿 꿰뚫는다.',
+    { dmg: 150, cd: 2.0, amount: 3, area: 8, speed: 160, dur: 2.0, pierce: 4 }, [],
+    { rarity: 0, kb: 1, ignores: ['dur'] }),
 
   /* ── 패시브 (뱀서의 Wings, Empty Tome, Spinach, Attractorb, Hollow Heart, Candelabrador, Armor, Pummarola, Bracer,
    *    Spellbinder, Duplicator, Clover, Crown, Skull O'Maniac, Tiragisu 순서) ── */
-  coffee: P('아이스 아메리카노', '☕', '이동 속도가 빨라진다.', '이동 속도 +10%', 50),
+  coffee: P('아이스 아메리카노', '☕', '이동 속도가 빨라진다.', withMight('이동 속도 +10%'), 50),
   mech_keyboard: P('기계식 키보드', '⌨️', '모든 무기를 더 자주 쓴다.', '쿨다운 -8%', 50),
   stack_overflow: P('Stack Overflow', '📋', '복붙의 힘. 모든 공격이 세진다.', '피해량 +10%', 100),
-  npm_install: P('npm install', '📦', '일단 다 끌어온다. 경험치와 아이템을 더 멀리서 끌어당긴다.', ['끌어당기는 범위 +50%', '끌어당기는 범위 +33%', '끌어당기는 범위 +25%', '끌어당기는 범위 +20%', '끌어당기는 범위 +33%'], 100),
-  dark_mode: P('다크 모드', '🌙', '눈이 편안. 최대 체력이 늘어난다.', '최대 체력 ×1.2', 90),
+  npm_install: P('npm install', '📦', '일단 다 끌어온다. 경험치와 아이템을 멀리서 끌어당긴다.', withMight(['끌어당기는 범위 +50%', '끌어당기는 범위 +33%', '끌어당기는 범위 +25%', '끌어당기는 범위 +20%', '끌어당기는 범위 +33%']), 100),
+  dark_mode: P('다크 모드', '🌙', '최대 체력이 늘고, 늘어난 만큼 바로 찬다.', withMight('최대 체력 ×1.2'), 90),
   dual_monitor: P('듀얼 모니터', '🖥️', '화면이 넓어지니 공격이 더 커진다.', '공격 범위 +10%', 100),
-  test_coverage: P('테스트 커버리지', '🧪', '버그에게 덜 아프게 맞는다.', '한 대 맞을 때 피해 -1', 100),
-  work_life: P('워라밸', '🧘', '가만히 있어도 체력이 조금씩 차고, 회복 아이템도 더 잘 듣는다.', '1초에 체력 +0.2', 90),
-  cdn: P('CDN', '🚀', '날아가거나 도는 것들이 더 빨라진다.', '속도 +10%', 100),
+  test_coverage: P('테스트 커버리지', '🧪', '버그에게 덜 아프게 맞는다.', withMight('한 대 맞을 때 피해 -1'), 100),
+  work_life: P('워라밸', '🧘', '가만히 있어도 체력이 차고, 회복 아이템도 더 잘 듣는다.', withMight('1초에 체력 +0.5'), 90),
+  cdn: P('CDN', '🚀', '날아가거나 도는 것이 빨라지고, 더 멀리서 겨눈다.', '속도 +10%', 100),
   keep_alive: P('keep-alive', '⏳', '남는 공격이 더 오래 남는다.', '지속 시간 +10%', 100),
   git_fork: P('git fork', '🍴', '쏘거나 던지거나 부르는 것이 하나씩 늘어난다.', '개수 +1', 50, 2),
-  deploy_prayer: P('배포 기도', '🙏', '운이 좋아진다. 선택지가 4개 나오거나 상자가 좋아지기도 한다.', '운 +10%', 100),
-  side_project: P('사이드 프로젝트', '📚', '같은 일을 해도 더 많이 배운다.', '얻는 경험치 +8%', 70),
-  prod_hotfix: P('운영 서버 직접 수정', '☠️', '버그가 더 많이, 더 세게, 더 빨리 몰려온다.', '버그 체력·속도·수·빈도 +10%', 40),
+  deploy_prayer: P('배포 기도', '🙏', '운이 좋아지고, 레벨업 새로고침이 늘어난다.', withMight('운 +10%, 새로고침 +1'), 100),
+  side_project: P('사이드 프로젝트', '📚', '같은 일을 해도 더 많이 배운다.', withMight('얻는 경험치 +15%'), 70),
+  prod_hotfix: P('운영 서버 직접 수정', '☠️', '버그가 더 많이, 더 세게, 더 빨리 몰려온다. 한 번만 고른다.', '버그 체력·속도·수·빈도 +10%', 40),
   snapshot: P('스냅샷', '📸', '쓰러져도 그 자리에서 되살아난다. 다 쓰면 칸이 비어 다시 얻을 수 있다.', '부활 +1', 40, 2),
 };
 
@@ -496,6 +550,10 @@ export const EVOLUTIONS: readonly Evolution[] = [
   { id: 'rm_rf', from: ['git_clean'], with: 'npm_install' },
   { id: 'monitoring', from: ['canary', 'night_owl'], with: null },
   { id: 'flooding', from: ['broadcast', 'multicast'], with: null },
+  // 0.4.0
+  { id: 'git_reset', from: ['rollback'], with: 'deploy_prayer' },
+  { id: 'grep_r', from: ['regex'], with: 'cdn' },
+  { id: 'agi', from: ['ai_agent'], with: 'side_project' },
 ];
 
 const EVOLVED = new Map<UpgradeId, Evolution>(EVOLUTIONS.map((e) => [e.id, e]));
@@ -643,3 +701,29 @@ export const FIELD_ITEMS: Record<FieldItemKind, FieldItemDef> = {
   // 다른 필드 아이템과 따로, 평균 MAGNET_INTERVAL 초에 하나 놓인다 (sim.ts). 주우면 맵의 경험치가 모두 끌려온다
   magnet: { name: '자석', icon: '🧲', desc: '맵의 경험치를 모두 끌어당긴다', weight: 0 },
 };
+
+/* ───────────── 시작 무기 ─────────────
+ * 판을 시작할 때 고르는 무기 (1단계로 시작한다). 순서가 곧 통신 번호다 (hello.starter, 대기실의 starter 메시지):
+ * 중간에 끼워 넣거나 순서를 바꾸지 말고 뒤에 추가할 것. 0번이 기본값이다 (고르지 않았을 때).
+ * 진화한 무기와 패시브는 넣지 않는다. 서버는 이 목록의 번호만 받고(밖이면 위반), 단계는 늘 1이다.
+ * 고른 무기는 무기 칸 하나를 쓴다 (WEAPON_SLOTS 에 들어간다). 선택지에서 고른 것으로 세지 않는다 (통계는 따로 started).
+ */
+export const STARTER_WEAPONS = ['console_log', 'rollback', 'ai_agent', 'firewall'] as const satisfies readonly WeaponId[];
+export type StarterId = (typeof STARTER_WEAPONS)[number];
+export const DEFAULT_STARTER: StarterId = STARTER_WEAPONS[0];
+
+/** 지금 고를 수 있는 시작 무기인지 */
+export const isStarter = (v: unknown): v is StarterId => typeof v === 'string' && (STARTER_WEAPONS as readonly string[]).includes(v);
+
+/** 통신 번호 → 시작 무기. 정수가 아니거나 범위 밖이면 undefined */
+export const starterAt = (i: unknown): StarterId | undefined =>
+  typeof i === 'number' && Number.isInteger(i) && i >= 0 && i < STARTER_WEAPONS.length ? STARTER_WEAPONS[i] : undefined;
+
+/** 시작 무기 → 통신 번호 */
+export const starterIndex = (id: StarterId): number => STARTER_WEAPONS.indexOf(id);
+
+/**
+ * 진화하지 않은 무기 id 인지. 저장된 기록의 시작 무기를 읽을 때 쓴다: 지금 후보(STARTER_WEAPONS)로 거르지 않는다.
+ * 나중에 후보에서 빠진 무기로 세운 기록도 그대로 보이게 (리더보드 기록은 지우지 않는다)
+ */
+export const isBaseWeapon = (v: unknown): v is WeaponId => isUpgradeId(v) && isWeapon(v) && evolutionOf(v) === undefined;

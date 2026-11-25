@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DT,
+  MAX_REROLLS,
   OFFER_REROLLS,
   OFFER_TIMEOUT,
   PASSIVE_IDS,
@@ -52,10 +53,10 @@ function onlyLeft(p: Player, keep: UpgradeId[]): void {
   for (const id of [...weapons, ...passives]) p.up[id] = keep.includes(id) ? 1 : UPGRADES[id].max;
 }
 
-test('새로고침: 한 판에 두 번. 지금 카드를 빼고 다시 뽑고, 카드 수와 제한 시간은 처음처럼', () => {
-  assert.equal(OFFER_REROLLS, 2);
+test('새로고침: 한 판에 세 번. 지금 카드를 빼고 다시 뽑고, 카드 수와 제한 시간은 처음처럼', () => {
+  assert.equal(OFFER_REROLLS, 3);
   const { w, p } = quietWorld(7);
-  assert.equal(p.rerolls, OFFER_REROLLS, '판을 시작할 때 두 번');
+  assert.equal(p.rerolls, OFFER_REROLLS, '판을 시작할 때 세 번');
   const first = levelUp(w, p);
   assert.ok(canReroll(p));
   p.offerTimer = 12;
@@ -68,19 +69,25 @@ test('새로고침: 한 판에 두 번. 지금 카드를 빼고 다시 뽑고, �
   );
   assert.equal(new Set(second).size, second.length, '겹치는 카드가 없다');
   assert.equal(p.offerTimer, 0, '제한 시간은 처음부터');
-  assert.equal(p.rerolls, 1);
+  assert.equal(p.rerolls, OFFER_REROLLS - 1);
   assert.deepEqual(w.events.at(-1), { type: 'offers', pid: p.id }, '새 선택지를 알리는 이벤트');
 
-  assert.equal(rerollOffers(w, p.id), true);
-  assert.ok(p.offers!.every((u) => !second.includes(u)));
+  // 남은 것을 모두 쓴다: 쓸 때마다 바로 앞 카드는 다시 나오지 않는다
+  let prev = second;
+  for (let left = OFFER_REROLLS - 1; left > 0; left--) {
+    assert.equal(rerollOffers(w, p.id), true);
+    assert.ok(p.offers!.every((u) => !prev.includes(u)));
+    assert.equal(p.rerolls, left - 1);
+    prev = [...p.offers!];
+  }
   assert.equal(p.rerolls, 0);
-  const third = [...p.offers!];
+  const last = [...p.offers!];
   assert.equal(canReroll(p), false, '다 썼다');
   assert.equal(rerollOffers(w, p.id), false);
-  assert.deepEqual(p.offers, third, '받지 않으면 선택지도 그대로');
+  assert.deepEqual(p.offers, last, '받지 않으면 선택지도 그대로');
   assert.equal(p.rerolls, 0);
 
-  // 레벨업마다가 아니라 한 판 전체에서 두 번이다
+  // 레벨업마다가 아니라 한 판 전체에서 세 번이다
   assert.equal(pickOffer(w, p.id, 0), true);
   levelUp(w, p);
   assert.equal(p.rerolls, 0);
@@ -220,7 +227,7 @@ test('통신: reroll 은 어느 선택지(레벨)를 새로고침하는지만 �
     assert.equal(parseClientMsg(bad), null, bad);
 });
 
-test('새로고침: 함께 하기에서는 사람마다 두 번이고, 한 사람의 새로고침은 다른 사람의 선택지와 횟수를 건드리지 않는다', () => {
+test('새로고침: 함께 하기에서는 사람마다 세 번이고, 한 사람의 새로고침은 다른 사람의 선택지와 횟수를 건드리지 않는다', () => {
   const w = createWorld(15);
   w.itemCd = 1e9;
   w.magnetCd = 1e9;
@@ -235,11 +242,40 @@ test('새로고침: 함께 하기에서는 사람마다 두 번이고, 한 사�
   step(w, DT);
   assert.ok(a.offers && b.offers);
   const bOffers = [...b.offers];
-  assert.equal(rerollOffers(w, a.id), true);
-  assert.equal(rerollOffers(w, a.id), true);
+  for (let i = 0; i < OFFER_REROLLS; i++) assert.equal(rerollOffers(w, a.id), true);
   assert.equal(rerollOffers(w, a.id), false);
-  assert.deepEqual([a.rerolls, b.rerolls], [0, 2]);
+  assert.deepEqual([a.rerolls, b.rerolls], [0, OFFER_REROLLS]);
   assert.deepEqual(b.offers, bOffers, '다른 사람의 선택지는 그대로');
   assert.equal(rerollOffers(w, b.id), true);
-  assert.equal(b.rerolls, 1);
+  assert.equal(b.rerolls, OFFER_REROLLS - 1);
+});
+
+test('새로고침: 배포 기도를 고를 때마다(단계가 오를 때마다) 하나씩 는다. 보물상자로 올라도 같고, 한 판의 최대는 MAX_REROLLS', () => {
+  const { w, p } = quietWorld(16);
+  assert.equal(MAX_REROLLS, OFFER_REROLLS + UPGRADES.deploy_prayer.max);
+  // 레벨업 선택으로 1단계
+  p.offers = ['deploy_prayer'];
+  assert.equal(pickOffer(w, p.id, 0), true);
+  assert.deepEqual([p.up.deploy_prayer, p.rerolls], [1, OFFER_REROLLS + 1]);
+  // 써 버린 뒤에 고른 단계도 하나씩 준다 (남은 수에 더한다)
+  p.rerolls = 0;
+  p.offers = ['deploy_prayer'];
+  pickOffer(w, p.id, 0);
+  assert.deepEqual([p.up.deploy_prayer, p.rerolls], [2, 1]);
+  // 보물상자로 오른 단계도 준다 (가진 것 중 올릴 수 있는 것이 배포 기도뿐이게)
+  p.up = { console_log: UPGRADES.console_log.max, deploy_prayer: 2 };
+  w.items.push({ id: w.nextId++, kind: 'chest', x: p.x, y: p.y, ttl: Infinity, chest: [3, 0, 0, 0] });
+  w.wave = Math.floor((w.time + DT) / 60);
+  w.spawnCd = 1e9;
+  step(w, DT);
+  assert.equal(p.up.deploy_prayer, UPGRADES.deploy_prayer.max, '상자가 최대 단계까지 올렸다');
+  assert.equal(p.rerolls, 1 + (UPGRADES.deploy_prayer.max - 2), '오른 단계만큼만 (최대 단계에서 남은 몫은 주지 않는다)');
+  // 처음부터 다 모으면 MAX_REROLLS
+  const fresh = quietWorld(17);
+  for (let l = 0; l < UPGRADES.deploy_prayer.max + 2; l++) {
+    fresh.p.offers = ['deploy_prayer'];
+    pickOffer(fresh.w, fresh.p.id, 0);
+  }
+  assert.equal(fresh.p.up.deploy_prayer, UPGRADES.deploy_prayer.max);
+  assert.equal(fresh.p.rerolls, MAX_REROLLS, '최대 단계를 넘겨 골라도(그럴 수 없지만) 더 늘지 않는다');
 });

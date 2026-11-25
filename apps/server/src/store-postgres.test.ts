@@ -398,7 +398,7 @@ describe('PostgreSQL 저장소: 시즌 0 으로 합치기 (0.x = 시즌 0)', { s
 });
 
 describe('PostgreSQL 저장소: 아이템 통계 (시즌 × 게임 버전)', { skip: skipAll }, () => {
-  const counts = (offered: number, picked: number, autoPicked = 0, chest = 0, finalOwned = 0, finalLevelSum = 0) => ({ offered, picked, autoPicked, chest, finalOwned, finalLevelSum });
+  const counts = (offered: number, picked: number, autoPicked = 0, chest = 0, finalOwned = 0, finalLevelSum = 0, started = 0) => ({ offered, picked, autoPicked, chest, finalOwned, finalLevelSum, started });
 
   it('시즌·버전·아이템마다 더해 가고, 다시 불러오면 버전별로 같다. 세기 시작한 때는 가장 이른 것이다', async () => {
     const store = await createPostgresStore(URL!);
@@ -596,6 +596,100 @@ describe('PostgreSQL 저장소: 개인별 아이템', { skip: skipAll }, () => {
   });
 });
 
+describe('PostgreSQL 저장소: 시작 무기 (0.4.0)', { skip: skipAll }, () => {
+  const counts = (offered: number, picked: number, autoPicked = 0, chest = 0, finalOwned = 0, finalLevelSum = 0, started = 0) => ({ offered, picked, autoPicked, chest, finalOwned, finalLevelSum, started });
+
+  it('사람별 시작 무기가 이름과 같은 순서로 저장되고 돌아온다. 이 값을 남기기 전의 기록은 없는 대로 돌아온다', async () => {
+    const store = await createPostgresStore(URL!);
+    try {
+      const season = newSeason();
+      await store.save(run(season, { board: 'coop', names: ['가', '나'], killsBy: [4, 1], startsBy: ['rollback', 'firewall'], kills: 5, time: 300 }));
+      await store.save(run(season, { board: 'coop', names: ['예전', '기록'], time: 200 }));
+      const rows = await store.load('coop', season, 5);
+      assert.deepEqual(rows.map((r) => r.startsBy), [['rollback', 'firewall'], undefined]);
+      assert.ok(!('startsBy' in rows[1]!), '없는 기록에는 키가 없다');
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('member_starts 열이 없던 예전 테이블(0.3.x)에도 열이 더해지고, 예전 기록은 하나도 빠지지 않고 그대로 읽힌다. 이상한 값이면 시작 무기만 뺀다', async (t) => {
+    const db = await freshDb();
+    if (!db) return t.skip('CREATE DATABASE 권한이 없어 건너뜁니다');
+    const admin = new pg.Client({ connectionString: db.url });
+    try {
+      const setup = await createPostgresStore(db.url);
+      await setup.save(run(0, { id: 'old', time: 120, itemsBy: [[{ id: 'coffee', level: 2 }]], killsBy: [3], version: '0.3.5' }));
+      await setup.close();
+      await admin.connect();
+      await admin.query('ALTER TABLE leaderboard_runs DROP COLUMN member_starts'); // 0.3.x 운영 테이블 모양
+      // 0.3.x 서버가 열 이름을 적어서 넣는 방식 그대로
+      await admin.query(
+        "INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at, member_kills, member_items, app_version) VALUES ('old2', 'solo', 0, $1, 110, 1, 1, 0, 1700000000000, $2, NULL, '0.3.4')",
+        [['옛'], [1]],
+      );
+      const store = await createPostgresStore(db.url);
+      try {
+        const before = await store.load('solo', 0, 5);
+        assert.deepEqual(
+          before.map((r) => [r.id, r.startsBy, r.itemsBy, r.killsBy, r.version]),
+          [
+            ['old', undefined, [[{ id: 'coffee', level: 2 }]], [3], '0.3.5'],
+            ['old2', undefined, undefined, [1], '0.3.4'],
+          ],
+          '예전 기록은 그대로',
+        );
+        await store.save(run(0, { id: 'new', time: 100, startsBy: ['ai_agent'] }));
+        // DB 에 이상한 값(진화한 무기)이 있으면 시작 무기만 빠진다. 지금 후보가 아닌 무기(핫픽스)는 진화하지 않은 무기라 받는다
+        await admin.query("UPDATE leaderboard_runs SET member_starts = $1 WHERE id = 'old'", [['debugger']]);
+        await admin.query("UPDATE leaderboard_runs SET member_starts = $1 WHERE id = 'old2'", [['hotfix']]);
+        const after = await store.load('solo', 0, 5);
+        assert.deepEqual(after.map((r) => [r.id, r.startsBy]), [['old', undefined], ['old2', ['hotfix']], ['new', ['ai_agent']]]);
+        // 예전 서버(열 이름을 적어서 쓴다)가 새 열을 모른 채 넣어도 된다 (되돌려 배포하는 경우)
+        await admin.query("INSERT INTO leaderboard_runs (id, board, season, names, time, kills, level, paused_seconds, ended_at) VALUES ('rollback', 'solo', 0, '{x}', 90, 1, 1, 0, 1)");
+        assert.equal((await store.load('solo', 0, 5)).find((r) => r.id === 'rollback')!.startsBy, undefined);
+      } finally {
+        await store.close();
+      }
+    } finally {
+      await admin.end().catch(() => {});
+      await db.drop();
+    }
+  });
+
+  it('통계: 시작 무기로 고른 횟수(started)를 더하고 읽는다. started 열이 없던 예전 표에도 열이 더해지고, 이미 있던 줄은 0 으로 읽힌다', async (t) => {
+    const db = await freshDb();
+    if (!db) return t.skip('CREATE DATABASE 권한이 없어 건너뜁니다');
+    const admin = new pg.Client({ connectionString: db.url });
+    try {
+      const setup = await createPostgresStore(db.url);
+      await setup.addStats(0, '0.3.5', { runs: 1, since: 10, upgrades: { console_log: counts(2, 1, 0, 0, 1, 2) } }, 'b-old');
+      await setup.close();
+      await admin.connect();
+      await admin.query('ALTER TABLE upgrade_stats_by_version DROP COLUMN started'); // 0.3.x 운영 표 모양
+      // 0.3.x 서버가 열 이름을 적어서 더하는 방식 그대로
+      await admin.query("INSERT INTO upgrade_stats_by_version (season, version, upgrade_id, offered, picked) VALUES (0, '0.3.5', 'regex', 3, 1)");
+      const store = await createPostgresStore(db.url);
+      try {
+        const old = { '0.3.5': { runs: 1, since: 10, upgrades: { console_log: counts(2, 1, 0, 0, 1, 2), regex: counts(3, 1) } } };
+        assert.deepEqual(await store.loadStats(0), old, '예전 줄은 started 0');
+        await store.addStats(0, '0.4.0', { runs: 2, since: 20, upgrades: { rollback: counts(1, 1, 0, 0, 2, 3, 2) } }, 'b-new');
+        await store.addStats(0, '0.4.0', { runs: 1, since: 30, upgrades: { rollback: counts(0, 0, 0, 0, 1, 1, 1), firewall: counts(0, 0, 0, 0, 0, 0, 1) } }, 'b-new2');
+        const got = await store.loadStats(0);
+        assert.deepEqual(got['0.4.0'], { runs: 3, since: 20, upgrades: { rollback: counts(1, 1, 0, 0, 3, 4, 3), firewall: counts(0, 0, 0, 0, 0, 0, 1) } });
+        assert.deepEqual(got['0.3.5'], old['0.3.5'], '버전이 섞이지 않는다');
+        const cols = await admin.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'upgrade_stats_by_version' AND column_name = 'started'");
+        assert.equal(cols.rowCount, 1);
+      } finally {
+        await store.close();
+      }
+    } finally {
+      await admin.end().catch(() => {});
+      await db.drop();
+    }
+  });
+});
+
 describe('PostgreSQL 저장소: 서버가 뜰 때 테이블을 막지 않는다', { skip: skipAll }, () => {
   it('열과 인덱스가 이미 있으면, 다른 연결이 테이블을 읽거나 쓰는 중이어도 기다리지 않고 바로 준비된다', async () => {
     // 테이블·열·인덱스를 먼저 만들어 둔다
@@ -678,7 +772,7 @@ describe('PostgreSQL 저장소: 연결 풀러와 시간 제한', { skip: skipAll
       await store.save(run(season, { id: `pooled-${season}`, time: 99 }));
       const rows = await store.load('solo', season, 5);
       assert.deepEqual(rows.map((r) => [r.id, r.time]), [[`pooled-${season}`, 77]]);
-      await store.addStats(season, '0.2.3', { runs: 1, since: 9, upgrades: { coffee: { offered: 2, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 2 } } }, `batch-5-${season}`);
+      await store.addStats(season, '0.2.3', { runs: 1, since: 9, upgrades: { coffee: { offered: 2, picked: 1, autoPicked: 0, chest: 0, finalOwned: 1, finalLevelSum: 2, started: 0 } } }, `batch-5-${season}`);
       assert.equal((await store.loadStats(season))['0.2.3']!.upgrades.coffee!.picked, 1);
       assert.ok((await store.seasons()).includes(season));
       assert.deepEqual(pooler.refused, [], '풀러가 거부하는 접속 매개변수를 보내지 않는다');

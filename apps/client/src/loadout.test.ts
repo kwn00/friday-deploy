@@ -4,12 +4,14 @@ import {
   DT,
   EVOLUTIONS,
   PASSIVE_IDS,
+  PICK_ONCE,
   PLAYER_BASE_HP,
   PLAYER_BASE_PICKUP,
   UPGRADES,
   UPGRADE_IDS,
   WEAPON_IDS,
   SPRINT_BONUS_PER_LEVEL,
+  SUPPORT_PASSIVES,
   addPlayer,
   amountBonusOf,
   areaMultOf,
@@ -60,16 +62,19 @@ const numberIn = (v: string | undefined): number => {
 };
 
 test('가진 아이템: 패시브의 지금 효과는 그 패시브 단계까지 합친 것 (요청의 예와 같다)', () => {
-  assert.deepEqual(nowText({ coffee: 3 }, 'coffee'), ['이동 속도 +30%']);
+  // 생존·편의 패시브는 끝에 피해량 보너스가 붙는다 (1단계 +5%, 그 뒤 +1%씩: 3단계 +7%)
+  assert.deepEqual(nowText({ coffee: 3 }, 'coffee'), ['이동 속도 +30%', '피해량 +7%']);
   assert.deepEqual(nowText({ mech_keyboard: 2 }, 'mech_keyboard'), ['쿨다운 -16%']);
-  assert.deepEqual(nowText({ npm_install: 3 }, 'npm_install'), ['끌어당기는 범위 ×2.49'], '곱해지는 것은 곱으로');
-  assert.deepEqual(nowText({ dark_mode: 3 }, 'dark_mode'), ['최대 체력 ×1.73'], '곱해지는 것은 곱으로');
-  assert.deepEqual(nowText({ test_coverage: 2 }, 'test_coverage'), ['한 대 맞을 때 피해 -2']);
-  assert.deepEqual(nowText({ work_life: 3 }, 'work_life'), ['1초에 체력 +0.6', '회복 아이템 30 → 48']);
-  assert.deepEqual(nowText({ deploy_prayer: 3 }, 'deploy_prayer'), ['운 +30%', '선택지 4개 나올 확률 23%']);
+  assert.deepEqual(nowText({ npm_install: 3 }, 'npm_install'), ['끌어당기는 범위 ×2.49', '피해량 +7%'], '곱해지는 것은 곱으로');
+  assert.deepEqual(nowText({ dark_mode: 3 }, 'dark_mode'), ['최대 체력 ×1.73', '피해량 +7%'], '곱해지는 것은 곱으로');
+  assert.deepEqual(nowText({ test_coverage: 2 }, 'test_coverage'), ['한 대 맞을 때 피해 -2', '피해량 +6%']);
+  assert.deepEqual(nowText({ work_life: 3 }, 'work_life'), ['1초에 체력 +1.5', '회복 아이템 30 → 48', '피해량 +7%']);
+  assert.deepEqual(nowText({ side_project: 1 }, 'side_project'), ['얻는 경험치 +15%', '피해량 +5%']);
+  assert.deepEqual(nowText({ deploy_prayer: 3 }, 'deploy_prayer'), ['운 +30%', '선택지 4개 나올 확률 23%', '받은 새로고침 +3번', '피해량 +7%']);
   assert.deepEqual(nowText({ git_fork: 2 }, 'git_fork'), ['개수 +2']);
   assert.deepEqual(nowText({ stack_overflow: 5 }, 'stack_overflow'), ['피해량 +50%']);
-  assert.deepEqual(nowText({ snapshot: 1 }, 'snapshot', 2), ['남은 부활(백업 포함) 2번']);
+  assert.deepEqual(nowText({ snapshot: 1 }, 'snapshot', 2), ['남은 부활(백업 포함) 2번'], '스냅샷에는 피해량 보너스가 없다');
+  assert.deepEqual(nowText({ prod_hotfix: 1 }, 'prod_hotfix'), ['버그 체력·속도·수·빈도 +10%'], '저주에도 없다');
 });
 
 test('가진 아이템: 패시브의 지금 효과가 모든 단계에서 서버 시뮬레이션의 함수 값과 같다 (반올림만 다르다)', () => {
@@ -86,6 +91,8 @@ test('가진 아이템: 패시브의 지금 효과가 모든 단계에서 서버
     ['side_project', '얻는 경험치', growthOf, 'pct'],
     ['prod_hotfix', '버그 체력·속도·수·빈도', curseOf, 'pct'],
     ['stack_overflow', '피해량', mightOf, 'pct'],
+    // 생존·편의 패시브의 피해량 보너스 (stats.ts 의 mightOf 에 들어 있다)
+    ...SUPPORT_PASSIVES.map((id) => [id, '피해량', mightOf, 'pct'] as const),
   ] as const) {
     for (let level = 1; level <= UPGRADES[id].max; level++) {
       const only = { up: { [id]: level } };
@@ -117,6 +124,14 @@ test('가진 아이템: 패시브의 지금 효과가 모든 단계에서 서버
   for (let level = 1; level <= UPGRADES.deploy_prayer.max; level++) {
     const chance = extraOfferChanceOf({ up: { deploy_prayer: level } }) * 100;
     assert.ok(Math.abs(numberIn(value({ deploy_prayer: level }, 'deploy_prayer', '선택지 4개 나올 확률')) - chance) <= 0.5, `${level}`);
+    // 배포 기도는 단계마다 새로고침을 하나 준다 (sim.ts 의 levelUp: reroll.test.ts 가 판으로 확인한다)
+    assert.equal(value({ deploy_prayer: level }, 'deploy_prayer', '받은 새로고침'), `+${level}번`);
+  }
+  // 피해량 보너스는 생존·편의 패시브에만 있다
+  for (const id of PASSIVE_IDS) {
+    if (id === 'stack_overflow') continue;
+    const support = (SUPPORT_PASSIVES as readonly string[]).includes(id);
+    assert.equal(value({ [id]: 1 }, id, '피해량') !== undefined, support, `${id}: 피해량 줄`);
   }
   // 스냅샷은 stats.ts 의 함수가 아니라 서버가 보낸 남은 부활 수를 그대로 보여 준다 (단계와 상관없이)
   for (let level = 1; level <= UPGRADES.snapshot.max; level++) {
@@ -143,7 +158,10 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
   assert.equal(value({ two_factor: 1, git_fork: 2, keep_alive: 5 }, 'two_factor', '방패'), '1');
   assert.equal(value({ two_factor: 7 }, 'two_factor', '방패'), String(effectiveStats({ up: { two_factor: 7 } }, 'two_factor').amount));
   assert.equal(value({ two_factor: 1, keep_alive: 5 }, 'two_factor', '무적'), '0.24초');
-  assert.equal(value({ two_factor: 1 }, 'two_factor', '피해'), undefined, '피해가 0 인 무기');
+  // 2단계 인증의 피해는 방패가 막을 때의 반격 피해다 (이름을 붙였다. Stack Overflow 를 받는다)
+  assert.equal(value({ two_factor: 1 }, 'two_factor', '반격 피해'), '10');
+  assert.equal(value({ two_factor: 1, stack_overflow: 5 }, 'two_factor', '반격 피해'), '15');
+  assert.equal(value({ git_clean: 1 }, 'git_clean', '피해'), undefined, '피해가 0 인 무기');
   // 듀얼 모니터 → 범위 (1단계·패시브 없음 대비). 범위를 받지 않는 무기(코드 프리즈)는 줄이 없다
   assert.equal(value({ console_log: 1 }, 'console_log', '범위'), undefined, '늘지 않았으면 없다');
   assert.equal(value({ console_log: 1, dual_monitor: 2 }, 'console_log', '범위'), '+20%');
@@ -157,11 +175,17 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
   assert.equal(value({ brick_book: 1 }, 'brick_book', '관통'), '2');
   assert.equal(value({ console_log: 1 }, 'console_log', '관통'), undefined);
   // 이름을 바꿔 부르는 확률 (git clean: 운이 곱해진다). 늘 걸리는 확률(rm -rf node_modules)은 없다
-  assert.equal(value({ git_clean: 1, deploy_prayer: 5 }, 'git_clean', '아이템과 경험치를 남길 확률'), '15%');
+  assert.equal(value({ git_clean: 1, deploy_prayer: 5 }, 'git_clean', '아이템과 경험치를 남길 확률'), '38%', '0.25 × 운 1.5 = 37.5%');
   assert.equal(value({ rm_rf: 1, deploy_prayer: 5 }, 'rm_rf', '확률'), undefined);
   // 치명타: 확률에 운이 곱해진다
   assert.equal(value({ sprint: 1 }, 'sprint', '치명타'), '5% ×2');
   assert.equal(value({ sprint: 1, deploy_prayer: 3 }, 'sprint', '치명타'), '6.5% ×2');
+  // git reset --hard: 짝인 배포 기도가 늘 있다 (1단계면 25% × 1.1 = 27.5%, 5단계면 37.5%)
+  assert.equal(value({ git_reset: 1, deploy_prayer: 1 }, 'git_reset', '치명타'), '28% ×2');
+  assert.equal(value({ git_reset: 1, deploy_prayer: 5 }, 'git_reset', '치명타'), '38% ×2');
+  assert.equal(value({ git_reset: 1 }, 'git_reset', '관통'), '무한');
+  assert.equal(value({ agi: 1 }, 'agi', '관통'), '4');
+  assert.equal(value({ grep_r: 1 }, 'grep_r', '관통'), '3');
 
   // 스프린트: 걸으면 더해지는 피해의 상한 (단계 × 5). 지속은 베는 모습에만 쓰여 줄이 없다
   assert.equal(value({ sprint: 1 }, 'sprint', '걸으면 피해'), `최대 +${SPRINT_BONUS_PER_LEVEL}`);
@@ -228,16 +252,17 @@ test('가진 아이템: 무기의 지금 수치는 패시브까지 적용한 eff
 });
 
 test('가진 아이템: 러버덕은 쿨다운 대신 지속과 쉬는 시간 (다시 나오는 주기 = (쿨다운 + 지속) × 쿨다운 배율)', () => {
-  assert.deepEqual(nowText({ rubber_duck: 1 }, 'rubber_duck'), ['피해 10', '개수 1', '지속 3초', '쉬는 시간 3초']);
-  // 기계식 키보드는 주기를 줄인다: (3 + 3) × 0.92 = 5.52초 → 3초 돌고 2.52초 쉰다 (쿨다운 3 × 0.92 = 2.76초가 아니다)
-  assert.equal(value({ rubber_duck: 1, mech_keyboard: 1 }, 'rubber_duck', '쉬는 시간'), '2.52초');
-  assert.equal(value({ rubber_duck: 1, mech_keyboard: 5 }, 'rubber_duck', '쉬는 시간'), '0.6초');
-  // keep-alive 는 도는 시간만 늘린다 (주기는 그대로 6초)
+  // 쿨다운 2.5초 (0.4.0: 3 → 2.5)
+  assert.deepEqual(nowText({ rubber_duck: 1 }, 'rubber_duck'), ['피해 10', '개수 1', '지속 3초', '쉬는 시간 2.5초']);
+  // 기계식 키보드는 주기를 줄인다: (2.5 + 3) × 0.92 = 5.06초 → 3초 돌고 2.06초 쉰다 (쿨다운 2.5 × 0.92 = 2.3초가 아니다)
+  assert.equal(value({ rubber_duck: 1, mech_keyboard: 1 }, 'rubber_duck', '쉬는 시간'), '2.06초');
+  assert.equal(value({ rubber_duck: 1, mech_keyboard: 5 }, 'rubber_duck', '쉬는 시간'), '0.3초');
+  // keep-alive 는 도는 시간만 늘린다 (주기는 그대로 5.5초)
   assert.equal(value({ rubber_duck: 1, keep_alive: 5 }, 'rubber_duck', '지속'), '4.5초');
-  assert.equal(value({ rubber_duck: 1, keep_alive: 5 }, 'rubber_duck', '쉬는 시간'), '1.5초');
-  // 둘 다 최대면 주기 3.6초 < 도는 시간 4.5초: 쉬지 않는다
+  assert.equal(value({ rubber_duck: 1, keep_alive: 5 }, 'rubber_duck', '쉬는 시간'), '1초');
+  // 둘 다 최대면 주기 3.3초 < 도는 시간 4.5초: 쉬지 않는다
   assert.equal(value({ rubber_duck: 1, mech_keyboard: 5, keep_alive: 5 }, 'rubber_duck', '쉬는 시간'), '없음 (계속 돌아요)');
-  assert.deepEqual(duckCycleOf({ rubber_duck: 8 }), { on: 4, period: 7 }, '8단계: 지속 3 + 0.5 + 0.5');
+  assert.deepEqual(duckCycleOf({ rubber_duck: 8 }), { on: 4, period: 6.5 }, '8단계: 쿨다운 2.5 + 지속 3 + 0.5 + 0.5');
 });
 
 /** 실제 판에서 잰 러버덕: 도는 구간·쉬는 구간의 평균 길이와 다시 나오는 평균 주기 (초). 첫 구간과 마지막 구간은 잘렸을 수 있어 뺀다 */
@@ -332,7 +357,15 @@ test('가진 아이템: 단계 표시, 다음 단계, 최대 단계, 진화', ()
   assert.equal(max.badge, '최대');
   assert.equal(max.next, null);
   assert.equal(itemOf({ git_fork: 2 }, 'git_fork').next, null, '패시브 최대 단계');
-  assert.deepEqual(itemOf({ coffee: 1 }, 'coffee').next, { tag: '다음 Lv.2', text: '이동 속도 +10%' });
+  assert.deepEqual(itemOf({ coffee: 1 }, 'coffee').next, { tag: '다음 Lv.2', text: '이동 속도 +10%, 피해량 +1%' });
+  // 한 번만 고르는 것(저주)은 최대 단계가 아니어도 더 오르지 않는다: 다음 단계 줄 대신 "더 오르지 않음"
+  for (const id of PICK_ONCE) {
+    const once = itemOf({ [id]: 1 }, id);
+    assert.equal(once.tag, `Lv.1/${UPGRADES[id].max}`, '최대 단계는 그대로 (예전 기록)');
+    assert.equal(once.badge, '더 오르지 않음');
+    assert.equal(once.next, null);
+    assert.equal(itemOf({ [id]: UPGRADES[id].max }, id).badge, '최대', '예전처럼 최대 단계면 "최대"');
+  }
 
   // 진화 준비: 최대 단계 + 짝 패시브 → 노란 표시와 안내
   const ready = itemOf({ console_log: 8, test_coverage: 1 }, 'console_log');
@@ -349,7 +382,7 @@ test('가진 아이템: 단계 표시, 다음 단계, 최대 단계, 진화', ()
   // 합치기: 둘 다 최대면 둘 다 표시
   const merge = loadoutOf({ canary: 8, night_owl: 8 }, 0).groups[0].items;
   assert.deepEqual(merge.map((x) => x.ready), [true, true]);
-  assert.equal(itemOf({ regex: 3 }, 'regex').evo.length, 0, '진화가 없는 무기');
+  assert.equal(itemOf({ ctrl_x: 3 }, 'ctrl_x').evo.length, 0, '진화가 없는 무기');
 
   // 진화한 무기: 단계 대신 ★, 재료, 다음 단계 없음
   const evolved = itemOf({ debugger: 1, test_coverage: 2 }, 'debugger');
