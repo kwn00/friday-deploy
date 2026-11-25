@@ -11,6 +11,7 @@ import {
   type UpgradeId,
   type UpgradeTally,
 } from '@friday-deploy/shared';
+import { isBaseWeapon, type WeaponId } from '@friday-deploy/shared';
 
 /**
  * 리더보드.
@@ -31,6 +32,8 @@ export interface RunRecord {
   killsBy?: number[];
   /** names 와 같은 순서의 개인별 아이템(무기·패시브와 단계). 판이 끝날 때 가지고 있던 것. 이 값을 남기기 전의 기록에는 없다 */
   itemsBy?: LeaderboardItem[][];
+  /** names 와 같은 순서의 개인별 시작 무기 (진화하지 않은 무기 id). 이 값을 남기기 전(0.4.0 전)의 기록에는 없다 */
+  startsBy?: WeaponId[];
   /** 생존 시간(초) */
   time: number;
   /** 이름이 오른 사람들의 처치 수 합 */
@@ -63,6 +66,8 @@ export interface UpgradeCounts {
   finalOwned: number;
   /** 가지고 있던 판들의 끝날 때 단계의 합 (평균 = finalLevelSum / finalOwned) */
   finalLevelSum: number;
+  /** 시작 무기로 고른 판 수 (offered·picked 와 따로 센다) */
+  started: number;
 }
 
 /** 한 시즌의 아이템 통계 (저장소에 쌓는 합계, 또는 거기에 더할 몫) */
@@ -75,7 +80,7 @@ export interface StoredStats {
 }
 
 export const emptyStats = (): StoredStats => ({ runs: 0, since: null, upgrades: {} });
-export const emptyCounts = (): UpgradeCounts => ({ offered: 0, picked: 0, autoPicked: 0, chest: 0, finalOwned: 0, finalLevelSum: 0 });
+export const emptyCounts = (): UpgradeCounts => ({ offered: 0, picked: 0, autoPicked: 0, chest: 0, finalOwned: 0, finalLevelSum: 0, started: 0 });
 
 /** 버전별 통계의 깊은 복사 (저장소 안의 값을 밖에서 바꾸지 못하게) */
 export function copyStatsByVersion(src: StatsByVersion): StatsByVersion {
@@ -103,6 +108,8 @@ export function addStatsInto(a: StoredStats, b: StoredStats): StoredStats {
     t.chest += c.chest;
     t.finalOwned += c.finalOwned;
     t.finalLevelSum += c.finalLevelSum;
+    // 이 값을 세기 전의 몫에는 없을 수 있다 (0 으로 본다)
+    t.started += c.started ?? 0;
   }
   return a;
 }
@@ -191,6 +198,7 @@ function toEntries(rows: readonly RunRecord[]): LeaderboardEntry[] {
     names: r.names,
     ...(r.killsBy && r.killsBy.length === r.names.length ? { killsBy: r.killsBy } : {}),
     ...(r.itemsBy && r.itemsBy.length === r.names.length ? { itemsBy: r.itemsBy } : {}),
+    ...(r.startsBy && r.startsBy.length === r.names.length ? { startsBy: r.startsBy } : {}),
     time: r.time,
     kills: r.kills,
     level: r.level,
@@ -264,12 +272,15 @@ export class Leaderboard {
     // 기여도(개인 처치 수)가 큰 사람부터 적는다. 같으면 넘겨받은 순서(들어온 순서)를 지킨다.
     const hasKills = Array.isArray(report.killsBy) && report.killsBy.length === report.names.length;
     const hasItems = Array.isArray(report.itemsBy) && report.itemsBy.length === report.names.length;
+    // 시작 무기: 사람 수와 맞고 모두 진화하지 않은 무기일 때만 남긴다
+    const hasStarts = Array.isArray(report.startsBy) && report.startsBy.length === report.names.length && report.startsBy.every(isBaseWeapon);
     const members = report.names.slice(0, 8).map((n, i) => ({
       name: sanitizeName(n),
       kills: hasKills ? int(report.killsBy![i]!, 0, 10_000_000) : 0,
       items: hasItems ? (ownedUpgrades(report.itemsBy![i]) ?? []) : [],
+      start: hasStarts ? report.startsBy![i]! : null,
     }));
-    // 정렬해도 이름·처치 수·아이템이 한 사람 단위로 함께 움직인다
+    // 정렬해도 이름·처치 수·아이템·시작 무기가 한 사람 단위로 함께 움직인다
     if (hasKills) members.sort((a, b) => b.kills - a.kills);
     const names = members.map((m) => m.name);
     if (names.length === 0) return null;
@@ -280,6 +291,7 @@ export class Leaderboard {
       names,
       ...(hasKills ? { killsBy: members.map((m) => m.kills) } : {}),
       ...(hasItems ? { itemsBy: members.map((m) => m.items) } : {}),
+      ...(hasStarts ? { startsBy: members.map((m) => m.start!) } : {}),
       time: int(report.time, 0, 24 * 3600),
       kills: int(report.kills, 0, 10_000_000),
       level: int(report.level, 1, 10_000),

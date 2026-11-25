@@ -643,3 +643,29 @@ export const FIELD_ITEMS: Record<FieldItemKind, FieldItemDef> = {
   // 다른 필드 아이템과 따로, 평균 MAGNET_INTERVAL 초에 하나 놓인다 (sim.ts). 주우면 맵의 경험치가 모두 끌려온다
   magnet: { name: '자석', icon: '🧲', desc: '맵의 경험치를 모두 끌어당긴다', weight: 0 },
 };
+
+/* ───────────── 시작 무기 ─────────────
+ * 판을 시작할 때 고르는 무기 (1단계로 시작한다). 순서가 곧 통신 번호다 (hello.starter, 대기실의 starter 메시지):
+ * 중간에 끼워 넣거나 순서를 바꾸지 말고 뒤에 추가할 것. 0번이 기본값이다 (고르지 않았을 때).
+ * 진화한 무기와 패시브는 넣지 않는다. 서버는 이 목록의 번호만 받고(밖이면 위반), 단계는 늘 1이다.
+ * 고른 무기는 무기 칸 하나를 쓴다 (WEAPON_SLOTS 에 들어간다). 선택지에서 고른 것으로 세지 않는다 (통계는 따로 started).
+ */
+export const STARTER_WEAPONS = ['console_log', 'rollback', 'ai_agent', 'firewall'] as const satisfies readonly WeaponId[];
+export type StarterId = (typeof STARTER_WEAPONS)[number];
+export const DEFAULT_STARTER: StarterId = STARTER_WEAPONS[0];
+
+/** 지금 고를 수 있는 시작 무기인지 */
+export const isStarter = (v: unknown): v is StarterId => typeof v === 'string' && (STARTER_WEAPONS as readonly string[]).includes(v);
+
+/** 통신 번호 → 시작 무기. 정수가 아니거나 범위 밖이면 undefined */
+export const starterAt = (i: unknown): StarterId | undefined =>
+  typeof i === 'number' && Number.isInteger(i) && i >= 0 && i < STARTER_WEAPONS.length ? STARTER_WEAPONS[i] : undefined;
+
+/** 시작 무기 → 통신 번호 */
+export const starterIndex = (id: StarterId): number => STARTER_WEAPONS.indexOf(id);
+
+/**
+ * 진화하지 않은 무기 id 인지. 저장된 기록의 시작 무기를 읽을 때 쓴다: 지금 후보(STARTER_WEAPONS)로 거르지 않는다.
+ * 나중에 후보에서 빠진 무기로 세운 기록도 그대로 보이게 (리더보드 기록은 지우지 않는다)
+ */
+export const isBaseWeapon = (v: unknown): v is WeaponId => isUpgradeId(v) && isWeapon(v) && evolutionOf(v) === undefined;

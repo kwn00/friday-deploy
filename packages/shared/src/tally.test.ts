@@ -25,9 +25,12 @@ function levelUpNow(w: World, p: Player): UpgradeId[] {
 }
 const sum = (m: Partial<Record<UpgradeId, number>>): number => Object.values(m).reduce((a, b) => a + (b ?? 0), 0);
 
-test('아이템 통계 횟수: 새 캐릭터는 아무것도 세지 않았다', () => {
+test('아이템 통계 횟수: 새 캐릭터는 시작 무기 하나만 started 로 세고, 선택지·고른 것·상자는 아무것도 세지 않았다', () => {
   const { p } = quiet(1);
-  assert.deepEqual(p.tally, newTally());
+  assert.deepEqual(p.tally, { ...newTally(), start: { console_log: 1 } });
+  // 다른 무기로 시작해도 그 무기 하나만 (선택지에서 고른 것으로 세지 않는다: 선택률이 부풀지 않게)
+  const q = addPlayer(createWorld(1), 'b', false, 'firewall');
+  assert.deepEqual(q.tally, { ...newTally(), start: { firewall: 1 } });
 });
 
 test('아이템 통계 횟수: 선택지에 나온 것, 직접 고른 것, 시간이 지나 자동으로 골라진 것을 따로 센다 (서버가 센다)', () => {

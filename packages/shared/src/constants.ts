@@ -2,7 +2,8 @@
 export const GAME_TITLE = 'FRIDAY DEPLOY';
 export const GAME_TAGLINE = '금요일 저녁 배포에서 살아남기';
 
-export const PROTOCOL_VERSION = 13;
+/** 14: 시작 무기 (hello.starter, 대기실의 starter 메시지, roster 의 start) */
+export const PROTOCOL_VERSION = 14;
 
 export const TICK_RATE = 20; // 서버 시뮬레이션 Hz
 export const DT = 1 / TICK_RATE;

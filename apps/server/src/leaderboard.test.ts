@@ -280,6 +280,26 @@ test('아이템: 사람별 무기·패시브가 이름과 함께 정렬되고, �
   assert.deepEqual(lb.top('solo')[0]!.itemsBy, [[]]);
 });
 
+test('시작 무기: 사람별 시작 무기가 이름과 함께 정렬되어 남는다. 모양이 맞지 않으면 시작 무기만 빼고 기록은 그대로', async () => {
+  const store = new MemoryStore();
+  const lb = new Leaderboard(store);
+  lb.record(run({ board: 'coop', names: ['host', 'mate'], killsBy: [3, 9], startsBy: ['firewall', 'rollback'], time: 200 }));
+  const [entry] = lb.top('coop');
+  assert.deepEqual([entry!.names, entry!.startsBy], [['mate', 'host'], ['rollback', 'firewall']], '기여도 순으로 바뀌어도 시작 무기는 제 주인을 따라간다');
+  assert.deepEqual((await store.load('coop', lb.season, 5))[0]!.startsBy, ['rollback', 'firewall'], '저장소에 넘기는 기록에도');
+  // 지금 후보가 아니어도 진화하지 않은 무기면 남긴다 (나중에 후보가 바뀌어도 기록을 읽을 수 있게 같은 규칙)
+  lb.record(run({ names: ['old_starter'], startsBy: ['hotfix'], time: 300 }));
+  assert.deepEqual(lb.top('solo')[0]!.startsBy, ['hotfix']);
+  // 사람 수와 다르거나, 진화한 무기·패시브·모르는 값이 섞이면 시작 무기만 남기지 않는다 (기록은 남는다)
+  for (const [i, startsBy] of ([['console_log', 'rollback'], ['debugger'], ['coffee'], ['nope'], [3], 'x'] as unknown as RunReport['startsBy'][]).entries()) {
+    assert.notEqual(lb.record(run({ names: [`bad${i}`], startsBy, time: 250 - i })), null, `기록은 남는다: ${JSON.stringify(startsBy)}`);
+  }
+  for (const e of lb.top('solo').filter((x) => x.names[0]!.startsWith('bad'))) assert.equal(e.startsBy, undefined, e.names[0]);
+  // 이 값을 남기기 전(0.4.0 전)의 기록: 없는 대로
+  lb.record(run({ names: ['before'], time: 100 }));
+  assert.ok(!('startsBy' in lb.top('solo').find((e) => e.names[0] === 'before')!), 'JSON 에도 키가 없다');
+});
+
 test('시즌: 지난 시즌 순위표는 저장소에서 읽고, 같은 시즌을 동시에 여러 번 물어도 한 번만 읽는다', async () => {
   const inner = new MemoryStore();
   const old: RunRecord[] = [300, 500, 400].map((time, i) => ({ id: `s3-${i}`, board: 'solo', season: 3, names: [`p${i}`], time, kills: 1, level: 1, pausedSeconds: 0, endedAt: 1000 + i }));

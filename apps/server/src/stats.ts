@@ -32,6 +32,7 @@ import {
  *
  * - 서버가 직접 센다: 선택지를 만들고, 고르고, 시간이 지나 대신 고르고, 보물상자를 여는 것은 모두 서버의 시뮬레이션이 한다
  *   (sim.ts 의 tally). 클라이언트가 보내는 것은 "몇 번째를 골랐다"뿐이라 숫자를 위조할 수 없다.
+ *   시작 무기(started)도 서버가 판을 시작할 때 센다. 클라이언트는 허용 목록의 번호만 보낸다.
  * - 리더보드와 같은 판만 센다: 30초 이상 버틴 판에서 처음부터 함께 한 사람 (Room 이 리더보드에 넘기는 사람들).
  * - 이름·IP 같은 개인 정보는 남기지 않고 합계만 쌓는다. 리더보드 기록은 건드리지 않는다 (다른 표에 쌓는다).
  * - 시즌·게임 버전(x.y.z)별로 쌓는다: 같은 시즌 안에서도 밸런스 패치 전후를 나눠 볼 수 있다. 버전을 고르지 않으면 시즌 전체.
@@ -68,7 +69,7 @@ export function statsOfRun(report: RunReport, at: number): StoredStats | null {
   const out = emptyStats();
   out.runs = members;
   out.since = at;
-  const add = (id: UpgradeId, field: 'offered' | 'picked' | 'autoPicked' | 'chest', n: number): void => {
+  const add = (id: UpgradeId, field: 'offered' | 'picked' | 'autoPicked' | 'chest' | 'started', n: number): void => {
     if (n <= 0) return;
     (out.upgrades[id] ??= emptyCounts())[field] += n;
   };
@@ -79,6 +80,8 @@ export function statsOfRun(report: RunReport, at: number): StoredStats | null {
       add(id, 'picked', count(t?.picked?.[id]));
       add(id, 'autoPicked', count(t?.auto?.[id]));
       add(id, 'chest', count(t?.chest?.[id]));
+      // 시작 무기는 선택지에서 고른 것이 아니다: 따로 센다 (선택률이 부풀지 않게)
+      add(id, 'started', count(t?.start?.[id]));
     }
     // 끝날 때 가진 것: 아는 아이템·범위 안의 단계만 (리더보드와 같은 규칙)
     for (const it of ownedUpgrades(items[i]) ?? []) {
@@ -122,6 +125,7 @@ export function upgradeList(stats: StoredStats, kind: StatsKind): UpgradeStat[] 
           autoPicked: c.autoPicked,
           pickRate: c.offered > 0 ? round(Math.min(1, (c.picked + c.autoPicked) / c.offered), 3) : 0,
           chest: c.chest,
+          started: c.started,
           finalOwnedRate: stats.runs > 0 ? round(Math.min(1, c.finalOwned / stats.runs), 3) : 0,
           avgFinalLevel: c.finalOwned > 0 ? round(c.finalLevelSum / c.finalOwned, 2) : 0,
           ...evolveOf(id),

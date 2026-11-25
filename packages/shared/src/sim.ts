@@ -65,6 +65,7 @@ import {
   type WeaponId,
   type ZoneKind,
 } from './content';
+import { DEFAULT_STARTER, isStarter, type StarterId } from './content';
 import { Grid, auraRadius, duckState, petPosition, runWeapons, updateShots, updateZones } from './combat';
 import { curseOf, effectiveStats, extraOfferChanceOf, growthOf, healAmountOf, hitDamage, luckOf, lv, maxHpOf, moveSpeedOf, pickupOf, recoveryOf } from './stats';
 import type { Offer, Snapshot } from './protocol';
@@ -78,15 +79,17 @@ const EN = ENEMIES;
  * - offered: 레벨업 선택지에 나온 횟수
  * - picked: 직접 고른 횟수 / auto: 시간이 지나 자동으로 골라진 횟수
  * - chest: 보물상자로 오른 횟수 (진화한 무기는 진화한 횟수)
+ * - start: 시작 무기로 고른 것 (판마다 하나. 선택지에서 고른 것과 따로 센다: 선택률이 부풀지 않게)
  */
 export interface UpgradeTally {
   offered: Partial<Record<UpgradeId, number>>;
   picked: Partial<Record<UpgradeId, number>>;
   auto: Partial<Record<UpgradeId, number>>;
   chest: Partial<Record<UpgradeId, number>>;
+  start: Partial<Record<UpgradeId, number>>;
 }
 
-export const newTally = (): UpgradeTally => ({ offered: {}, picked: {}, auto: {}, chest: {} });
+export const newTally = (): UpgradeTally => ({ offered: {}, picked: {}, auto: {}, chest: {}, start: {} });
 const tallyUp = (map: Partial<Record<UpgradeId, number>>, id: UpgradeId): void => void (map[id] = (map[id] ?? 0) + 1);
 
 export interface Player {
@@ -162,6 +165,8 @@ export interface Player {
   rerolls: number;
   /** 이번 판에서 센 무기·패시브 횟수 (통계용) */
   tally: UpgradeTally;
+  /** 이 판을 시작한 무기 (STARTER_WEAPONS 중 하나. 1단계로 받았다). 순위표 기록에 남긴다 */
+  start: StarterId;
 }
 
 export interface Enemy {
@@ -393,8 +398,10 @@ export const xpForLevel = (level: number): number => xpTotal(level) - xpTotal(le
 /**
  * 플레이어를 추가한다.
  * spectator 가 true 면 캐릭터 없이 관전으로만 들어온다 (이번 판이 끝날 때까지 시점만 움직일 수 있다).
+ * start: 시작 무기 (1단계로 받는다). 허용 목록 밖의 값이면 기본 무기로 시작한다 (검증은 서버의 Room 이 먼저 한다)
  */
-export function addPlayer(world: World, name: string, spectator = false): Player {
+export function addPlayer(world: World, name: string, spectator = false, start: StarterId = DEFAULT_STARTER): Player {
+  if (!isStarter(start)) start = DEFAULT_STARTER;
   const id = world.nextId++;
   // 합류 시 기존 플레이어 근처에 스폰
   const anchor = [...world.players.values()].find((p) => p.alive);
@@ -436,15 +443,34 @@ export function addPlayer(world: World, name: string, spectator = false): Player
     trailY: Number.NaN,
     pets: {},
     on: {},
-    up: { console_log: 1 },
+    up: { [start]: 1 },
     cd: {},
     offers: null,
     offerTimer: 0,
     rerolls: OFFER_REROLLS,
-    tally: newTally(),
+    tally: { ...newTally(), start: { [start]: 1 } },
+    start,
   };
   world.players.set(id, p);
   return p;
+}
+
+/**
+ * 판이 시작되기 전(대기실)에 시작 무기를 바꾼다. 바꿨으면 true.
+ * 월드가 한 틱이라도 돌았으면(판이 시작됐다) 바꾸지 않는다: 판 도중에 무기를 바꿀 수 없다.
+ * 허용 목록 밖의 값, 몸이 없는 관전자, 같은 무기도 바꾸지 않는다.
+ */
+export function setStarter(world: World, id: number, start: StarterId): boolean {
+  const p = world.players.get(id);
+  if (!p || !p.body || world.tick !== 0 || !isStarter(start) || p.start === start) return false;
+  p.start = start;
+  // 시작 무기 말고는 아직 아무것도 없다 (대기실). 무기에 딸린 상태도 처음으로 돌린다
+  p.up = { [start]: 1 };
+  p.cd = {};
+  p.on = {};
+  p.pets = {};
+  p.tally.start = { [start]: 1 };
+  return true;
 }
 
 export function removePlayer(world: World, id: number): void {
