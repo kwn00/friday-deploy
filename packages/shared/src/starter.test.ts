@@ -8,6 +8,7 @@ import {
   DEFAULT_STARTER,
   DT,
   EVOLUTIONS,
+  PROTOCOL_VERSION,
   STARTER_WEAPONS,
   UPGRADES,
   WEAPON_IDS,
@@ -16,6 +17,7 @@ import {
   createWorld,
   evolutionOf,
   evolutionsUsing,
+  greetingVersion,
   isBaseWeapon,
   isStarter,
   isWeapon,
@@ -86,6 +88,23 @@ test('parseClientMsg: hello 의 시작 무기는 목록의 번호만 받는다 (
   }
   // 단계나 무기 이름을 따로 실어도 받는 자리가 없다 (버려진다)
   assert.deepEqual(parseClientMsg(hello(',"starter":1,"level":8,"weapon":"friday_deploy"')), { t: 'hello', v: 14, token: tok, name: 'a', mode: 'solo', starter: 1 });
+});
+
+test('greetingVersion: 다른 버전의 hello 는 이 버전의 규칙(시작 무기 번호 범위 등)으로 틀려도 버전을 읽는다 (서버가 위반 대신 새로고침 안내를 보낸다)', () => {
+  const tok = 'a'.repeat(24);
+  // 시작 무기 후보가 늘어난 다음 버전의 클라이언트가 새 무기를 골랐다
+  const next = `{"t":"hello","v":${PROTOCOL_VERSION + 1},"token":"${tok}","name":"a","mode":"solo","starter":${STARTER_WEAPONS.length}}`;
+  assert.equal(parseClientMsg(next), null, '이 버전의 규칙으로는 범위 밖');
+  assert.equal(greetingVersion(next), PROTOCOL_VERSION + 1, '버전은 읽는다');
+  // 모르는 필드·모드를 실은 다른 버전의 hello 와 resume 도
+  assert.equal(greetingVersion(`{"t":"hello","v":${PROTOCOL_VERSION + 1},"mode":"daily","room":123}`), PROTOCOL_VERSION + 1);
+  assert.equal(greetingVersion(`{"t":"resume","v":3,"token":"x","key":"?"}`), 3);
+  // 같은 버전의 범위 밖 번호도 버전은 읽는다: 서버는 버전이 같으면 지금처럼 엄격한 검사로 위반을 센다
+  assert.equal(greetingVersion(`{"t":"hello","v":${PROTOCOL_VERSION},"starter":99}`), PROTOCOL_VERSION);
+  // 인증 전 메시지가 아니거나, 버전이 정수가 아니거나, 형식이 깨졌으면 읽지 않는다
+  for (const bad of ['{"t":"input","v":1}', '{"t":"hello"}', '{"t":"hello","v":"14"}', '{"t":"hello","v":1.5}', '{"t":"hello","v":-1}', '[1]', 'null', '{', `{"t":"hello","v":1,"pad":"${'x'.repeat(520)}"}`]) {
+    assert.equal(greetingVersion(bad), null, bad);
+  }
 });
 
 test('parseClientMsg: 대기실의 시작 무기 바꾸기(starter)는 목록의 번호만. 게임 시작(start)과 다른 메시지다', () => {

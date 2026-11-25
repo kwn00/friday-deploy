@@ -327,6 +327,26 @@ export function normalizeRoomCode(raw: unknown): string | null {
 }
 
 /**
+ * 인증 전 메시지(hello·resume)의 프로토콜 버전만 읽는다. 다른 메시지이거나 버전이 정수가 아니면 null.
+ * 서버는 parseClientMsg 보다 먼저 이것으로 버전을 본다: 다른 버전의 클라이언트는 그 버전의 규칙으로 쓴 hello 를 보내서
+ * (예: 시작 무기 후보가 늘어난 다음 버전의 번호) 이 버전의 규칙으로는 틀린 메시지일 수 있다.
+ * 그래도 위반으로 세지 않고 "새 버전이 배포됐어요" 안내(version_mismatch)를 받아야 한다
+ */
+export function greetingVersion(raw: string): number | null {
+  if (raw.length > 512) return null;
+  let m: unknown;
+  try {
+    m = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof m !== 'object' || m === null || Array.isArray(m)) return null;
+  const o = m as Record<string, unknown>;
+  if (o.t !== 'hello' && o.t !== 'resume') return null;
+  return isInt(o.v, 0, 1_000_000) ? o.v : null;
+}
+
+/**
  * 클라이언트 메시지를 엄격하게 파싱한다.
  * 알 수 없는 타입, 누락/초과 필드 타입, 범위를 벗어난 값은 전부 null (= 위반) 처리.
  */

@@ -3,7 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
-import { APP_VERSION, PROTOCOL_VERSION, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
+import { APP_VERSION, PROTOCOL_VERSION, greetingVersion, parseClientMsg, type ServerMsg } from '@friday-deploy/shared';
 import { DEFAULT_STARTER, starterAt } from '@friday-deploy/shared';
 import { RoomManager, type Conn, type Room } from './room';
 import { LEADERBOARD_SEASON, type LeaderboardResponse, type UpgradeStatsResponse } from '@friday-deploy/shared';
@@ -326,12 +326,23 @@ function onConnection(ws: WebSocket, ip: string): void {
     if (ws.readyState !== ws.OPEN) return;
     if (isBinary) return drop(1003, 'binary_not_supported');
     if (!bucket.take()) return drop(1008, 'rate_limited');
-    const msg = parseClientMsg(data.toString());
+    const text = data.toString();
+    if (!conn || !room) {
+      // 인증 전에는 버전부터 본다: 다른 버전의 클라이언트는 그 버전의 규칙으로 쓴 hello 를 보내서(예: 다음 버전에서 늘어난
+      // 시작 무기 번호) 아래의 엄격한 검사로는 위반이 된다. 위반으로 세지 않고 새로고침 안내를 보낸다
+      const v = greetingVersion(text);
+      if (v !== null && v !== PROTOCOL_VERSION) {
+        send({ t: 'error', code: 'version_mismatch' });
+        return drop(4002, 'version_mismatch');
+      }
+    }
+    const msg = parseClientMsg(text);
     if (!msg) return violation('bad_message');
 
     if (!conn || !room) {
       // 인증 전에는 hello (새로 들어오기) 또는 resume (끊긴 자리 이어받기) 만 허용
       if (msg.t !== 'hello' && msg.t !== 'resume') return violation('hello_required');
+      // (위에서 이미 걸렀다. 두 함수가 버전을 읽는 규칙이 어긋나도 다른 버전을 받지 않게 한 번 더)
       if (msg.v !== PROTOCOL_VERSION) {
         send({ t: 'error', code: 'version_mismatch' });
         return drop(4002, 'version_mismatch');
