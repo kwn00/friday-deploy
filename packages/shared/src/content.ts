@@ -387,9 +387,11 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
     { dmg: 10, cd: 1.0, amount: 1, area: 5, speed: 320, dur: 0.75, pierce: 0 },
     [{ amount: 1 }, { amount: 1, dmg: 5 }, { amount: 1 }, { pierce: 1 }, { amount: 1 }, { amount: 1, dmg: 5 }, { pierce: 1 }],
     { rarity: 100, kb: 0.5, ignores: ['dur'] }),
+  // AI 에이전트 (0.4.0): 쿨 3 → 2, 6단계 +1발, 8단계 관통 +1. 한 버그만 맞히는 탓에 8단계도 22분에 console.log 8단계보다 약해서
+  // (최종 수치 재측정: 22분 DPS 171 대 229) 마지막 단계에 한 마리를 더 꿰뚫게 했다
   ai_agent: W('AI 에이전트', '🤖', '아무 버그 하나를 골라 여러 발을 세게 쏜다.',
     { dmg: 20, cd: 2.0, amount: 3, area: 6, speed: 180, dur: 1.4, pierce: 0 },
-    [{ dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10, amount: 1 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }],
+    [{ dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10, amount: 1 }, { dmg: 10, speed: 0.2 / 0.75 }, { dmg: 10, pierce: 1 }],
     { rarity: 80, kb: 1, ignores: ['dur'] }),
   ctrl_x: W('Ctrl+X', '✂️', '바라보는 쪽을 옆으로 크게 잘라낸다. 개수가 늘면 반대쪽도.',
     { dmg: 15, cd: 1.1, amount: 1, area: 64, speed: 0, dur: 0.15, pierce: 0 },
@@ -500,7 +502,7 @@ export const UPGRADES: Record<UpgradeId, UpgradeDef> = {
     { rarity: 0, kb: 0.5, ignores: ['dur'] }),
   // AGI (AI 에이전트 + 사이드 프로젝트): AI 에이전트처럼 아무 버그 하나에게 부채꼴로 쏘되, 크고 느린 답이 넷까지 더 꿰뚫는다.
   // 판정 반경 8 은 AI 에이전트의 그림('ai')에 맞춘 크기다. 관통 무한은 너무 세서(22분에 금요일 배포 가까이) 4 로 했다.
-  // 재료가 한 번에 한 버그만 맞혀서 후반에는 재료보다 훨씬 세다 (22분 5~6배. 그래도 디버거의 2배쯤으로 진화 무기 가운데 약한 편)
+  // 재료가 한두 버그만 맞혀서 후반에는 재료보다 훨씬 세다 (22분 3배쯤. 그래도 디버거의 2배쯤으로 진화 무기 가운데 약한 편)
   agi: W('AGI', '🧠', '스스로 생각하기 시작했다. 크고 느린 답이 버그를 여럿 꿰뚫는다.',
     { dmg: 150, cd: 2.0, amount: 3, area: 8, speed: 160, dur: 2.0, pierce: 4 }, [],
     { rarity: 0, kb: 1, ignores: ['dur'] }),
