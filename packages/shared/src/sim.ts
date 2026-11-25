@@ -67,7 +67,7 @@ import {
   type ZoneKind,
 } from './content';
 import { DEFAULT_STARTER, isStarter, type StarterId } from './content';
-import { Grid, auraRadius, duckState, petPosition, runWeapons, updateShots, updateZones } from './combat';
+import { Grid, auraRadius, duckState, hatchWatch, petPosition, runWeapons, updateShots, updateZones } from './combat';
 import { curseOf, effectiveStats, extraOfferChanceOf, growthOf, healAmountOf, hitDamage, luckOf, lv, maxHpOf, moveSpeedOf, pickupOf, recoveryOf } from './stats';
 import type { Offer, Snapshot } from './protocol';
 import { derivedSecret, sfc32, type Rand, type Seed } from './rng';
@@ -158,6 +158,8 @@ export interface Player {
   trailY: number;
   /** 소환물(카나리아·부엉이·24시간 모니터링의 감시 새)의 id: 화면에서 같은 새로 이어 그리도록 고정한다 */
   pets: Partial<Record<'canary' | 'night_owl' | 'monitoring', number>>;
+  /** 감시 새의 처음 각도(rad): 보물상자에서 진화할 때 카나리아가 있던 각도에서 이어 돈다 (combat.ts 의 hatchWatch) */
+  watchPhase: number;
   /** 켜져 있는 남은 시간(초): 카나리아·부엉이가 폭탄을 퍼붓는 동안 */
   on: Partial<Record<UpgradeId, number>>;
   up: Partial<Record<UpgradeId, number>>;
@@ -452,6 +454,7 @@ export function addPlayer(world: World, name: string, spectator = false, start: 
     trailX: Number.NaN,
     trailY: Number.NaN,
     pets: {},
+    watchPhase: 0,
     on: {},
     up: { [start]: 1 },
     cd: {},
@@ -479,6 +482,7 @@ export function setStarter(world: World, id: number, start: StarterId): boolean 
   p.cd = {};
   p.on = {};
   p.pets = {};
+  p.watchPhase = 0;
   p.tally.start = { [start]: 1 };
   return true;
 }
@@ -723,7 +727,7 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
   for (let i = 0; i < n; i++) {
     const evo = readyEvolutions(p.up)[0];
     if (evo) {
-      evolve(p, evo);
+      evolve(world, p, evo);
       tallyUp(p.tally.chest, evo.id);
       items.push(evo.id);
       continue;
@@ -748,9 +752,11 @@ function openChest(world: World, p: Player, odds: ChestOdds): void {
 
 /**
  * 진화: 재료 무기를 칸에서 빼고 진화한 무기를 넣는다 (짝 패시브는 그대로). 바로 한 번 쓴다.
- * 카나리아·부엉이의 id 는 남겨 둔다: 24시간 모니터링이 같은 새를 이어서 돌린다 (화면에서 새가 바뀌지 않게)
+ * 24시간 모니터링은 재료를 빼기 전에 감시 새를 띄운다: 카나리아의 id 와 각도를 이어받아, 이 틱의 스냅샷부터 같은 새로 보인다
+ * (예전에는 다음에 무기가 돌 때 정해져서, 진화한 틱과 곧바로 레벨업을 고르는 동안 새가 보이지 않았다)
  */
-function evolve(p: Player, evo: Evolution): void {
+function evolve(world: World, p: Player, evo: Evolution): void {
+  if (evo.id === 'monitoring') hatchWatch(world, p);
   for (const f of evo.from) {
     delete p.up[f];
     delete p.cd[f];

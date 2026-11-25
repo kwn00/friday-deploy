@@ -471,6 +471,57 @@ test('24시간 모니터링: git fork 로 개수가 늘면 지나온 자리(0.5r
   assert.deepEqual(Object.keys(p.pets), ['monitoring'], '처음부터 가졌으면 새 id 를 만든다');
 });
 
+test('24시간 모니터링: 보물상자에서 진화한 틱부터 감시 새가 카나리아의 id·각도를 이어받아 보이고, 곧바로 레벨업을 고르는 동안에도 보인다', () => {
+  // 함께 하기: a 가 고르는 동안에도 동료(b) 때문에 월드가 돈다 (a 의 무기는 돌지 않는다)
+  const w = createWorld(318);
+  const a = addPlayer(w, 'a');
+  const b = addPlayer(w, 'b');
+  a.xpNext = 1e9;
+  b.xpNext = 1e9;
+  w.itemCd = 1e9;
+  w.magnetCd = 1e9;
+  a.up = { canary: 8, night_owl: 8 };
+  for (let i = 0; i < 5; i++) tick(w, []);
+  const id = a.pets.canary!;
+  const row = (): number[] | undefined => buildSnapshot(w, b.id)!.s.find((s) => s[0] === id);
+  const angle = (s: number[]): number => Math.atan2(s[3]! - a.y, s[2]! - a.x);
+  const spin = (d: number): number => ((((d % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  // 진화하지 않았다면 이 틱에 카나리아가 있을 각도 (진화하는 틱의 무기는 이미 돌았다)
+  const canaryNext = angle(row()!) + spin(effectiveStats(a, 'canary').speed * DT);
+  // 보물상자와 레벨업 아이템을 한 틱에 함께 줍는다
+  w.items.push({ id: w.nextId++, kind: 'chest', x: a.x, y: a.y, ttl: Infinity, chest: [1, 0, 0, 0] });
+  w.items.push({ id: w.nextId++, kind: 'levelup', x: a.x, y: a.y, ttl: 60 });
+  tick(w, []);
+  assert.deepEqual(a.up, { monitoring: 1 }, '진화했다');
+  assert.notEqual(a.offers, null, '곧바로 레벨업을 고른다');
+  const now = row();
+  assert.ok(now, '진화한 틱의 스냅샷에 새가 있다');
+  assert.equal(SHOT_KINDS[now[1]!], 'watch');
+  assert.equal(a.pets.monitoring, id, '카나리아의 id 를 이어 쓴다');
+  assert.ok(Math.abs(Math.hypot(now[2]! - a.x, now[3]! - a.y) - WATCH_ORBIT) < 0.5, '궤도 56');
+  assert.ok(Math.abs(spin(angle(now) - canaryNext)) < 5e-3, `카나리아가 있던 각도에서 이어 돈다 (${angle(now)} / ${canaryNext})`);
+  // 고르는 동안(무기가 돌지 않는다)에도 새는 계속 보이고, 같은 빠르기로 돈다
+  const before = angle(now);
+  for (let i = 0; i < 40; i++) tick(w, []);
+  assert.notEqual(a.offers, null, '아직 고르는 중');
+  const later = row();
+  assert.ok(later && SHOT_KINDS[later[1]!] === 'watch', '2초 뒤에도 새가 보인다');
+  assert.ok(Math.abs(spin(angle(later) - before - effectiveStats(a, 'monitoring').speed * DT * 40)) < 5e-3, '2.0rad/s 로 돈다');
+  // 폭탄도 새가 보이는 자리에 떨군다
+  pickOffer(w, a.id, 0);
+  assert.equal(a.offers, null);
+  let bombs = 0;
+  for (let i = 0; i < 10; i++) {
+    tick(w, []);
+    const bomb = w.zones.find((z) => z.kind === 'blast' && z.born === w.tick && z.aux === 1);
+    if (!bomb) continue;
+    bombs++;
+    const at = row()!;
+    assert.ok(Math.hypot(bomb.x - at[2]!, bomb.y - at[3]!) < 0.2, '새의 자리에 폭탄');
+  }
+  assert.ok(bombs >= 2, `폭탄 ${bombs}개`);
+});
+
 /** 진화한 무기의 능력치 (패시브 없음) */
 const weaponOf = (id: 'monitoring' | 'flooding' | 'git_reset' | 'grep_r' | 'agi') => {
   const def = UPGRADES[id];

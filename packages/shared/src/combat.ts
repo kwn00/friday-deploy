@@ -491,19 +491,42 @@ export const WATCH_ORBIT = 56;
 /** 감시 새가 git fork 로 더 떨구는 폭탄의 간격: 지나온 자리를 따라 이만큼(rad)씩 뒤에 */
 const WATCH_TRAIL = 0.5;
 
+type Pet = 'canary' | 'night_owl' | 'monitoring';
+
 /**
- * 소환물의 자리: 카나리아는 시계 방향, 부엉이는 그 반대편에서 반대 방향으로 돈다.
- * 24시간 모니터링의 감시 새는 시계 방향으로 WATCH_ORBIT 를 돈다. 빠르기는 저마다의 무기 속도(CDN 으로 빨라진다)
+ * 소환물의 각도: 카나리아는 시계 방향, 부엉이는 그 반대편에서 반대 방향으로 돈다.
+ * 24시간 모니터링의 감시 새는 시계 방향으로 돌고, 진화할 때 이어받은 카나리아의 각도(watchPhase)에서 시작한다.
+ * 빠르기는 저마다의 무기 속도(CDN 으로 빨라진다)
  */
-export function petPosition(world: World, p: Player, w: 'canary' | 'night_owl' | 'monitoring'): [number, number] {
+function petAngle(world: World, p: Player, w: Pet): number {
   const st = effectiveStats(p, w);
-  if (w === 'monitoring') {
-    const a = world.time * st.speed;
-    return [p.x + Math.cos(a) * WATCH_ORBIT, p.y + Math.sin(a) * WATCH_ORBIT];
-  }
+  if (w === 'monitoring') return world.time * st.speed + p.watchPhase;
   const dir = w === 'canary' ? 1 : -1;
-  const a = dir * world.time * st.speed + (w === 'night_owl' ? Math.PI : 0);
-  return [p.x + Math.cos(a) * PET_ORBIT, p.y + Math.sin(a) * PET_ORBIT];
+  return dir * world.time * st.speed + (w === 'night_owl' ? Math.PI : 0);
+}
+
+/** 소환물의 자리: 카나리아·부엉이는 PET_ORBIT, 감시 새는 WATCH_ORBIT 를 돈다 */
+export function petPosition(world: World, p: Player, w: Pet): [number, number] {
+  const a = petAngle(world, p, w);
+  const r = w === 'monitoring' ? WATCH_ORBIT : PET_ORBIT;
+  return [p.x + Math.cos(a) * r, p.y + Math.sin(a) * r];
+}
+
+/**
+ * 보물상자에서 24시간 모니터링으로 진화하는 순간: 감시 새가 재료였던 카나리아의 id 와 지금 각도를 이어받는다.
+ * 재료를 칸에서 빼기 전에 부른다 (카나리아의 빠르기를 재야 한다).
+ * 진화한 틱의 스냅샷부터 새가 실리고(그 틱의 무기는 이미 돌았다), 곧바로 레벨업을 고르느라 무기가 돌지 않는 동안에도 보인다.
+ * 화면에서는 같은 새가 궤도만 PET_ORBIT 64 → WATCH_ORBIT 56 으로 한 번 안쪽으로 옮긴다
+ */
+export function hatchWatch(world: World, p: Player): void {
+  const id = p.pets.canary;
+  p.pets.monitoring = id ?? world.nextId++;
+  if (id === undefined || lv(p, 'canary') === 0) {
+    p.watchPhase = 0;
+    return;
+  }
+  // 감시 새의 빠르기는 단계와 상관없이 기본값 × 패시브(CDN)다 (진화한 무기는 1단계뿐): 아직 칸에 없어도 같은 값
+  p.watchPhase = petAngle(world, p, 'canary') - world.time * effectiveStats(p, 'monitoring').speed;
 }
 
 /* ───────────── 무기 ───────────── */
@@ -657,7 +680,7 @@ function runBirds(world: World, grid: Grid, p: Player, w: 'canary' | 'night_owl'
 /**
  * 24시간 모니터링 (카나리아 + 부엉이, 0.4.0): 감시 새 한 마리가 쉬지 않고 돌며 쿨다운마다 자기 자리에 큰 폭탄 하나를 떨군다.
  * 개수가 늘면(git fork) 지나온 자리에도 WATCH_TRAIL 간격으로 하나씩 더 떨궈 꼬리처럼 넓어진다.
- * 재료였던 카나리아의 id 를 이어 쓴다 (화면에서 같은 자리의 새가 바뀌어 보이게. 처음부터 가진 경우에는 새로 만든다)
+ * 새의 id 와 처음 각도는 보물상자에서 진화하는 순간 카나리아에게서 이어받는다 (hatchWatch). 상자를 거치지 않고 가진 경우에는 여기서 정한다
  */
 function runMonitoring(world: World, grid: Grid, p: Player, st: WeaponStats, dt: number): void {
   if (p.pets.monitoring === undefined) p.pets.monitoring = p.pets.canary ?? world.nextId++;
@@ -669,7 +692,7 @@ function runMonitoring(world: World, grid: Grid, p: Player, st: WeaponStats, dt:
   }
   p.cd.monitoring = st.cd + spill(prev, dt);
   const n = Math.max(1, Math.round(st.amount));
-  const a = world.time * st.speed;
+  const a = world.time * st.speed + p.watchPhase;
   for (let i = 0; i < n; i++) {
     const b = a - i * WATCH_TRAIL;
     blast(world, grid, p, 'monitoring', p.x + Math.cos(b) * WATCH_ORBIT, p.y + Math.sin(b) * WATCH_ORBIT, st.area, st.dmg, 1);
